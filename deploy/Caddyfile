@@ -1,0 +1,15 @@
+{
+  local_certs  # usa CA interna automáticamente
+}
+
+{$DOMAIN} {
+  tls internal
+
+  handle_path /api/* {
+    reverse_proxy api:8000
+  }
+
+  handle {
+    reverse_proxy nginx:80
+  }
+}

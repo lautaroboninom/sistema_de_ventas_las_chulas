@@ -1,0 +1,151 @@
+# service/serializers.py
+from rest_framework import serializers
+from .models import Ingreso, Quote, Customer, Device, Marca, Model as DeviceModel
+
+
+# --- ModelSerializers base (lo que ya usabas) ---
+class IngresoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Ingreso
+        fields = "__all__"
+
+
+class QuoteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Quote
+        fields = "__all__"
+
+
+class CustomerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Customer
+        fields = "__all__"
+
+
+class DeviceListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Device
+        fields = ("id", "customer_id", "marca_id", "model_id", "numero_serie")
+
+
+class MarcaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Marca
+        fields = "__all__"
+
+
+class ModelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeviceModel
+        fields = "__all__"
+
+
+# --- NUEVOS: útiles para endpoints de lista/detalle que devuelven dicts (SQL crudo) ---
+
+class IngresoListItemSerializer(serializers.Serializer):
+    """
+    Útil para endpoints tipo:
+      PendientesGeneral, PendientesPresupuesto, Presupuestados,
+      AprobadosParaReparar, AprobadosYReparados, Liberados, GeneralEquipos, etc.
+    Matchea las columnas que ya entrega el back y que espera el front.
+    """
+    id = serializers.IntegerField()
+    estado = serializers.CharField()
+    presupuesto_estado = serializers.CharField(allow_null=True, required=False)
+    motivo = serializers.CharField(required=False, allow_blank=True)
+    fecha_ingreso = serializers.DateTimeField(required=False, allow_null=True)
+    razon_social = serializers.CharField(allow_blank=True, required=False)
+    numero_serie = serializers.CharField(allow_blank=True, required=False)
+    marca = serializers.CharField(allow_blank=True, required=False)
+    modelo = serializers.CharField(allow_blank=True, required=False)
+    fecha_servicio = serializers.DateTimeField(required=False, allow_null=True)
+
+    # Campos opcionales que algunas vistas ya traen
+    fecha_reparado = serializers.DateTimeField(required=False, allow_null=True)
+    presupuesto_numero = serializers.CharField(required=False, allow_blank=True)
+    presupuesto_monto = serializers.FloatField(required=False, allow_null=True)
+    presupuesto_moneda = serializers.CharField(required=False, allow_blank=True)
+    presupuesto_fecha_emision = serializers.DateTimeField(required=False, allow_null=True)
+    presupuesto_fecha_envio = serializers.DateTimeField(required=False, allow_null=True)
+    ubicacion_id = serializers.IntegerField(required=False, allow_null=True)
+    ubicacion_nombre = serializers.CharField(required=False, allow_blank=True)
+
+
+class IngresoDetailSerializer(serializers.Serializer):
+    # Identificación / estados
+    id = serializers.IntegerField()
+    os = serializers.CharField()
+    motivo = serializers.CharField()
+    estado = serializers.CharField()
+    presupuesto_estado = serializers.CharField(allow_null=True)
+    fecha_ingreso = serializers.DateTimeField()
+    fecha_servicio = serializers.DateTimeField(allow_null=True, required=False)
+    fecha_entrega = serializers.DateTimeField(allow_null=True, required=False)
+    remito_salida = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    factura_numero = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    garantia_reparacion = serializers.BooleanField(required=False)
+    faja_garantia = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    alquilado = serializers.BooleanField(required=False)
+    alquiler_a = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    alquiler_remito = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    alquiler_fecha = serializers.DateField(allow_null=True, required=False)
+
+    # Textos de ingreso + técnico
+    informe_preliminar   = serializers.CharField(allow_null=True, allow_blank=True)
+    descripcion_problema = serializers.CharField(allow_null=True, allow_blank=True)
+    trabajos_realizados  = serializers.CharField(allow_null=True, allow_blank=True)
+    accesorios           = serializers.CharField(allow_null=True, allow_blank=True)
+
+    # Ubicación
+    ubicacion_id = serializers.IntegerField(allow_null=True)
+    ubicacion_nombre = serializers.CharField(allow_blank=True)
+
+    # Equipo
+    device_id = serializers.IntegerField()
+    numero_serie = serializers.CharField()
+    numero_interno = serializers.CharField(allow_blank=True, required=False)
+    garantia = serializers.BooleanField()
+    marca_id = serializers.IntegerField()
+    marca = serializers.CharField()
+    model_id = serializers.IntegerField()
+    modelo = serializers.CharField()
+    numero_interno = serializers.CharField(allow_blank=True, required=False)
+
+    # Cliente
+    customer_id = serializers.IntegerField()
+    razon_social = serializers.CharField()
+    cod_empresa = serializers.CharField(allow_blank=True)
+    telefono = serializers.CharField(allow_blank=True)
+
+    # Asignación y propietario (opcionales)
+    asignado_a = serializers.IntegerField(allow_null=True, required=False)
+    asignado_a_nombre = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    propietario_nombre = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    propietario_contacto = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    propietario_doc = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+
+    resolucion = serializers.CharField(allow_null=True, allow_blank=True)
+
+class QuoteItemSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    tipo = serializers.CharField()  # 'repuesto' | 'mano_obra' | 'servicio'
+    repuesto_id = serializers.IntegerField(allow_null=True, required=False)
+    descripcion = serializers.CharField()
+    qty = serializers.DecimalField(max_digits=10, decimal_places=2)
+    precio_u = serializers.DecimalField(max_digits=12, decimal_places=2)
+    subtotal = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class QuoteDetailSerializer(serializers.Serializer):
+    ingreso_id = serializers.IntegerField()
+    quote_id = serializers.IntegerField()
+    estado = serializers.CharField()
+    moneda = serializers.CharField()
+    items = QuoteItemSerializer(many=True)
+    pdf_url = serializers.CharField(required=False, allow_blank=True)
+    
+    tot_repuestos = serializers.DecimalField(max_digits=12, decimal_places=2)
+    mano_obra = serializers.DecimalField(max_digits=12, decimal_places=2)
+    subtotal = serializers.DecimalField(max_digits=12, decimal_places=2)
+    iva_21 = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total = serializers.DecimalField(max_digits=12, decimal_places=2)

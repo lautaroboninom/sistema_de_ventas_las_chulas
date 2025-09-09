@@ -1,0 +1,142 @@
+# service/urls.py
+from django.urls import path, include
+from .views import (
+    # salud / login
+    ping, LoginView, ForgotPasswordView, ResetPasswordView,
+
+    # flujo ingresos / técnico
+    MisPendientesView,
+    EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
+    PendientesPresupuestoView, PresupuestadosView,
+    MarcarReparadoView, EntregarIngresoView, GarantiaReparacionCheckView,
+
+    # listados / generales
+    CustomersListView, PendientesGeneralView,
+    AprobadosParaRepararView, AprobadosYReparadosView, LiberadosView,
+    GeneralEquiposView, GeneralPorClienteView,
+
+    # ingresos nuevos + derivación
+    NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView,
+
+    # catálogos
+    CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView, CatalogoMotivosView,
+
+    # administración de usuarios
+    UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
+    CatalogoRolesView, CerrarReparacionView,
+
+    # clientes / marcas-modelos / proveedores externos
+    ClientesView, ClienteDeleteView,
+    MarcaDeleteView, ModelosPorMarcaView, ModeloDeleteView,
+    ProveedoresExternosView, 
+
+    # detalle de ingreso
+    IngresoDetalleView, IngresoAsignarTecnicoView, CatalogoTecnicosView,
+    MarcaTecnicoView,MarcaAplicarTecnicoAModelosView,ModeloTecnicoView,
+    EquiposDerivadosView,
+
+    QuoteDetailView, QuoteItemsView, QuoteItemDetailView, QuoteResumenView, AnularPresupuestoView,
+    RemitoSalidaPdfView, TiposEquipoView, ModeloTipoEquipoView,
+)
+
+urlpatterns = [
+    # salud y login
+
+    path("ping/", ping),
+    path("auth/login/", LoginView.as_view()),
+    path("auth/forgot/", ForgotPasswordView.as_view()),
+    path("auth/reset/", ResetPasswordView.as_view()),
+
+    # técnico / ingresos (acciones)
+    path("tecnico/mis-pendientes/", MisPendientesView.as_view()),
+    path("ingresos/<int:ingreso_id>/reparado/", MarcarReparadoView.as_view()),
+    path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
+
+    # presupuestos
+    path("quotes/<int:ingreso_id>/emitir/", EmitirPresupuestoView.as_view()),
+    path("quotes/<int:ingreso_id>/aprobar/", AprobarPresupuestoView.as_view()),
+    path("presupuestos/pendientes/", PendientesPresupuestoView.as_view()),
+    path("ingresos/presupuestados/", PresupuestadosView.as_view()),
+
+    # listados operativos
+    path("clientes/", CustomersListView.as_view()),
+    path("ingresos/pendientes/", PendientesGeneralView.as_view()),
+    path("ingresos/aprobados-para-reparar/", AprobadosParaRepararView.as_view()),
+    path("ingresos/aprobados-reparados/", AprobadosYReparadosView.as_view()),
+    path("ingresos/liberados/", LiberadosView.as_view()),
+    path("listos-para-retiro/", LiberadosView.as_view()),  # alias de compat
+
+    # ALIAS de compatibilidad con el front (si existían)
+    path("ingresos/aprobados/", AprobadosParaRepararView.as_view()),
+    path("ingresos/reparados/", AprobadosYReparadosView.as_view()),
+    path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
+
+    # -------- Tabs superiores --------
+    path("equipos/", GeneralEquiposView.as_view()),
+    path("ingresos/", GeneralEquiposView.as_view()),
+    path("clientes/<int:customer_id>/general/", GeneralPorClienteView.as_view()),
+    # utilidades
+    path("equipos/garantia-reparacion/", GarantiaReparacionCheckView.as_view()),
+
+    # ingresos nuevos / derivación
+    path("ingresos/nuevo/", NuevoIngresoView.as_view()),
+    path("ingresos/<int:ingreso_id>/derivar/", DerivarIngresoView.as_view()),
+    path("ingresos/<int:ingreso_id>/derivaciones/", DerivacionesPorIngresoView.as_view()),
+
+    # catálogos
+    path("catalogos/marcas/", CatalogoMarcasView.as_view()),
+    path("catalogos/modelos/", CatalogoModelosView.as_view()),                   # ?marca_id=#
+    path("catalogos/ubicaciones/", CatalogoUbicacionesView.as_view()),
+    path("catalogos/motivos/", CatalogoMotivosView.as_view()),
+    path("catalogos/proveedores-externos/", ProveedoresExternosView.as_view()),
+    path("catalogos/proveedores-externos/<int:pid>/", ProveedoresExternosView.as_view()),
+
+
+    # administración de clientes / marcas / modelos
+    path("catalogos/clientes/", ClientesView.as_view()),                         # GET/POST
+    path("catalogos/clientes/<int:cid>/", ClienteDeleteView.as_view()),          # DELETE
+    path("catalogos/marcas/<int:bid>/", MarcaDeleteView.as_view()),              # DELETE
+    path("catalogos/marcas/<int:bid>/modelos/", ModelosPorMarcaView.as_view()), # GET/POST
+    path("catalogos/modelos/<int:mid>/", ModeloDeleteView.as_view()),            # DELETE
+
+    # detalle de ingreso (GET, PATCH)
+    path("ingresos/<int:ingreso_id>/", IngresoDetalleView.as_view()),
+
+    # usuarios (class-based)
+    path("usuarios/", UsuariosView.as_view()),                                   # GET lista, POST upsert
+    path("usuarios/<int:uid>/activar/", UsuarioActivoView.as_view()),            # PATCH {activo}
+    path("usuarios/<int:uid>/reset-pass/", UsuarioResetPassView.as_view()),      # PATCH {password}
+    path("usuarios/<int:uid>/roleperm/", UsuarioRolePermView.as_view()),         # PATCH {rol, perm_ingresar}
+    path("usuarios/<int:uid>/", UsuarioDeleteView.as_view()),                    # DELETE
+    path("catalogos/roles/", CatalogoRolesView.as_view()),
+    path("ingresos/<int:ingreso_id>/asignar-tecnico/", IngresoAsignarTecnicoView.as_view()),
+    path("catalogos/tecnicos/", CatalogoTecnicosView.as_view()),
+
+
+
+    # (si usás los endpoints para asignar técnico y setear técnico de marca/modelo)
+    path('catalogos/marcas/<int:bid>/tecnico/', MarcaTecnicoView.as_view()),
+    path('catalogos/marcas/<int:bid>/tecnico/aplicar-a-modelos/', MarcaAplicarTecnicoAModelosView.as_view()),
+    path('catalogos/marcas/<int:bid>/modelos/<int:mid>/tecnico/', ModeloTecnicoView.as_view()),
+
+    path("ingresos/derivados/", EquiposDerivadosView.as_view()),
+
+    path("quotes/<int:ingreso_id>/", QuoteDetailView.as_view()),  # GET
+    path("quotes/<int:ingreso_id>/items/", QuoteItemsView.as_view()),  # POST
+    path("quotes/<int:ingreso_id>/items/<int:item_id>/", QuoteItemDetailView.as_view()),  # PATCH/DELETE
+    path("quotes/<int:ingreso_id>/resumen/", QuoteResumenView.as_view()),  # PATCH {mano_obra}
+    path("quotes/<int:ingreso_id>/pdf/", QuotePdfView.as_view()),
+    path("quotes/<int:ingreso_id>/anular/", AnularPresupuestoView.as_view()),
+
+    # técnico / ingresos (acciones)
+
+
+    path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # 👈 nuevo
+    path("ingresos/<int:ingreso_id>/cerrar/", CerrarReparacionView.as_view()),
+
+    path("catalogo/tipos-equipo/", TiposEquipoView.as_view()),
+    path("catalogo/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
+
+
+
+]

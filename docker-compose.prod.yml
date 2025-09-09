@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  db:
+    env_file: .env.prod
+    # en prod normalmente no exponés 5432 afuera; si lo necesitás, dejalo.
+
+  pgadmin:
+    # En prod suele deshabilitarse para no exponer 5050 (o dejalo sin ports)
+    profiles: ["dev-only"]   # no se levanta en prod a menos que lo pidas
+
+  api:
+    env_file: .env.prod
+    # NO expongas 8000 en prod; nginx lo ve por red interna
+    ports: []           # quita "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      bash -lc "
+      python manage.py migrate --noinput &&
+      gunicorn app.wsgi:application --bind 0.0.0.0:8000 --workers 2
+      "
+
+  web:
+    # Solo build. No hace falta exponer 5173 en prod
+    ports: []
+    command: sh -c "npm ci && npm run build"
+    depends_on:
+      api:
+        condition: service_started
+
+  nginx:
+    # expone HTTP en la LAN
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+      - web

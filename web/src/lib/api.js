@@ -1,0 +1,243 @@
+  // web/src/lib/api.js
+
+  // === BASE del API robusto ===
+  // 1) Si está definida VITE_API_URL, la usamos.
+  // 2) Si no, caemos al host actual pero en puerto 8000 (útil en LAN).
+  const API_FALLBACK = `${window.location.protocol}//${window.location.hostname}:8000`;
+  const isDevVite = window.location.port === "5173";
+  const BASE =
+    import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ||
+    (isDevVite
+      ? `${window.location.protocol}//${window.location.hostname}:8000`
+      : ""); // producción: mismo origen + rutas /api/ relativas
+
+  /* ===== Token en memoria + localStorage (para AuthContext) ===== */
+  let token = localStorage.getItem("token") || null;
+  export const setToken = (t) => {
+    token = t;
+    if (t) localStorage.setItem("token", t);
+    else localStorage.removeItem("token");
+  };
+
+  /* ===== Logout forzado ante 401/403 ===== */
+  let forcingLogout = false;
+  function forceLogout() {
+    if (forcingLogout) return;
+    forcingLogout = true;
+    try {
+      setToken(null);
+      localStorage.removeItem("user");
+    } finally {
+      const loginPath = "/login";
+      if (window.location.pathname !== loginPath) {
+        window.location.replace(loginPath);
+      } else {
+        forcingLogout = false;
+      }
+    }
+  }
+
+  /* ===== Wrapper HTTP ===== */
+  async function http(path, { method = "GET", body, headers } = {}) {
+    const res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(headers || {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    const ct = res.headers.get("content-type") || "";
+    const isJSON = ct.includes("application/json");
+    const data = isJSON ? await res.json() : await res.text();
+
+    if (res.status === 401 || res.status === 403) {
+      forceLogout();
+    }
+
+    if (!res.ok) {
+      const msg =
+        typeof data === "string" ? data : data.detail || JSON.stringify(data);
+      throw new Error(`${res.status} ${res.statusText}: ${msg}`);
+    }
+    return data;
+  }
+
+  /* API cruda para quien prefiera */
+  const api = {
+    get: (p, opts) => http(p, { ...opts, method: "GET" }),
+    post: (p, body, opts) => http(p, { ...opts, method: "POST", body }),
+    patch: (p, body, opts) => http(p, { ...opts, method: "PATCH", body }),
+    del: (p, opts) => http(p, { ...opts, method: "DELETE" }),
+  };
+  export default api;
+
+  /* ================== AUTH ================== */
+  export const postLogin = (email, password) =>
+    api.post("/api/auth/login/", { email, password });
+  export const postAuthForgot = (email) =>
+    api.post("/api/auth/forgot/", { email });
+  export const postAuthReset = (token, password) =>
+    api.post("/api/auth/reset/", { token, password });
+
+
+  /* =============== USUARIOS ================= */
+  export const getUsuarios = () => api.get("/api/usuarios/");
+  export const postUsuario = (payload) => api.post("/api/usuarios/", payload);
+  export const patchUsuarioActivo = (id, activo) =>
+    api.patch(`/api/usuarios/${id}/activar/`, { activo });
+  export const patchUsuarioReset = (id, password) =>
+    api.patch(`/api/usuarios/${id}/reset-pass/`, { password });
+  export const patchUsuarioRolePerm = (id, payload) =>
+    api.patch(`/api/usuarios/${id}/roleperm/`, payload);
+  export const deleteUsuario = (id) => api.del(`/api/usuarios/${id}/`);
+
+  /* =============== CATÁLOGOS =============== */
+  export const getClientes = () => api.get("/api/catalogos/clientes/");
+  export const postCliente = (payload) =>
+    api.post("/api/catalogos/clientes/", payload);
+  export const deleteCliente = (id) =>
+    api.del(`/api/catalogos/clientes/${id}/`);
+  export const getRoles = () => api.get("/api/catalogos/roles/");
+  export const getMarcas = () => api.get("/api/catalogos/marcas/");
+  export const postMarca = (nombre) =>
+    api.post("/api/catalogos/marcas/", { nombre });
+  export const deleteMarca = (id) =>
+    api.del(`/api/catalogos/marcas/${id}/`);
+
+  export const getTiposEquipo = () =>
+    api.get("/api/catalogos/tipos-equipo/");
+
+  export const patchModeloTipoEquipo = (marcaId, modeloId, payload) =>
+    api.patch(`/api/catalogos/marcas/${marcaId}/modelos/${modeloId}/tipo-equipo/`, payload);
+
+  export const getModelosByBrand = (brandId) =>
+    api.get(`/api/catalogos/marcas/${brandId}/modelos/`);
+  export const getModelos = getModelosByBrand; // alias por compatibilidad
+  export const postModelo = (brandId, nombre) =>
+    api.post(`/api/catalogos/marcas/${brandId}/modelos/`, { nombre });
+  export const deleteModelo = (id) =>
+    api.del(`/api/catalogos/modelos/${id}/`);
+
+  export const getUbicaciones = () => api.get("/api/catalogos/ubicaciones/");
+  export const getMotivos = () => api.get("/api/catalogos/motivos/");
+
+  export const getProveedoresExternos = () =>
+    api.get("/api/catalogos/proveedores-externos/");
+  export const postProveedorExterno = (payload) =>
+    api.post("/api/catalogos/proveedores-externos/", payload);
+  export const deleteProveedorExterno = (id) =>
+    api.del(`/api/catalogos/proveedores-externos/${id}/`);
+
+  /* =============== INGRESOS ================= */
+  export const postNuevoIngreso = (payload) =>
+    api.post("/api/ingresos/nuevo/", payload);
+  export const postDerivarIngreso = (ingresoId, payload) =>
+    api.post(`/api/ingresos/${ingresoId}/derivar/`, payload);
+  export const getDerivacionesPorIngreso = (ingresoId) =>
+    api.get(`/api/ingresos/${ingresoId}/derivaciones/`);
+  // Entregar (requiere remito; opcional factura y fecha)
+  export const postEntregarIngreso = (ingresoId, payload) =>
+    api.post(`/api/ingresos/${ingresoId}/entregar/`, payload);
+  export const getPendientesGeneral = () => api.get("/api/ingresos/pendientes/");
+  export const getPendientesPresupuesto = () =>
+    api.get("/api/presupuestos/pendientes/");
+  export const getAprobadosParaReparar = () =>
+    api.get("/api/ingresos/aprobados-para-reparar/");
+  export const getAprobadosYReparados = () =>
+    api.get("/api/ingresos/aprobados-reparados/");
+  export const getLiberados = () => api.get("/api/ingresos/liberados/");
+  export const getTecnicos = () => api.get("/api/catalogos/tecnicos/");
+  export const getGeneralEquipos = (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/equipos/${qs ? `?${qs}` : ""}`);
+  };
+  // Check garantía de reparación por N/S
+  export const checkGarantiaReparacion = (numero_serie) =>
+    api.get(`/api/equipos/garantia-reparacion/?numero_serie=${encodeURIComponent(numero_serie||"")}`);
+  export const getGeneralPorCliente = (customerId) =>
+    api.get(`/api/clientes/${customerId}/general/`);
+
+  export async function getIngreso(id) {
+    return api.get(`/api/ingresos/${id}/`);
+  }
+
+  export async function patchIngreso(id, payload) {
+    return api.patch(`/api/ingresos/${id}/`, payload);
+  }
+
+  export const patchIngresoTecnico = (ingresoId, tecnico_id) =>
+    api.patch(`/api/ingresos/${ingresoId}/asignar-tecnico/`, { tecnico_id });
+
+  export const patchModeloTecnico = (marcaId, modeloId, tecnico_id) =>
+    api.patch(
+      `/api/catalogos/marcas/${marcaId}/modelos/${modeloId}/tecnico/`,
+      { tecnico_id }
+    );
+
+  export const patchMarcaTecnico = (marcaId, tecnico_id) =>
+    api.patch(`/api/catalogos/marcas/${marcaId}/tecnico/`, { tecnico_id });
+
+  // Aplica el técnico de la marca a TODOS los modelos (sobrescribe)
+  export const postMarcaAplicarTecnico = (marcaId) =>
+    api.post(`/api/catalogos/marcas/${marcaId}/tecnico/aplicar-a-modelos/`);
+
+  /* =============== PRESUPUESTOS =============== */
+  export const getQuote = (ingresoId) => api.get(`/api/quotes/${ingresoId}/`);
+
+  export const postQuoteItem = (ingresoId, payload) =>
+    api.post(`/api/quotes/${ingresoId}/items/`, payload);
+
+  export const patchQuoteItem = (ingresoId, itemId, payload) =>
+    api.patch(`/api/quotes/${ingresoId}/items/${itemId}/`, payload);
+
+  export const deleteQuoteItem = (ingresoId, itemId) =>
+    api.del(`/api/quotes/${ingresoId}/items/${itemId}/`);
+
+  export const patchQuoteResumen = (ingresoId, payload /* {mano_obra} */) =>
+    api.patch(`/api/quotes/${ingresoId}/resumen/`, payload);
+
+  export const postQuoteEmitir = (ingresoId, payload /* {autorizado_por, forma_pago} */) =>
+    api.post(`/api/quotes/${ingresoId}/emitir/`, payload);
+
+  export const postQuoteAprobar = (ingresoId) =>
+    api.post(`/api/quotes/${ingresoId}/aprobar/`);
+
+  // === GET binario (Blob) con auth y cookies ===
+  export async function getBlob(path, opts = {}) {
+    const url = path.startsWith("http") ? path : `${BASE}${path}`;
+    const token =
+      localStorage.getItem("token") ||
+      localStorage.getItem("authToken") ||
+      "";
+
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      credentials: "include",
+      ...opts,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    return await res.blob();
+  }
+
+  export const postQuoteAnular = (ingresoId) =>
+    api.post(`/api/quotes/${ingresoId}/anular/`);
+
+  // Cerrar reparación (setea la resolución)
+  export async function postCerrarReparacion(id, body) {
+    // body = { resolucion: "reparado" | "no_reparado" | "no_se_encontro_falla" | "presupuesto_rechazado" }
+    return api.post(`/api/ingresos/${id}/cerrar/`, body);
+  }
+
+  export async function postMarcarReparado(id) {
+    return api.post(`/api/ingresos/${id}/reparado/`);
+  }

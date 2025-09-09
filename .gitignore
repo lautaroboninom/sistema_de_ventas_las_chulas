@@ -1,0 +1,29 @@
+# --- Python / Django
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+*.sqlite3
+
+# --- Node / Vite / React
+web/node_modules/
+web/.vite/
+web/dist/
+web/.DS_Store
+
+# --- Docker / Postgres
+db/data/
+db/backups/
+*.log
+
+# --- Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Build / Caches misc
+*.cache
+*.log
+coverage/
+git config core.autocrlf true

@@ -1,0 +1,85 @@
+import { useEffect, useMemo, useState } from "react";
+import { getTecnicos } from "../lib/api";
+import api from "../lib/api";
+import { useNavigate } from "react-router-dom";
+import { ingresoIdOf, formatOS, formatDateTime, norm } from "../lib/ui-helpers";
+
+
+export default function PendientesPorTecnico() {
+    
+  const [tecnicos, setTecnicos] = useState([]);
+  const [tecnicoId, setTecnicoId] = useState("");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [filter, setFilter] = useState("");
+  const nav = useNavigate();
+
+  useEffect(() => { getTecnicos().then(setTecnicos).catch(e=>setErr(e.message)); }, []);
+
+  async function load() {
+    if (!tecnicoId) return;
+    setLoading(true); setErr("");
+    try {
+      const data = await api.get(`/api/ingresos/pendientes/?tecnico_id=${tecnicoId}`);
+      console.log("Pendientes recibidos:", data?.length, data?.[0]);
+      setRows(Array.isArray(data) ? data : []);
+    } catch(e) {
+      setErr(e?.message || "Error cargando pendientes");
+    } finally { setLoading(false); }
+  }
+
+  useEffect(()=>{ load(); }, [tecnicoId]);
+
+  const filtered = useMemo(()=> {
+    const needle = norm(filter);
+    if (!needle) return rows;
+    return rows.filter(r=>{
+      const campos = [formatOS(r), r?.razon_social, r?.marca, r?.modelo, r?.numero_serie, r?.estado];
+      return campos.some(c => norm(c).includes(needle));
+    });
+  }, [rows, filter]);
+
+  return (
+    <div className="card">
+      <div className="h1 mb-3">Pendientes por técnico</div>
+      {err && <div className="bg-red-100 text-red-700 p-2 rounded mb-3">{err}</div>}
+      <div className="flex gap-2 mb-3 items-center">
+        <select className="border rounded p-2" value={tecnicoId} onChange={e=>setTecnicoId(e.target.value)}>
+          <option value="">-- Seleccionar técnico --</option>
+          {tecnicos.map(t=> <option key={t.id} value={t.id}>{t.nombre}</option>)}
+        </select>
+        <input className="border rounded p-2 w-full max-w-md" placeholder="Filtrar por OS, cliente, marca, modelo, serie…" value={filter} onChange={e=>setFilter(e.target.value)} />
+      </div>
+
+      {!tecnicoId ? <div className="text-sm text-gray-500">Elegí un técnico para ver sus pendientes.</div> :
+      loading ? "Cargando..." :
+      filtered.length === 0 ? <div className="text-sm text-gray-500">Sin pendientes.</div> : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead><tr className="text-left">
+              <th className="p-2">OS</th><th className="p-2">Cliente</th><th className="p-2">Marca</th>
+              <th className="p-2">Modelo</th><th className="p-2">Estado</th><th className="p-2">Serie</th><th className="p-2">Fecha</th>
+            </tr></thead>
+            <tbody>
+              {filtered.map(row=>(
+                <tr key={ingresoIdOf(row)} className="hover:bg-gray-50 cursor-pointer" onClick={()=>nav(`/ingresos/${ingresoIdOf(row)}`)}>
+                  <td className="p-2 underline">{formatOS(row)}</td>
+                  <td className="p-2">{row.razon_social}</td>
+                  <td className="p-2">{row.marca}</td>
+                  <td className="p-2">{row.modelo}</td>
+                  <td className="p-2">{row.estado}</td>
+                  <td className="p-2">{row.numero_serie}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(row.fecha_ingreso)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-xs text-gray-500 mt-2">Mostrando {filtered.length} de {rows.length}.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+

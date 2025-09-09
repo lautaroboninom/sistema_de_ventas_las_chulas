@@ -1,0 +1,251 @@
+// web/src/main.jsx
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { AuthProvider } from "./context/AuthContext";
+import ErrorBoundary from "./components/ErrorBoundary";
+
+import "./index.css";
+import App from "./App";
+import Login from "./pages/Login";
+import Tecnico from "./pages/Tecnico";
+import Presupuestados from "./pages/Presupuestados.jsx";
+import PendientesPresupuesto from "./pages/PendientesPresupuesto.jsx";
+import AdminListos from "./pages/AdminListos";
+import GeneralPorCliente from "./pages/GeneralPorCliente";
+import Usuarios from "./pages/Usuarios";
+import NuevoIngreso from "./pages/NuevoIngreso";
+import CatalogoClientes from "./pages/CatalogoClientes";
+import CatalogoMarcas from "./pages/CatalogoMarcas";
+import CatalogoProveedores from "./pages/CatalogoProveedores";
+import ProtectedRoute from "./components/ProtectedRoute";
+import PendientesGeneral from "./pages/PendientesGeneral.jsx";
+import Aprobados from "./pages/Aprobados.jsx";
+import Reparados from "./pages/Reparados.jsx";
+import GeneralEquipos from "./pages/GeneralEquipos.jsx";
+import ServiceSheet from "./pages/ServiceSheet";
+import PendientesPorTecnico from "./pages/PendientesPorTecnico.jsx";
+import DerivarIngreso from "./pages/DerivarIngreso.jsx";
+import StockAlquiler from "./pages/StockAlquiler.jsx";
+import BusquedaNSCard from "./components/BusquedaNSCard.jsx";
+import BuscarNS from "./pages/BuscarNS.jsx";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import Depositos from "./pages/Depositos.jsx";
+
+function NotFound() {
+  return (
+    <div className="p-8 text-center text-gray-600">
+      Página no encontrada
+    </div>
+  );
+}
+
+const router = createBrowserRouter([
+  // públicas
+  { path: "/login", element: <Login /> },
+  { path: "/recuperar", element: <ForgotPassword /> },
+  { path: "/restablecer", element: <ResetPassword /> },
+
+  // privadas (layout App)
+  {
+    path: "/",
+    element: <App />,
+    children: [
+      {
+        index: true,
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+            <div className="p-6">
+              <h1 className="text-2xl font-bold">Bienvenido 👋</h1>
+              <BusquedaNSCard />
+            </div>
+          </ProtectedRoute>
+        ),
+      },
+
+      // Operación
+      {
+        path: "buscar-ns",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","admin","recepcion"]}>
+            <BuscarNS />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "tecnico",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
+            <Tecnico />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "pendientes",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
+            <PendientesGeneral />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "pendientes-por-tecnico",
+        element: (
+          <ProtectedRoute roles={["jefe","admin","jefe_veedor"]}>
+            <PendientesPorTecnico />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "pendientes-presupuesto",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+            <PendientesPresupuesto />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "presupuestados",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+            <Presupuestados />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "aprobados",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
+            <Aprobados />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "reparados",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
+            <Reparados />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "listos",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+            <AdminListos />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "alquiler/stock",
+        element: (
+          <ProtectedRoute roles={["jefe","admin","recepcion","tecnico"]}>
+            <StockAlquiler />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "depositos",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+            <Depositos />
+          </ProtectedRoute>
+        ),
+      },
+
+      // Tabs superiores
+      {
+        path: "clientes",
+        element: (
+          <ProtectedRoute roles={["admin","jefe","jefe_veedor","recepcion"]}>
+            <GeneralPorCliente />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "equipos",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+            <GeneralEquipos />
+          </ProtectedRoute>
+        ),
+      },
+
+      // Nuevo ingreso
+      {
+        path: "ingresos/nuevo",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+            <NuevoIngreso />
+          </ProtectedRoute>
+        ),
+      },
+
+      // Sistema
+      {
+        path: "usuarios",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+            <Usuarios />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "catalogo/clientes",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+            <CatalogoClientes />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "catalogo/marcas",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+            <CatalogoMarcas />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "catalogo/proveedores",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+            <CatalogoProveedores />
+          </ProtectedRoute>
+        ),
+      },
+
+      // Hoja de servicio
+      {
+        path: "ingresos/:id",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin","tecnico","recepcion"]}>
+            <ServiceSheet />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "ingresos/:id/derivar",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","admin"]}>
+            <DerivarIngreso />
+          </ProtectedRoute>
+        ),
+      },
+    ],
+  },
+
+  // 404
+  { path: "*", element: <NotFound /> },
+]);
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <AuthProvider>
+        <RouterProvider router={router} />
+      </AuthProvider>
+    </ErrorBoundary>
+  </React.StrictMode>
+);
