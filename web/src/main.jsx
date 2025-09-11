@@ -28,7 +28,9 @@ import PendientesPorTecnico from "./pages/PendientesPorTecnico.jsx";
 import DerivarIngreso from "./pages/DerivarIngreso.jsx";
 import StockAlquiler from "./pages/StockAlquiler.jsx";
 import BusquedaNSCard from "./components/BusquedaNSCard.jsx";
+import BusquedaAccRefCard from "./components/BusquedaAccRefCard.jsx";
 import BuscarNS from "./pages/BuscarNS.jsx";
+import BuscarAccesorio from "./pages/BuscarAccesorio.jsx";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Depositos from "./pages/Depositos.jsx";
@@ -58,7 +60,10 @@ const router = createBrowserRouter([
           <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
             <div className="p-6">
               <h1 className="text-2xl font-bold">Bienvenido 👋</h1>
-              <BusquedaNSCard />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <BusquedaNSCard />
+                <BusquedaAccRefCard />
+              </div>
             </div>
           </ProtectedRoute>
         ),
@@ -70,6 +75,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute roles={["tecnico","jefe","admin","recepcion"]}>
             <BuscarNS />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "buscar-accesorio",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","admin","recepcion"]}>
+            <BuscarAccesorio />
           </ProtectedRoute>
         ),
       },

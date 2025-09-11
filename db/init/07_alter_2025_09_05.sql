@@ -74,8 +74,8 @@ DO $$ BEGIN
     CREATE TABLE public.ingreso_events(
       id serial PRIMARY KEY,
       ingreso_id int NOT NULL REFERENCES public.ingresos(id) ON DELETE CASCADE,
-      de_estado ingreso_state NULL,
-      a_estado  ingreso_state NOT NULL,
+      de_estado ticket_state NULL,
+      a_estado  ticket_state NOT NULL,
       usuario_id int NULL REFERENCES public.users(id),
       ts timestamptz NOT NULL DEFAULT now(),
       comentario text
@@ -108,6 +108,12 @@ DO $$ BEGIN
     CREATE INDEX IF NOT EXISTS idx_audit_ts ON public.audit_log(ts DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_user ON public.audit_log(user_id);
   END IF;
+END $$;
+
+-- Normalizar estados antiguos -> nuevos nombres
+DO $$ BEGIN
+  -- 'listo_retiro' pasa a 'liberado'
+  UPDATE public.ingresos SET estado='liberado' WHERE estado::text='listo_retiro';
 END $$;
 
 COMMIT;

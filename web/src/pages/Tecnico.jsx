@@ -155,18 +155,16 @@ export default function Tecnico() {
                         label="Diagnosticado"
                         checked={(() => {
                           const e = (row?.estado || "").toLowerCase();
-                          const p = (row?.presupuesto_estado || "").toLowerCase();
-                          // Se mantiene tildado desde diagnosticado hacia adelante
+                          // Se mantiene tildado desde diagnosticado hacia adelante (solo estados del equipo)
                           const diagChain = [
                             "diagnosticado",
-                            "presupuestado",
-                            "aprobado",
                             "reparar",
                             "reparado",
-                            "listo_retiro",
+                            "liberado",
                             "entregado",
+                            "alquilado",
                           ];
-                          return diagChain.includes(e) || ["presupuestado", "aprobado"].includes(p);
+                          return diagChain.includes(e);
                         })()}
                       />
                     </td>
@@ -175,10 +173,9 @@ export default function Tecnico() {
                       <StateSquare
                         label="Presupuestado"
                         checked={(() => {
-                          const e = (row?.estado || "").toLowerCase();
                           const p = (row?.presupuesto_estado || "").toLowerCase();
-                          // Consideramos "presupuestado" tanto cuando está emitido como cuando ya está aprobado
-                          return ["presupuestado", "aprobado"].includes(e) || ["presupuestado", "aprobado"].includes(p);
+                          // Presupuesto depende solo del campo presupuesto_estado
+                          return ["presupuestado", "aprobado"].includes(p);
                         })()}
                       />
                     </td>
@@ -186,10 +183,7 @@ export default function Tecnico() {
                     <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
                       <StateSquare
                         label="Aprobado"
-                        checked={
-                          (row?.presupuesto_estado || "").toLowerCase() === "aprobado" ||
-                          (row?.estado || "").toLowerCase() === "aprobado"
-                        }
+                        checked={(row?.presupuesto_estado || "").toLowerCase() === "aprobado"}
                       />
                     </td>
                   </tr>

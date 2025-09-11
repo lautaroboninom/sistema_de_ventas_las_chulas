@@ -13,6 +13,12 @@ services:
     env_file: .env.prod
     # NO expongas 8000 en prod; nginx lo ve por red interna
     ports: []           # quita "8000:8000"
+    # Monta el directorio del host donde se guardarán los PDFs en /quotes
+    # Seteá QUOTES_HOST_DIR en .env.prod (p.ej. /mnt/presupuestos/2025/Pendientes de envío)
+    volumes:
+      - type: bind
+        source: ${QUOTES_HOST_DIR}
+        target: /quotes
     depends_on:
       db:
         condition: service_healthy

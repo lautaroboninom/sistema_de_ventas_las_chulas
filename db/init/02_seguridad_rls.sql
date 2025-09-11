@@ -31,10 +31,19 @@ $$;
 ALTER TABLE ingresos            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE quotes              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE quote_items         ENABLE ROW LEVEL SECURITY;
-ALTER TABLE service_sheets      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE equipos_derivados   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE handoffs            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE proveedores_externos ENABLE ROW LEVEL SECURITY;
+
+-- Habilitar RLS en service_sheets solo si existe
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema='public' AND table_name='service_sheets'
+  ) THEN
+    EXECUTE 'ALTER TABLE service_sheets ENABLE ROW LEVEL SECURITY';
+  END IF;
+END$$;
 
 -- =========================================
 -- Políticas: INGRESOS
@@ -108,35 +117,42 @@ WITH CHECK (
 );
 
 -- =========================================
--- Políticas: SERVICE_SHEETS
+-- Políticas: SERVICE_SHEETS (solo si la tabla existe)
 -- =========================================
-DROP POLICY IF EXISTS p_service_sheets_select ON service_sheets;
-CREATE POLICY p_service_sheets_select ON service_sheets
-FOR SELECT
-USING (can_view_ingreso(ingreso_id));
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema='public' AND table_name='service_sheets'
+  ) THEN
+    EXECUTE 'DROP POLICY IF EXISTS p_service_sheets_select ON service_sheets';
+    EXECUTE $$CREATE POLICY p_service_sheets_select ON service_sheets
+      FOR SELECT
+      USING (can_view_ingreso(ingreso_id))$$;
 
-DROP POLICY IF EXISTS p_service_sheets_all ON service_sheets;
-CREATE POLICY p_service_sheets_all ON service_sheets
-FOR ALL
-USING (
-  current_setting('app.user_role', true) IN ('admin','jefe','jefe_veedor','tecnico')
-  AND (
-    current_setting('app.user_role', true) IN ('admin','jefe','jefe_veedor')
-    OR EXISTS (
-      SELECT 1 FROM ingresos t
-      WHERE t.id = service_sheets.ingreso_id
-        AND t.asignado_a = NULLIF(current_setting('app.user_id', true), '')::int
-    )
-  )
-)
-WITH CHECK (
-  current_setting('app.user_role', true) IN ('admin','jefe','jefe_veedor')
-  OR EXISTS (
-    SELECT 1 FROM ingresos t
-    WHERE t.id = service_sheets.ingreso_id
-      AND t.asignado_a = NULLIF(current_setting('app.user_id', true), '')::int
-  )
-);
+    EXECUTE 'DROP POLICY IF EXISTS p_service_sheets_all ON service_sheets';
+    EXECUTE $$CREATE POLICY p_service_sheets_all ON service_sheets
+      FOR ALL
+      USING (
+        current_setting('app.user_role', true) IN ('admin','jefe','jefe_veedor','tecnico')
+        AND (
+          current_setting('app.user_role', true) IN ('admin','jefe','jefe_veedor')
+          OR EXISTS (
+            SELECT 1 FROM ingresos t
+            WHERE t.id = service_sheets.ingreso_id
+              AND t.asignado_a = NULLIF(current_setting('app.user_id', true), '')::int
+          )
+        )
+      )
+      WITH CHECK (
+        current_setting('app.user_role', true) IN ('admin','jefe','jefe_veedor')
+        OR EXISTS (
+          SELECT 1 FROM ingresos t
+          WHERE t.id = service_sheets.ingreso_id
+            AND t.asignado_a = NULLIF(current_setting('app.user_id', true), '')::int
+        )
+      )$$;
+  END IF;
+END$$;
 
 -- =========================================
 -- Políticas: EQUIPOS_DERIVADOS (nuevo)
@@ -179,3 +195,4 @@ CREATE POLICY p_handoffs_admin ON handoffs
 FOR ALL
 USING (current_setting('app.user_role', true) IN ('admin','jefe','jefe_veedor'))
 WITH CHECK (current_setting('app.user_role', true) IN ('admin','jefe','jefe_veedor'));
+

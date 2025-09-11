@@ -15,7 +15,15 @@ export const formatOS = (rowOrId, prefix = "OS ") => {
 export const formatDateTime = (s, locale = "es-AR") =>
   s ? new Date(s).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : "-";
 
-export const norm = (v) => (v ?? "").toString().toLowerCase().trim();
+export const norm = (v) => {
+  const s = (v ?? "").toString().toLowerCase().trim();
+  try {
+    // Remover acentos/diacríticos para comparaciones robustas
+    return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  } catch {
+    return s;
+  }
+};
 
 export const formatMoney = (amount, currency = "ARS", locale = "es-AR") => {
   if (amount == null || isNaN(Number(amount))) return "-";

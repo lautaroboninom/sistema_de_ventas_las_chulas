@@ -29,22 +29,20 @@ export const resolutionLabel = (value) =>
 // Estados operativos (flujo de trabajo)
 export const ESTADO = {
   DIAGNOSTICADO: "diagnosticado",
-  EMITIDO: "emitido",
-  APROBADO: "aprobado",
   REPARAR: "reparar",
   REPARADO: "reparado",
-  LISTO_RETIRO: "listo_retiro",
+  LIBERADO: "liberado",
   ENTREGADO: "entregado",
+  ALQUILADO: "alquilado",
 };
 
 export const ESTADO_LABELS = {
   [ESTADO.DIAGNOSTICADO]: "Diagnosticado",
-  [ESTADO.EMITIDO]: "Emitido",
-  [ESTADO.APROBADO]: "Aprobado",
   [ESTADO.REPARAR]: "Reparar",
   [ESTADO.REPARADO]: "Reparado",
-  [ESTADO.LISTO_RETIRO]: "Listo para retiro",
+  [ESTADO.LIBERADO]: "Liberado",
   [ESTADO.ENTREGADO]: "Entregado",
+  [ESTADO.ALQUILADO]: "Alquilado",
 };
 
 export const ESTADO_OPTIONS = Object.entries(ESTADO_LABELS).map(
@@ -53,10 +51,8 @@ export const ESTADO_OPTIONS = Object.entries(ESTADO_LABELS).map(
 
 // (opcional) por si querés habilitar “siguiente paso” en UI
 export const NEXT_STATE = {
-  [ESTADO.DIAGNOSTICADO]: ESTADO.EMITIDO,
-  [ESTADO.EMITIDO]: ESTADO.APROBADO,
-  [ESTADO.APROBADO]: ESTADO.REPARAR,
+  [ESTADO.DIAGNOSTICADO]: ESTADO.REPARAR,
   [ESTADO.REPARAR]: ESTADO.REPARADO,
-  [ESTADO.REPARADO]: ESTADO.LISTO_RETIRO,
-  [ESTADO.LISTO_RETIRO]: ESTADO.ENTREGADO,
+  [ESTADO.REPARADO]: ESTADO.LIBERADO,
+  [ESTADO.LIBERADO]: ESTADO.ENTREGADO,
 };

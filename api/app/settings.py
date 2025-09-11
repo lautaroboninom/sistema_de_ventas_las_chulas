@@ -29,6 +29,13 @@ FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 PUBLIC_WEB_URL = os.getenv("PUBLIC_WEB_URL", FRONTEND_ORIGIN)
 LOGO_PATH = os.getenv("LOGO_PATH", "/code/service/static/logo.png")  # usado por PDF
 
+# Directorio opcional donde guardar copias de PDFs de presupuestos
+# Si existe, se escriben allí además de devolverse al cliente
+QUOTES_SAVE_DIR = os.getenv(
+    "QUOTES_SAVE_DIR",
+    r"Z:\MG BIO\1 PRESUPUESTOS MGBIO SA\2025\Pendientes de envío"
+)
+
 # Email
 EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")

@@ -55,6 +55,10 @@ services:
       - "8000:8000"
     volumes:
       - ./api:/code
+      # Monta la carpeta de presupuestos del host en /quotes dentro del contenedor
+      - type: bind
+        source: ${QUOTES_HOST_DIR}
+        target: /quotes
     command: >
       bash -lc "
       python manage.py migrate --noinput &&

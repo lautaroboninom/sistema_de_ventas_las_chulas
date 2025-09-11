@@ -23,6 +23,7 @@ export default function CatalogoMarcas() {
   const [marcaTecId, setMarcaTecId] = useState(null);     // técnico de la marca seleccionada
   const [mdlTecSel, setMdlTecSel]   = useState({});       // { [modeloId]: tecnico_id }
   const [mdlTipoSel, setMdlTipoSel] = useState({});       // { [modeloId]: tipo_equipo (texto) }
+  const [expandedModelId, setExpandedModelId] = useState(null);
 
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -80,7 +81,16 @@ export default function CatalogoMarcas() {
   };
   const addModelo = async (e) => {
     e.preventDefault(); if (!sel) return;
-    try { await postModelo(sel.id, fmo.nombre); setFmo({nombre:""}); setMsg("Modelo agregado"); loadModelos(sel.id); }
+    try {
+      await postModelo(sel.id, {
+        nombre: fmo.nombre,
+        tipo_equipo: (fmo.tipo_equipo || "").trim() || undefined,
+        tecnico_id: fmo.tecnico_id ? Number(fmo.tecnico_id) : undefined,
+      });
+      setFmo({ nombre: "", tipo_equipo: "", tecnico_id: "" });
+      setMsg("Modelo agregado");
+      loadModelos(sel.id);
+    }
     catch(e){ setErr(e.message); }
   };
   const delModelo = async (id) => {
@@ -198,9 +208,30 @@ export default function CatalogoMarcas() {
         </h2>
 
         {sel && (
-          <form onSubmit={addModelo} className="border rounded p-3 mb-3 flex gap-2">
-            <Input placeholder="Nombre de modelo" value={fmo.nombre} onChange={e => setFmo({nombre:e.target.value})} required/>
-            <button className="bg-blue-600 text-white px-4 py-2 rounded">Agregar</button>
+          <form onSubmit={addModelo} className="border rounded p-3 mb-3 grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+            <div className="md:col-span-2">
+              <label className="text-sm block mb-1">Nombre de modelo</label>
+              <Input placeholder="Nombre de modelo" value={fmo.nombre} onChange={e => setFmo(f=>({...f, nombre:e.target.value}))} required/>
+            </div>
+            <div>
+              <label className="text-sm block mb-1">Tipo de equipo</label>
+              <Select value={fmo.tipo_equipo || ""} onChange={e => setFmo(f=>({...f, tipo_equipo:e.target.value}))}>
+                <option value="">— Sin tipo —</option>
+                {tipos.map(t => (
+                  <option key={t.id ?? t.nombre} value={t.nombre}>{t.nombre}</option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm block mb-1">Técnico</label>
+              <Select value={fmo.tecnico_id || ""} onChange={e => setFmo(f=>({...f, tecnico_id:e.target.value}))}>
+                <option value="">— Heredar/ninguno —</option>
+                {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+              </Select>
+            </div>
+            <div className="md:col-span-4 flex justify-end">
+              <button className="bg-blue-600 text-white px-4 py-2 rounded">Agregar</button>
+            </div>
           </form>
         )}
 
@@ -208,71 +239,70 @@ export default function CatalogoMarcas() {
           {sel ? (
             modelos.map(md => (
               <li key={md.id} className="p-2">
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-center">
-                  <div className="lg:col-span-3">
-                    <div className="font-medium">{md.nombre}</div>
-                    <div className="text-xs text-gray-600">Tipo: {md.tipo_equipo || "—"}</div>
-                    <div className="text-xs text-gray-500">
-                      {md.tecnico_id == null ? "Hereda/ninguno" : "Asignación propia"}
-                    </div>
-                  </div>
-
-                  {/* Tipo de equipo */}
-                  <div className="lg:col-span-4">
-                    <label className="text-sm block mb-1">Tipo de equipo</label>
-                    <Select
-                      value={mdlTipoSel[md.id] ?? ""}
-                      onChange={(e) => setMdlTipoSel(s => ({ ...s, [md.id]: e.target.value }))}
-                    >
-                      <option value="">— Sin tipo —</option>
-                      {tipos.map(t => (
-                        <option key={t.id} value={t.nombre}>{t.nombre}</option>
-                      ))}
-                    </Select>
-                  </div>
-
-                  {/* Técnico */}
-                  <div className="lg:col-span-3">
-                    <label className="text-sm block mb-1">Técnico</label>
-                    <Select
-                      value={mdlTecSel[md.id] ?? ""}
-                      onChange={(e) =>
-                        setMdlTecSel((s) => ({ ...s, [md.id]: e.target.value ? Number(e.target.value) : "" }))
-                      }
-                    >
-                      <option value="">— Heredar/ninguno —</option>
-                      {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
-                    </Select>
-                  </div>
-
-                  {/* Acciones */}
-                  <div className="lg:col-span-2 flex gap-2 justify-end">
-                    <button
-                      className="px-3 py-2 border rounded disabled:opacity-60"
-                      onClick={() => guardarTipoEquipo(md.id)}
-                      type="button"
-                      disabled={loading}
-                      title="Guardar tipo de equipo"
-                    >
-                      Guardar tipo
-                    </button>
-                    <button
-                      className="px-3 py-2 border rounded disabled:opacity-60"
-                      onClick={() => guardarTecnicoModelo(md.id)}
-                      type="button"
-                      disabled={loading}
-                    >
-                      Guardar técnico
-                    </button>
-                    <button
-                      className="px-3 py-2 border rounded"
-                      onClick={() => delModelo(md.id)}
-                      type="button"
-                    >
-                      Eliminar
-                    </button>
+                {/* Cabecera compacta clickeable */}
+                <div className="flex items-center justify-between">
+                  <button className="text-left font-medium hover:underline" onClick={() => setExpandedModelId(expandedModelId === md.id ? null : md.id)}>
+                    {md.nombre}
+                  </button>
+                  <div className="text-xs text-gray-600 flex gap-3">
+                    <span>Tipo: {md.tipo_equipo || "—"}</span>
+                    <span>Téc.: {md.tecnico_id ? (tecnicos.find(t => t.id === md.tecnico_id)?.nombre || md.tecnico_id) : "hereda/ninguno"}</span>
                   </div>
                 </div>
+
+                {/* Panel de edición expandible */}
+                {expandedModelId === md.id && (
+                  <div className="mt-3 border rounded p-3 grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-gray-50">
+                    <div className="md:col-span-4">
+                      <label className="text-sm block mb-1">Tipo de equipo</label>
+                      <Select
+                        value={mdlTipoSel[md.id] ?? (md.tipo_equipo || "")}
+                        onChange={(e) => setMdlTipoSel(s => ({ ...s, [md.id]: e.target.value }))}
+                      >
+                        <option value="">— Sin tipo —</option>
+                        {tipos.map(t => (
+                          <option key={t.id ?? t.nombre} value={t.nombre}>{t.nombre}</option>
+                        ))}
+                      </Select>
+                    </div>
+                    <div className="md:col-span-4">
+                      <label className="text-sm block mb-1">Técnico</label>
+                      <Select
+                        value={mdlTecSel[md.id] ?? (md.tecnico_id || "")}
+                        onChange={(e) => setMdlTecSel((s) => ({ ...s, [md.id]: e.target.value ? Number(e.target.value) : "" }))}
+                      >
+                        <option value="">— Heredar/ninguno —</option>
+                        {tecnicos.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                      </Select>
+                    </div>
+                    <div className="md:col-span-4 flex gap-2 justify-end">
+                      <button
+                        className="px-3 py-2 border rounded disabled:opacity-60"
+                        onClick={() => guardarTipoEquipo(md.id)}
+                        type="button"
+                        disabled={loading}
+                        title="Guardar tipo de equipo"
+                      >
+                        Guardar tipo
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded disabled:opacity-60"
+                        onClick={() => guardarTecnicoModelo(md.id)}
+                        type="button"
+                        disabled={loading}
+                      >
+                        Guardar técnico
+                      </button>
+                      <button
+                        className="px-3 py-2 border rounded"
+                        onClick={() => delModelo(md.id)}
+                        type="button"
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </div>
+                )}
               </li>
             ))
           ) : (

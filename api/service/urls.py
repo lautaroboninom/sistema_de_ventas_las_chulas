@@ -9,6 +9,7 @@ from .views import (
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     PendientesPresupuestoView, PresupuestadosView,
     MarcarReparadoView, EntregarIngresoView, GarantiaReparacionCheckView,
+    ListosParaRetiroView,
 
     # listados / generales
     CustomersListView, PendientesGeneralView,
@@ -20,6 +21,8 @@ from .views import (
 
     # catálogos
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView, CatalogoMotivosView,
+    CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
+    BuscarAccesorioPorReferenciaView,
 
     # administración de usuarios
     UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
@@ -36,7 +39,7 @@ from .views import (
     EquiposDerivadosView,
 
     QuoteDetailView, QuoteItemsView, QuoteItemDetailView, QuoteResumenView, AnularPresupuestoView,
-    RemitoSalidaPdfView, TiposEquipoView, ModeloTipoEquipoView,
+    RemitoSalidaPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
 )
 
 urlpatterns = [
@@ -64,7 +67,7 @@ urlpatterns = [
     path("ingresos/aprobados-para-reparar/", AprobadosParaRepararView.as_view()),
     path("ingresos/aprobados-reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/liberados/", LiberadosView.as_view()),
-    path("listos-para-retiro/", LiberadosView.as_view()),  # alias de compat
+    path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
 
     # ALIAS de compatibilidad con el front (si existían)
     path("ingresos/aprobados/", AprobadosParaRepararView.as_view()),
@@ -88,6 +91,7 @@ urlpatterns = [
     path("catalogos/modelos/", CatalogoModelosView.as_view()),                   # ?marca_id=#
     path("catalogos/ubicaciones/", CatalogoUbicacionesView.as_view()),
     path("catalogos/motivos/", CatalogoMotivosView.as_view()),
+    path("catalogos/accesorios/", CatalogoAccesoriosView.as_view()),
     path("catalogos/proveedores-externos/", ProveedoresExternosView.as_view()),
     path("catalogos/proveedores-externos/<int:pid>/", ProveedoresExternosView.as_view()),
 
@@ -101,6 +105,10 @@ urlpatterns = [
 
     # detalle de ingreso (GET, PATCH)
     path("ingresos/<int:ingreso_id>/", IngresoDetalleView.as_view()),
+    # accesorios por ingreso
+    path("ingresos/<int:ingreso_id>/accesorios/", IngresoAccesoriosView.as_view()),
+    path("ingresos/<int:ingreso_id>/accesorios/<int:item_id>/", IngresoAccesorioDetailView.as_view()),
+    path("accesorios/buscar/", BuscarAccesorioPorReferenciaView.as_view()),
 
     # usuarios (class-based)
     path("usuarios/", UsuariosView.as_view()),                                   # GET lista, POST upsert
@@ -134,9 +142,15 @@ urlpatterns = [
     path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # 👈 nuevo
     path("ingresos/<int:ingreso_id>/cerrar/", CerrarReparacionView.as_view()),
 
+    # tipos de equipo (alias singular/plural por compat)
+    path("catalogos/tipos-equipo/", TiposEquipoView.as_view()),
     path("catalogo/tipos-equipo/", TiposEquipoView.as_view()),
+    # asignación de tipo de equipo al modelo (alias singular/plural por compat)
+    path("catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
     path("catalogo/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
 
 
 
+    # historial de cambios por ingreso
+    path("ingresos/<int:ingreso_id>/historial/", IngresoHistorialView.as_view()),
 ]

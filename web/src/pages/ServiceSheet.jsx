@@ -11,6 +11,9 @@ import api, {
   postQuoteEmitir, postQuoteAprobar, getBlob, postQuoteAnular, postCerrarReparacion, postMarcarReparado,
   // entrega
   postEntregarIngreso,
+  // accesorios
+  getAccesoriosCatalogo, postAccesorioIngreso, deleteAccesorioIngreso,
+  getIngresoHistorial,
 } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -22,29 +25,32 @@ import { canActAsTech, canRelease, hasAnyRole, ROLES } from "../lib/authz";
 import { RESOLUCION, RESOLUCION_OPTIONS, resolutionLabel } from "../lib/constants";
 
 // UI helpers
-const Row = ({ label, children }) => (
-  <div className="flex gap-3 py-1">
+const Row = ({ label, children, className = "" }) => (
+  <div className={`flex gap-3 py-1 ${className}`}>
     <div className="w-40 text-gray-500">{label}</div>
     <div className="flex-1">{children}</div>
   </div>
 );
 
-const Tabs = ({ value, onChange, items }) => (
-  <div className="border-b mb-4 flex gap-2">
-    {items.map((it) => (
-      <button
-        key={it.value}
-        className={`px-3 py-2 rounded-t ${
-          value === it.value
-            ? "bg-white border border-b-0"
-            : "text-gray-600 hover:text-black"
-        }`}
-        onClick={() => onChange(it.value)}
-        type="button"
-      >
-        {it.label}
-      </button>
-    ))}
+const Tabs = ({ value, onChange, items, extraRight }) => (
+  <div className="border-b mb-4 flex items-center">
+    <div className="flex gap-2">
+      {items.map((it) => (
+        <button
+          key={it.value}
+          className={`px-3 py-2 rounded-t ${
+            value === it.value
+              ? "bg-white border border-b-0"
+              : "text-gray-600 hover:text-black"
+          }`}
+          onClick={() => onChange(it.value)}
+          type="button"
+        >
+          {it.label}
+        </button>
+      ))}
+    </div>
+    <div className="ml-auto">{extraRight}</div>
   </div>
 );
 
@@ -53,6 +59,11 @@ export default function ServiceSheet() {
   const { user } = useAuth(); // para ocultar/mostrar botones según rol
   const actAsTech = canActAsTech(user);
   const release = canRelease(user);
+  const canEditBasics = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]);
+  const [editBasics, setEditBasics] = useState(false);
+  const canSeeHistory = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]);
+  const [formBasics, setFormBasics] = useState(null); // valores en edición local
+  const [savingBasics, setSavingBasics] = useState(false);
 
   // Helpers datetime
   function toDatetimeLocalStr(isoOrDate) {
@@ -99,6 +110,12 @@ export default function ServiceSheet() {
   // derivaciones
   const [derivs, setDerivs] = useState([]);
 
+  // accesorios (catálogo + alta/baja)
+  const [accesCatalogo, setAccesCatalogo] = useState([]);
+  const [nuevoAcc, setNuevoAcc] = useState({ descripcion: "", referencia: "" });
+  const [addingAcc, setAddingAcc] = useState(false);
+  const [deletingAccId, setDeletingAccId] = useState(null);
+
   // campos de técnico
   const [descripcion, setDescripcion] = useState("");
   const [trabajos, setTrabajos] = useState("");
@@ -125,6 +142,11 @@ export default function ServiceSheet() {
   const [manoObraStr, setManoObraStr] = useState("");
   const [showDiagToast, setShowDiagToast] = useState(false);
   const toastTimer = useRef(null);
+
+  // historial de cambios
+  const [hist, setHist] = useState([]);
+  const [hLoading, setHLoading] = useState(false);
+  const [hErr, setHErr] = useState("");
 
   function money(n) {
     if (n == null) return "-";
@@ -187,7 +209,7 @@ export default function ServiceSheet() {
   }
 
   async function anularPresupuesto() {
-    if (!confirm("¿Anular el presupuesto actual? Podrás editar y re-emitir luego.")) return;
+    if (!confirm("¿Anular el presupuesto actualó Podrás editar y re-emitir luego.")) return;
     try {
       setAnulando(true);
       setQErr("");
@@ -241,6 +263,105 @@ export default function ServiceSheet() {
   }
 
   useEffect(() => { if (tab === "presupuesto") loadQuote(); }, [tab, id]);
+  useEffect(() => {
+    if (tab !== "historial") return;
+    (async () => {
+      try {
+        setHErr(""); setHLoading(true);
+        const rows = await getIngresoHistorial(id);
+        setHist(Array.isArray(rows) ? rows : []);
+      } catch (e) {
+        setHErr(e?.message || "No se pudo cargar el historial");
+        setHist([]);
+      } finally {
+        setHLoading(false);
+      }
+    })();
+  }, [tab, id]);
+
+  // Activar edición: inicializa formulario local con datos actuales
+  function startEditBasics() {
+    setFormBasics({
+      razon_social: data?.razon_social || "",
+      cod_empresa: data?.cod_empresa || "",
+      telefono: data?.telefono || "",
+      propietario_nombre: data?.propietario_nombre || "",
+      propietario_contacto: data?.propietario_contacto || "",
+      propietario_doc: data?.propietario_doc || "",
+      numero_serie: data?.numero_serie || "",
+      numero_interno: data?.numero_interno || "",
+      garantia_reparacion: !!data?.garantia_reparacion,
+    });
+    setEditBasics(true);
+  }
+
+  async function saveEditBasics() {
+    if (!formBasics) { setEditBasics(false); return; }
+    const diff = {};
+    const cmp = (a, b) => (a ?? "") !== (b ?? "");
+    if (cmp(formBasics.razon_social, data?.razon_social)) diff.razon_social = formBasics.razon_social;
+    if (cmp(formBasics.cod_empresa, data?.cod_empresa)) diff.cod_empresa = formBasics.cod_empresa;
+    if (cmp(formBasics.telefono, data?.telefono)) diff.telefono = formBasics.telefono;
+    if (cmp(formBasics.propietario_nombre, data?.propietario_nombre)) diff.propietario_nombre = formBasics.propietario_nombre;
+    if (cmp(formBasics.propietario_contacto, data?.propietario_contacto)) diff.propietario_contacto = formBasics.propietario_contacto;
+    if (cmp(formBasics.propietario_doc, data?.propietario_doc)) diff.propietario_doc = formBasics.propietario_doc;
+    if (cmp(formBasics.numero_serie, data?.numero_serie)) diff.numero_serie = formBasics.numero_serie;
+    if (cmp(formBasics.numero_interno, data?.numero_interno)) diff.numero_interno = formBasics.numero_interno;
+    if ((formBasics.garantia_reparacion ? 1 : 0) !== (data?.garantia_reparacion ? 1 : 0)) diff.garantia_reparacion = !!formBasics.garantia_reparacion;
+    try {
+      setSavingBasics(true);
+      if (Object.keys(diff).length > 0) {
+        await patch(diff);
+      }
+      setEditBasics(false);
+      setFormBasics(null);
+    } finally {
+      setSavingBasics(false);
+    }
+  }
+
+  // cargar catálogo de accesorios una sola vez
+  useEffect(() => {
+    (async () => {
+      try { setAccesCatalogo(await getAccesoriosCatalogo()); } catch (_) {}
+    })();
+  }, []);
+
+  const canEditAcc = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO, ROLES.RECEPCION]) && data?.estado !== "entregado";
+
+  async function addAccesorio() {
+    try {
+      const d = (nuevoAcc.descripcion || "").trim().toLowerCase();
+      if (!d) { setErr("Escribí una descripción"); return; }
+      const acc = accesCatalogo.find(a => (a.nombre || "").trim().toLowerCase() === d);
+      if (!acc) { setErr("Elegí una descripción válida de la lista"); return; }
+      setAddingAcc(true);
+      const row = await postAccesorioIngreso(id, {
+        accesorio_id: Number(acc.id),
+        referencia: (nuevoAcc.referencia || "").trim() || null,
+      });
+      setData(d => ({ ...d, accesorios_items: [...(d?.accesorios_items || []), row] }));
+      setNuevoAcc({ descripcion: "", referencia: "" });
+      setErr("");
+    } catch (e) {
+      setErr(e?.message || "No se pudo agregar el accesorio");
+    } finally {
+      setAddingAcc(false);
+    }
+  }
+
+  async function removeAccesorio(itemId) {
+    try {
+      setDeletingAccId(itemId);
+      await deleteAccesorioIngreso(id, itemId);
+      setData(d => ({ ...d, accesorios_items: (d?.accesorios_items || []).filter(it => it.id !== itemId) }));
+      setErr("");
+    } catch (e) {
+      setErr(e?.message || "No se pudo quitar el accesorio");
+    } finally {
+      setDeletingAccId(null);
+    }
+  }
 
   async function addRepuesto() {
     const qty = Number(nuevoRep.qty || 0);
@@ -259,7 +380,7 @@ export default function ServiceSheet() {
   }
 
   async function updateItem(it, patchRow) { await patchQuoteItem(id, it.id, patchRow); await loadQuote(); }
-  async function removeItem(it) { if (!confirm("¿Eliminar renglón?")) return; await deleteQuoteItem(id, it.id); await loadQuote(); }
+  async function removeItem(it) { if (!confirm("¿Eliminar renglónó")) return; await deleteQuoteItem(id, it.id); await loadQuote(); }
   async function saveManoObra() {
     const mo = Number(manoObraStr || 0);
     if (mo < 0) { setQErr("Mano de obra inválida"); return; }
@@ -363,7 +484,19 @@ export default function ServiceSheet() {
     <div className="max-w-6xl mx-auto p-4">
       <h1 className="text-2xl font-bold mb-2">Hoja de servicio — {formatOSHelper(data, id)}</h1>
 
+
+      
       {err && <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-4">{err}</div>}
+      {canSeeHistory && (
+      <div className="-mt-8 -mb-2 text-right">
+        <button
+          className={`px-3 py-2 rounded-t ${tab === 'historial' ? 'bg-white border border-b-0' : 'text-gray-600 hover:text-black'}`}
+          onClick={() => setTab('historial')}
+          type="button"
+        >
+          Historial
+        </button>
+      </div>)}
 
       <Tabs
         value={tab}
@@ -376,6 +509,7 @@ export default function ServiceSheet() {
         ]}
       />
 
+
       {/* PRINCIPAL */}
       {tab === "principal" && (
         <>
@@ -383,112 +517,189 @@ export default function ServiceSheet() {
             {/* Columna izquierda: Cliente/Equipo/Notas */}
             <div className="border rounded p-4">
               <h2 className="font-semibold mb-2">Cliente</h2>
-              <Row label="Razón social">{data.razon_social}</Row>
-              <Row label="Código empresa">{data.cod_empresa || "-"}</Row>
-              <Row label="Teléfono">{data.telefono || "-"}</Row>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+              <Row label="Razón social">
+                {editBasics? (
+                  <input
+                    className="border rounded p-1 w-64"
+                    value={formBasics?.razon_social ?? ""}
+                    onChange={(e) => setFormBasics(s => ({ ...s, razon_social: e.target.value }))}
+                  />
+                ) : (
+                  data.razon_social
+                )}
+              </Row>
+              <Row label="Código empresa">
+                {editBasics ? (
+                  <input
+                    className="border rounded p-1 w-40"
+                    value={formBasics?.cod_empresa ?? ""}
+                    onChange={(e) => setFormBasics(s => ({ ...s, cod_empresa: e.target.value }))}
+                  />
+                ) : (
+                  data.cod_empresa || "-"
+                )}
+              </Row>
+              <Row label="Teléfono">
+                {editBasics ? (
+                  <input
+                    className="border rounded p-1 w-48"
+                    value={formBasics?.telefono ?? ""}
+                    onChange={(e) => setFormBasics(s => ({ ...s, telefono: e.target.value }))}
+                  />
+                ) : (
+                  data.telefono || "-"
+                )}
+              </Row>
 
-              {(data.propietario_nombre || data.propietario_contacto || data.propietario_doc) && (
+              </div>
+              {(editBasics || data.propietario_nombre || data.propietario_contacto || data.propietario_doc) && (
                 <>
                   <h2 className="font-semibold mt-4 mb-2">Propietario</h2>
-                  <Row label="Nombre">{data.propietario_nombre || "-"}</Row>
-                  <Row label="Contacto">{data.propietario_contacto || "-"}</Row>
-                  <Row label="Documento">{data.propietario_doc || "-"}</Row>
+                  <Row label="Nombre">
+                    {editBasics ? (
+                      <input
+                        className="border rounded p-1 w-64"
+                        value={formBasics?.propietario_nombre ?? ""}
+                        onChange={(e) => setFormBasics(s => ({ ...s, propietario_nombre: e.target.value }))}
+                      />
+                    ) : (
+                      data.propietario_nombre || "-"
+                    )}
+                  </Row>
+                  <Row label="Contacto">
+                    {editBasics ? (
+                      <input
+                        className="border rounded p-1 w-64"
+                        value={formBasics?.propietario_contacto ?? ""}
+                        onChange={(e) => setFormBasics(s => ({ ...s, propietario_contacto: e.target.value }))}
+                      />
+                    ) : (
+                      data.propietario_contacto || "-"
+                    )}
+                  </Row>
+                  <Row label="Documento">
+                    {editBasics ? (
+                      <input
+                        className="border rounded p-1 w-64"
+                        value={formBasics?.propietario_doc ?? ""}
+                        onChange={(e) => setFormBasics(s => ({ ...s, propietario_doc: e.target.value }))}
+                      />
+                    ) : (
+                      data.propietario_doc || "-"
+                    )}
+                  </Row>
                 </>
               )}
 
               <h2 className="font-semibold mt-4 mb-2">Equipo</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
               <Row label="Marca">{data.marca}</Row>
               <Row label="Modelo">{data.modelo}</Row>
               <Row label="Tipo de equipo">{data.tipo_equipo || "-"}</Row>
-              <Row label="N° serie">{data.numero_serie}</Row>
+              <Row label="N° serie">
+                {editBasics ? (
+                  <input
+                    className="border rounded p-1 w-60"
+                    value={formBasics?.numero_serie ?? ""}
+                    onChange={(e) => setFormBasics(s => ({ ...s, numero_serie: e.target.value }))}
+                  />
+                ) : (
+                  data.numero_serie
+                )}
+              </Row>
               <Row label="Garantía (fábrica)">{data.garantia ? "Sí" : "No"}</Row>
               <Row label="Garantía de reparación">
-                <input
-                  type="checkbox"
-                  checked={!!data.garantia_reparacion}
-                  onChange={(e) => patch({ garantia_reparacion: e.target.checked })}
-                />
+                {editBasics ? (
+                  <input
+                    type="checkbox"
+                    checked={!!(formBasics?.garantia_reparacion)}
+                    onChange={(e) => setFormBasics(s => ({ ...s, garantia_reparacion: e.target.checked }))}
+                  />
+                ) : (
+                  <span>{data.garantia_reparacion ? "Sí" : "No"}</span>
+                )}
               </Row>
               <Row label="N° interno (MG)">
-                <input
-                  className="border rounded p-1 w-60"
-                  value={data.numero_interno || ""}
-                  onChange={(e) => patch({ numero_interno: e.target.value })}
-                />
+                {editBasics ? (
+                  <input
+                    className="border rounded p-1 w-60"
+                    value={formBasics?.numero_interno || ""}
+                    onChange={(e) => setFormBasics(s => ({ ...s, numero_interno: e.target.value }))}
+                  />
+                ) : (
+                  <span>{data.numero_interno || ""}</span>
+                )}
               </Row>
 
+              </div>
               {/* Notas justo debajo del cuadro de Equipo */}
-              <h2 className="font-semibold mt-4 mb-2">Notas</h2>
-              <Row label="Informe preliminar">{data.informe_preliminar || "-"}</Row>
-              <Row label="Accesorios">{data.accesorios || "-"}</Row>
+                <h2 className="font-semibold mt-4 mb-2">Notas</h2>
+                <Row label="Informe preliminar">{data.informe_preliminar || "-"}</Row>
+                <Row label="Accesorios">
+                  {Array.isArray(data.accesorios_items) && data.accesorios_items.length > 0 ? (
+                    <ul className="list-disc list-inside">
+                      {data.accesorios_items.map((it) => (
+                        <li key={it.id}>
+                          {it.accesorio_nombre}
+                          {it.referencia ? ` (ref: ${it.referencia})` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (data.accesorios || "-")}
+                </Row>
             </div>
 
 
             {/* Columna derecha: Estado/Asignación/Ubicación */}
             <div className="border rounded p-4">
               <h2 className="font-semibold mb-2">Estado</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
               <Row label="Motivo">{data.motivo}</Row>
               <Row label="Estado">{data.estado}</Row>
               <Row label="Presupuesto">{data.presupuesto_estado === "presupuestado" ? "Presupuestado" : (data.presupuesto_estado || "-")}</Row>
               <Row label="Resolución">{data.resolucion ? resolutionLabel(data.resolucion) : "-"}</Row>
               <Row label="Fecha ingreso">{formatDateTimeHelper(data.fecha_ingreso)}</Row>
               <Row label="Fecha servicio">{data.fecha_servicio ? formatDateTimeHelper(data.fecha_servicio) : "-"}</Row>
+              </div>
 
               <div className="mt-3">
                 <Link to={`/ingresos/${id}/derivar`} className="bg-neutral-800 text-white px-3 py-2 rounded">Derivar a externo</Link>
               </div>
 
-              <h2 className="font-semibold mt-4 mb-2">Asignación</h2>
-              <Row label="Técnico">
-                <div className="flex items-center gap-3">
-                  <select
-                    className="border rounded p-2"
-                    value={tecnicoId ?? ""}
-                    onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}
-                  >
-                    <option value="">-- Seleccionar técnico --</option>
-                    {tecnicos.map((t) => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
-                  </select>
-                  <button
-                    className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
-                    onClick={saveTecnico}
-                    disabled={savingTech || !techDirty || tecnicoId == null}
-                    aria-busy={savingTech ? "true" : "false"}
-                    type="button"
-                  >
-                    {savingTech ? "Guardando..." : "Guardar"}
-                  </button>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+                <div>
+                  <h2 className="font-semibold mb-2">Asignación</h2>
+                  <div className="flex flex-col items-start gap-2">
+                    <select className="border rounded p-2" value={tecnicoId ?? ""} onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}>
+                      <option value="">-- Seleccionar técnico --</option>
+                      {tecnicos.map((t) => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
+                    </select>
+                    <button className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={saveTecnico} disabled={savingTech || !techDirty || tecnicoId == null} aria-busy={savingTech ? "true" : "false"} type="button">
+                      {savingTech ? "Guardando..." : "Guardar"}
+                    </button>
+                    <div className="text-xs text-gray-500">Actual: <b>{data.asignado_a_nombre || "-"}</b></div>
+                  </div>
                 </div>
-                <div className="text-xs text-gray-500 mt-1">Actual: <b>{data.asignado_a_nombre || "-"}</b></div>
-              </Row>
-
-              <h2 className="font-semibold mt-4 mb-2">Ubicación</h2>
-              <div className="flex items-center gap-3">
-                <select
-                  className="border rounded p-2"
-                  value={ubicacionId}
-                  onChange={(e) => setUbicacionId(e.target.value)}
-                  aria-label="Seleccionar ubicación"
-                >
-                  <option value="" disabled>Seleccioná la ubicación…</option>
-                  {ubicaciones.map((u) => (<option key={u.id} value={String(u.id)}>{u.nombre}</option>))}
-                </select>
-                <button
-                  className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
-                  onClick={saveUbicacion}
-                  disabled={savingUb || !ubDirty}
-                  aria-busy={savingUb ? "true" : "false"}
-                  type="button"
-                >
-                  {savingUb ? "Guardando..." : "Guardar"}
-                </button>
+                <div>
+                  <h2 className="font-semibold mb-2">Ubicación</h2>
+                  <div className="flex flex-col items-start gap-2">
+                    <select className="border rounded p-2" value={ubicacionId} onChange={(e) => setUbicacionId(e.target.value)} aria-label="Seleccionar ubicación">
+                      <option value="" disabled>Selección la ubicación.</option>
+                      {ubicaciones.map((u) => (<option key={u.id} value={String(u.id)}>{u.nombre}</option>))}
+                    </select>
+                    <button className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={saveUbicacion} disabled={savingUb || !ubDirty} aria-busy={savingUb ? "true" : "false"} type="button">
+                      {savingUb ? "Guardando..." : "Guardar"}
+                    </button>
+                  </div>
+                  <div className="text-xs text-gray-500">La ubicación puede modificarse desde aquí.</div>
+                </div>
               </div>
-              <div className="text-xs text-gray-500 mt-1">La ubicación puede modificarse desde aquí.</div>
             </div>
           </div>
 
           {/* Botón de orden de salida (liberar) */}
-          {release && (Boolean(data?.resolucion) || data?.estado === "listo_retiro") && (
+          {release && (Boolean(data?.resolucion) || data?.estado === "liberado") && (
             <button
               className="bg-neutral-800 text-white px-3 py-2 rounded mt-4"
               onClick={async () => {
@@ -498,7 +709,7 @@ export default function ServiceSheet() {
                   const url = URL.createObjectURL(blob);
                   window.open(url, "_blank", "noopener");
                   setTimeout(() => URL.revokeObjectURL(url), 60_000);
-                  await refreshIngreso(); // el backend suele pasar a 'listo_retiro'
+                  await refreshIngreso(); // el backend ahora pasa a 'liberado'
                 } catch (e) {
                   setErr(e?.message || "No se pudo imprimir la orden de salida");
                 }
@@ -509,55 +720,72 @@ export default function ServiceSheet() {
             </button>
           )}
 
-          {/* Entrega final (solo cuando está listo para retirar) */}
-          {data.estado === "listo_retiro" && (
-            <div className="border rounded p-4 mt-4">
-              <h2 className="font-semibold mb-2">Entrega</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* Entrega: editable si está 'liberado'; si no, mostrar datos guardados */}
+          <div className="border rounded p-4 mt-4">
+            <h2 className="font-semibold mb-2">Entrega</h2>
+            {data.estado === "liberado" ? (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-sm">Remito salida (requerido)</label>
+                    <input
+                      className="border rounded p-2 w-full"
+                      value={entrega.remito_salida}
+                      onChange={(e) => setEntrega({ ...entrega, remito_salida: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm">Factura (opcional)</label>
+                    <input
+                      className="border rounded p-2 w-full"
+                      value={entrega.factura_numero}
+                      onChange={(e) => setEntrega({ ...entrega, factura_numero: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm">Fecha entrega</label>
+                    <input
+                      type="datetime-local"
+                      className="border rounded p-2 w-full"
+                      value={entrega.fecha_entrega}
+                      onChange={(e) => setEntrega({ ...entrega, fecha_entrega: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <button
+                    className="bg-green-600 text-white px-4 py-2 rounded"
+                    onClick={async () => {
+                      try {
+                        if (!entrega.remito_salida.trim()) { setErr("El remito es requerido para entregar."); return; }
+                        await postEntregarIngreso(id, entrega);
+                        await refreshIngreso();
+                      } catch (e) {
+                        setErr(e?.message || "No se pudo marcar como entregado");
+                      }
+                    }}
+                  >
+                    Marcar ENTREGADO
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
                 <div>
-                  <label className="text-sm">Remito salida (requerido)</label>
-                  <input
-                    className="border rounded p-2 w-full"
-                    value={entrega.remito_salida}
-                    onChange={(e) => setEntrega({ ...entrega, remito_salida: e.target.value })}
-                  />
+                  <div className="text-gray-600">Remito salida</div>
+                  <div className="font-medium">{data.remito_salida || "-"}</div>
                 </div>
                 <div>
-                  <label className="text-sm">Factura (opcional)</label>
-                  <input
-                    className="border rounded p-2 w-full"
-                    value={entrega.factura_numero}
-                    onChange={(e) => setEntrega({ ...entrega, factura_numero: e.target.value })}
-                  />
+                  <div className="text-gray-600">Factura</div>
+                  <div className="font-medium">{data.factura_numero || "-"}</div>
                 </div>
                 <div>
-                  <label className="text-sm">Fecha entrega</label>
-                  <input
-                    type="datetime-local"
-                    className="border rounded p-2 w-full"
-                    value={entrega.fecha_entrega}
-                    onChange={(e) => setEntrega({ ...entrega, fecha_entrega: e.target.value })}
-                  />
+                  <div className="text-gray-600">Fecha entrega</div>
+                  <div className="font-medium">{data.fecha_entrega ? formatDateTimeHelper(data.fecha_entrega) : "-"}</div>
                 </div>
               </div>
-              <div className="mt-3">
-                <button
-                  className="bg-green-600 text-white px-4 py-2 rounded"
-                  onClick={async () => {
-                    try {
-                      if (!entrega.remito_salida.trim()) { setErr("El remito es requerido para entregar."); return; }
-                      await postEntregarIngreso(id, entrega);
-                      await refreshIngreso();
-                    } catch (e) {
-                      setErr(e?.message || "No se pudo marcar como entregado");
-                    }
-                  }}
-                >
-                  Marcar ENTREGADO
-                </button>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Alquiler */}
           <div className="border rounded p-4 mt-4">
@@ -606,7 +834,67 @@ export default function ServiceSheet() {
             </div>
             <div className="border rounded p-3 bg-gray-50">
               <div className="text-xs uppercase text-gray-500 mb-1">Accesorios</div>
-              <div className="whitespace-pre-wrap">{data.accesorios || "-"}</div>
+              <div>
+                {Array.isArray(data.accesorios_items) && data.accesorios_items.length > 0 ? (
+                  <ul className="list-disc list-inside text-sm">
+                    {data.accesorios_items.map((it) => (
+                      <li key={it.id} className="flex items-center justify-between gap-2">
+                        <span>
+                          {it.accesorio_nombre}
+                          {it.referencia ? ` (ref: ${it.referencia})` : ""}
+                        </span>
+                        {canEditAcc && (
+                          <button
+                            className="text-red-600 text-xs"
+                            onClick={() => removeAccesorio(it.id)}
+                            disabled={deletingAccId === it.id}
+                            type="button"
+                          >
+                            {deletingAccId === it.id ? "quitando..." : "quitar"}
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="whitespace-pre-wrap">{data.accesorios || "-"}</div>
+                )}
+              </div>
+
+              {canEditAcc && (
+                <div className="mt-3 border-t pt-3">
+                  <div className="text-xs uppercase text-gray-500 mb-2">Agregar accesorio</div>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <input
+                      className="border rounded p-2 min-w-[240px]"
+                      list="accesorios_catalogo"
+                      placeholder="Descripción (escribí y elegí de la lista)"
+                      value={nuevoAcc.descripcion}
+                      onChange={(e)=> setNuevoAcc(s => ({ ...s, descripcion: e.target.value }))}
+                    />
+                    <datalist id="accesorios_catalogo">
+                      {accesCatalogo.map(a => (
+                        <option key={a.id} value={a.nombre} />
+                      ))}
+                    </datalist>
+                    <input
+                      className="border rounded p-2 w-40"
+                      placeholder="N° referencia (opcional)"
+                      value={nuevoAcc.referencia}
+                      onChange={(e)=> setNuevoAcc(s => ({ ...s, referencia: e.target.value }))}
+                    />
+                      {/* Solo referencia adicional; sin campo de descripción extra */}
+                    <button
+                      className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
+                      onClick={addAccesorio}
+                      disabled={addingAcc || !(nuevoAcc.descripcion || '').trim()}
+                      type="button"
+                    >
+                      {addingAcc ? "agregando..." : "agregar"}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <h2 className="font-semibold mb-2">Descripción del problema (diagnóstico)</h2>
@@ -659,7 +947,7 @@ export default function ServiceSheet() {
               )}
 
               {/* Marcar reparado */}
-              {actAsTech && !["reparado","listo_retiro","entregado"].includes(data?.estado) && (
+              {actAsTech && !["reparado","liberado","entregado"].includes(data?.estado) && (
                 <button
                   className="bg-emerald-600 text-white px-3 py-2 rounded"
                   onClick={async () => {
@@ -942,6 +1230,91 @@ export default function ServiceSheet() {
           Marcado como reparado
         </div>
       )}
+
+      {/* HISTORIAL */}
+      {tab === "historial" && canSeeHistory && (
+        <div className="border rounded p-4">
+          <h2 className="font-semibold mb-2">Historial de cambios</h2>
+          {hErr && <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">{hErr}</div>}
+          {hLoading ? (
+            <div className="text-sm text-gray-500">Cargando...</div>
+          ) : (
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left">
+                  <th className="p-2">Fecha</th>
+                  <th className="p-2">Usuario</th>
+                  <th className="p-2">Rol</th>
+                  <th className="p-2">Entidad</th>
+                  <th className="p-2">Campo</th>
+                  <th className="p-2">Antes</th>
+                  <th className="p-2">Despues</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(hist || []).length === 0 ? (
+                  <tr><td className="p-2 text-gray-500" colSpan={7}>No hay cambios registrados.</td></tr>
+                ) : (
+                  hist.map((r, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(r.ts)}</td>
+                      <td className="p-2">{r.user_id || '-'}</td>
+                      <td className="p-2 whitespace-nowrap">{r.user_role || '-'}</td>
+                      <td className="p-2">{r.table_name}</td>
+                      <td className="p-2">{r.column_name}</td>
+                      <td className="p-2">{r.old_value || '-'}</td>
+                      <td className="p-2">{r.new_value || '-'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* Botón flotante para edición básica (solo Jefe/Jefe_veedor) */}
+      {canEditBasics && (
+        <div className="fixed bottom-4 right-4 z-20 flex gap-2">
+          {!editBasics ? (
+            <button
+              className="text-xs px-3 py-2 rounded shadow bg-neutral-800 text-white hover:bg-neutral-700"
+              onClick={startEditBasics}
+              type="button"
+              title="Habilitar edición de datos"
+            >
+              Editar datos
+            </button>
+          ) : (
+            <>
+              <button
+                className="text-xs px-3 py-2 rounded shadow bg-amber-600 text-white disabled:opacity-60"
+                onClick={saveEditBasics}
+                disabled={savingBasics}
+                type="button"
+                title="Cerrar edición y guardar cambios"
+              >
+                {savingBasics ? "Guardando..." : "Cerrar edición"}
+              </button>
+              <button
+                className="text-xs px-3 py-2 rounded shadow bg-gray-200 hover:bg-gray-300"
+                onClick={() => { setEditBasics(false); setFormBasics(null); }}
+                type="button"
+                title="Cancelar edición"
+              >
+                Cancelar
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
+
+
+
+
+
+
+

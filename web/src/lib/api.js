@@ -116,13 +116,18 @@
   export const getModelosByBrand = (brandId) =>
     api.get(`/api/catalogos/marcas/${brandId}/modelos/`);
   export const getModelos = getModelosByBrand; // alias por compatibilidad
-  export const postModelo = (brandId, nombre) =>
-    api.post(`/api/catalogos/marcas/${brandId}/modelos/`, { nombre });
+export const postModelo = (brandId, payloadOrNombre) => {
+  const payload = typeof payloadOrNombre === "string"
+    ? { nombre: payloadOrNombre }
+    : (payloadOrNombre || {});
+  return api.post(`/api/catalogos/marcas/${brandId}/modelos/`, payload);
+};
   export const deleteModelo = (id) =>
     api.del(`/api/catalogos/modelos/${id}/`);
 
   export const getUbicaciones = () => api.get("/api/catalogos/ubicaciones/");
   export const getMotivos = () => api.get("/api/catalogos/motivos/");
+  export const getAccesoriosCatalogo = () => api.get("/api/catalogos/accesorios/");
 
   export const getProveedoresExternos = () =>
     api.get("/api/catalogos/proveedores-externos/");
@@ -138,6 +143,16 @@
     api.post(`/api/ingresos/${ingresoId}/derivar/`, payload);
   export const getDerivacionesPorIngreso = (ingresoId) =>
     api.get(`/api/ingresos/${ingresoId}/derivaciones/`);
+  // Accesorios por ingreso
+  export const getAccesoriosPorIngreso = (ingresoId) =>
+    api.get(`/api/ingresos/${ingresoId}/accesorios/`);
+  export const postAccesorioIngreso = (ingresoId, payload) =>
+    api.post(`/api/ingresos/${ingresoId}/accesorios/`, payload);
+  export const deleteAccesorioIngreso = (ingresoId, itemId) =>
+    api.del(`/api/ingresos/${ingresoId}/accesorios/${itemId}/`);
+  // Búsqueda por referencia de accesorio
+  export const buscarAccesorioPorRef = (ref) =>
+    api.get(`/api/accesorios/buscar/?ref=${encodeURIComponent(ref||"")}`);
   // Entregar (requiere remito; opcional factura y fecha)
   export const postEntregarIngreso = (ingresoId, payload) =>
     api.post(`/api/ingresos/${ingresoId}/entregar/`, payload);
@@ -241,3 +256,7 @@
   export async function postMarcarReparado(id) {
     return api.post(`/api/ingresos/${id}/reparado/`);
   }
+
+  // Historial de cambios por ingreso
+  export const getIngresoHistorial = (ingresoId) =>
+    api.get(`/api/ingresos/${ingresoId}/historial/`);

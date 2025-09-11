@@ -15,7 +15,7 @@ BEGIN
     EXECUTE $$CREATE TYPE ticket_state AS ENUM
       ('ingresado','diagnosticado',
        'presupuestado','reparar','reparado','entregado',
-       'derivado','listo_retiro','no_se_repara')$$;
+       'derivado','liberado','alquilado')$$;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='quote_state') THEN
@@ -34,6 +34,23 @@ END$$;
 
 -- NECESARIO para poder guardar 'presupuestado' en ingresos.presupuesto_estado (quote_state)
 ALTER TYPE quote_state  ADD VALUE IF NOT EXISTS 'presupuestado';
+
+-- Asegurar estados 'liberado' y 'alquilado' en ticket_state
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname='ticket_state') THEN
+    BEGIN
+      ALTER TYPE ticket_state ADD VALUE IF NOT EXISTS 'liberado';
+    EXCEPTION WHEN duplicate_object THEN
+      -- ignorar si ya existe
+      NULL;
+    END;
+    BEGIN
+      ALTER TYPE ticket_state ADD VALUE IF NOT EXISTS 'alquilado';
+    EXCEPTION WHEN duplicate_object THEN
+      NULL;
+    END;
+  END IF;
+END $$;
 
 -- ======================================================
 -- Users
@@ -275,13 +292,10 @@ BEGIN
                          AND cur_estado IN ('ingresado','diagnosticado','presupuestado')
                     THEN 'reparar'::ticket_state
 
-                    -- rechazado -> no se repara (si no estaba entregado/listo_retiro/derivado/reparado)
-                    WHEN NEW.estado = 'rechazado'
-                         AND cur_estado NOT IN ('entregado','listo_retiro')
-                    THEN 'no_se_repara'::ticket_state
+                    -- rechazado -> NO cambia el estado del equipo (queda como estaba)
 
                     -- emitido (o presupuestado explícito en quote) → reflejar 'presupuestado'
-                    WHEN NEW.estado IN ('emitido','presupuestado') THEN 'presupuestado'::ticket_state
+                    WHEN NEW.estado IN ('emitido','presupuestado') THEN cur_estado
 
                     ELSE cur_estado
                   END

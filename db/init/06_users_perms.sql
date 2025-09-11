@@ -27,11 +27,15 @@ CREATE TABLE IF NOT EXISTS proveedores_externos (
   contacto TEXT
 );
 
-CREATE TYPE external_state AS ENUM ('derivado','en_servicio','devuelto','entregado_cliente')
-  -- sólo si no existía:
-  -- en PG 11+ esto falla si ya existe; lo envolvemos:
-  -- (ya lo trae tu 01_schema.sql, esto es de seguridad por legacy)
-;
+-- Tipo de estado externo (solo si no existe)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_type WHERE typname = 'external_state'
+  ) THEN
+    CREATE TYPE external_state AS ENUM ('derivado','en_servicio','devuelto','entregado_cliente');
+  END IF;
+END$$;
 
 DO $$
 BEGIN
@@ -108,12 +112,13 @@ BEGIN
     SET estado = 'derivado'
     FROM ult
     WHERE ult.ingreso_id = t.id
-      AND (ult_estaDO IN ('derivado','en_servicio') OR (ult_estado = 'devuelto' AND ult_entrega IS NULL))
+      AND (ult_estado IN ('derivado','en_servicio') OR (ult_estado = 'devuelto' AND ult_entrega IS NULL))
       AND t.estado <> 'derivado';
+
   END IF;
 END$$;
 
--- 5) Invariante de “perm_ingresar”: jefe sí, técnico no
+-- 5) Invariante de 'perm_ingresar': jefe sí, técnico no
 ALTER TABLE users ADD COLUMN IF NOT EXISTS perm_ingresar boolean NOT NULL DEFAULT false;
 UPDATE users SET perm_ingresar = true WHERE rol IN ('jefe','jefe_veedor') AND perm_ingresar IS DISTINCT FROM true;
 
@@ -129,3 +134,4 @@ BEGIN
       CHECK (NOT (rol = 'tecnico' AND perm_ingresar = true));
   END IF;
 END$$;
+

@@ -82,6 +82,35 @@ def _get_data(ingreso_id: int):
         ORDER BY qi.id
     """, [ingreso_id])
 
+    # Accesorios normalizados -> construir texto amigable para el PDF
+    accs = _q(
+        """
+          SELECT ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
+          FROM ingreso_accesorios ia
+          JOIN catalogo_accesorios ca ON ca.id = ia.accesorio_id AND ca.activo
+          WHERE ia.ingreso_id=%s
+          ORDER BY ia.id
+        """,
+        [ingreso_id]
+    )
+    if accs:
+        lines = []
+        for a in accs:
+            name = (a.get("accesorio_nombre") or "").strip()
+            ref  = (a.get("referencia") or "").strip()
+            des  = (a.get("descripcion") or "").strip()
+            parts = [name]
+            if ref:
+                parts.append(f"ref: {ref}")
+            if des:
+                parts.append(des)
+            lines.append(" - "+" | ".join(parts))
+        acc_text = "\n".join(lines)
+        if not (head.get("accesorios") or "").strip():
+            head["accesorios"] = acc_text
+        else:
+            head["accesorios"] = (head["accesorios"] or "").strip() + "\n" + acc_text
+
     return head, items
 
 # Logo (ruta configurable)
@@ -393,11 +422,11 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         label_value(inner_x + 134 * mm, y - ROW_H, 36 * mm, ROW_H, "NumeroSerie", head.get("numero_serie"))
         y -= (ROW_H + ROW_GAP)
 
-        # r3: Accesorios | Garantia | Estado
+        # r3: Accesorios | Garantia | Resolución
         label_value(inner_x, y - ROW_H, 102 * mm, ROW_H, "Accesorios", head.get("accesorios"))
         garantia_txt = "Sí" if head.get("garantia") else "No"
         label_value(inner_x + 104 * mm, y - ROW_H, 24 * mm, ROW_H, "Garantia", garantia_txt)
-        label_value(inner_x + 131 * mm, y - ROW_H, 39 * mm, ROW_H, "Estado", head.get("resolucion"))
+        label_value(inner_x + 131 * mm, y - ROW_H, 39 * mm, ROW_H, "Resolución", head.get("resolucion"))
         y -= (ROW_H + ROW_GAP)
 
         # Observaciones (Descripción + Trabajos)
@@ -449,7 +478,8 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         c.drawString(x + 118 * mm, y, "Costo Neto:")
         c.setFillColor(colors.black); box(x + 138 * mm, y - (SIGN_H/2), 24 * mm, SIGN_H)
 
-        url = f"{settings.PUBLIC_WEB_URL}/ingresos/{head['ingreso_id']}"
+        base = getattr(settings, 'PUBLIC_WEB_URL', '').rstrip('/')
+        url = f"{base}/ingresos/{head['ingreso_id']}"
         code = qr.QrCodeWidget(url)
         d = Drawing(60, 60); d.add(code)
         renderPDF.draw(d, c, W - margin - 35 * mm, y_top - height + 20 * mm)

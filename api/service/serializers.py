@@ -62,6 +62,7 @@ class IngresoListItemSerializer(serializers.Serializer):
 
     # Campos opcionales que algunas vistas ya traen
     fecha_reparado = serializers.DateTimeField(required=False, allow_null=True)
+    fecha_listo = serializers.DateTimeField(required=False, allow_null=True)
     presupuesto_numero = serializers.CharField(required=False, allow_blank=True)
     presupuesto_monto = serializers.FloatField(required=False, allow_null=True)
     presupuesto_moneda = serializers.CharField(required=False, allow_blank=True)
@@ -69,6 +70,10 @@ class IngresoListItemSerializer(serializers.Serializer):
     presupuesto_fecha_envio = serializers.DateTimeField(required=False, allow_null=True)
     ubicacion_id = serializers.IntegerField(required=False, allow_null=True)
     ubicacion_nombre = serializers.CharField(required=False, allow_blank=True)
+
+    # Campos opcionales para búsquedas por accesorios
+    accesorio_nombre = serializers.CharField(required=False, allow_blank=True)
+    referencia = serializers.CharField(required=False, allow_blank=True)
 
 
 class IngresoDetailSerializer(serializers.Serializer):
@@ -125,6 +130,17 @@ class IngresoDetailSerializer(serializers.Serializer):
     propietario_doc = serializers.CharField(allow_blank=True, allow_null=True, required=False)
 
     resolucion = serializers.CharField(allow_null=True, allow_blank=True)
+
+class IngresoAccesorioItemSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    accesorio_id = serializers.IntegerField()
+    accesorio_nombre = serializers.CharField()
+    referencia = serializers.CharField(allow_null=True, allow_blank=True)
+    descripcion = serializers.CharField(allow_null=True, allow_blank=True)
+
+
+class IngresoDetailWithAccesoriosSerializer(IngresoDetailSerializer):
+    accesorios_items = IngresoAccesorioItemSerializer(many=True, required=False)
 
 class QuoteItemSerializer(serializers.Serializer):
     id = serializers.IntegerField()

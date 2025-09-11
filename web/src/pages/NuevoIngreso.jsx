@@ -9,6 +9,7 @@ import {
   postNuevoIngreso,
   getMotivos,
   checkGarantiaReparacion,
+  getAccesoriosCatalogo,
 } from "@/lib/api";
 
 const Input = (p) => <input {...p} className="border rounded p-2 w-full" />;
@@ -45,9 +46,13 @@ export default function NuevoIngreso() {
     },
     motivo: "",
     informe_preliminar: "",
-    accesorios: "",
     garantia_reparacion: false,
   });
+
+  // Accesorios (lista nueva)
+  const [accesCatalogo, setAccesCatalogo] = useState([]);
+  const [nuevoAcc, setNuevoAcc] = useState({ descripcion: "", referencia: "" });
+  const [accItems, setAccItems] = useState([]);
 
   // Propietario (particular) y técnico asignado
   const [propietario, setPropietario] = useState({
@@ -141,14 +146,16 @@ export default function NuevoIngreso() {
   useEffect(() => {
     (async () => {
       try {
-        const [mks, mts, cls] = await Promise.all([
-          getMarcas(),
-          getMotivos(),
-          getClientes(),
-        ]);
-        setMarcas(mks);
-        setMotivos(mts);
-        setClientes(cls || []);
+          const [mks, mts, cls, accs] = await Promise.all([
+            getMarcas(),
+            getMotivos(),
+            getClientes(),
+            getAccesoriosCatalogo(),
+          ]);
+          setMarcas(mks);
+          setMotivos(mts);
+          setClientes(cls || []);
+          setAccesCatalogo(accs || []);
         // Técnicos activos (si hay permiso)
         try {
           const tecs = await getTecnicos(); // ya vienen solo activos y rol técnico/jefe
@@ -265,7 +272,10 @@ export default function NuevoIngreso() {
         motivo: form.motivo,
         // 👉 NO mandamos ubicacion_id: el backend pone 'Taller'
         informe_preliminar: form.informe_preliminar,
-        accesorios: form.accesorios,
+        accesorios_items: accItems.map(it => ({
+          accesorio_id: Number(it.accesorio_id),
+          referencia: (it.referencia || "").trim(),
+        })),
         tecnico_id: tecnicoId ? Number(tecnicoId) : null,
         garantia_reparacion: !!form.garantia_reparacion,
         propietario: {
@@ -299,9 +309,9 @@ export default function NuevoIngreso() {
         },
         motivo: "",
         informe_preliminar: "",
-        accesorios: "",
         garantia_reparacion: false,
       });
+      setAccItems([]);
       setPropietario({ nombre: "", contacto: "", doc: "" });
       setTecnicoId(null);
     } catch (e) {
@@ -582,12 +592,72 @@ export default function NuevoIngreso() {
               />
             </div>
             <div className="md:col-span-2">
-              <label className="text-sm">Accesorios</label>
-              <TextArea
-                rows={2}
-                value={form.accesorios}
-                onChange={onChange("accesorios")}
-              />
+              <label className="text-sm font-medium">Accesorios</label>
+              <div className="flex flex-wrap items-end gap-3 mb-2">
+                <div className="grow min-w-[260px]">
+                  <label className="block text-sm text-gray-600 mb-1">Descripción</label>
+                  <input
+                    className="border rounded p-2 w-full"
+                    list="accesorios_catalogo"
+                    value={nuevoAcc.descripcion}
+                    onChange={(e)=> setNuevoAcc(s => ({ ...s, descripcion: e.target.value }))}
+                    placeholder="Escribí y elegí de la lista"
+                  />
+                  <datalist id="accesorios_catalogo">
+                    {accesCatalogo.map(a => (
+                      <option key={a.id} value={a.nombre} />
+                    ))}
+                  </datalist>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">N° referencia</label>
+                  <Input value={nuevoAcc.referencia}
+                         onChange={(e)=> setNuevoAcc(s=>({...s, referencia: e.target.value}))}
+                         placeholder="Opcional" />
+                </div>
+                <button type="button" className="bg-blue-600 text-white px-3 py-2 rounded"
+                        onClick={()=>{
+                          const d = (nuevoAcc.descripcion||"").trim().toLowerCase();
+                          if (!d) return;
+                          const acc = accesCatalogo.find(a => (a.nombre||"").trim().toLowerCase() === d);
+                          if (!acc) { setErr("Elegí una descripción válida de la lista"); return; }
+                          setAccItems(list => [...list, {
+                            accesorio_id: acc.id,
+                            referencia: (nuevoAcc.referencia||"").trim(),
+                            accesorio_nombre: acc.nombre,
+                          }]);
+                          setNuevoAcc({ descripcion: "", referencia: "" });
+                        }}>
+                  agregar
+                </button>
+              </div>
+
+              {accItems.length === 0 ? (
+                <div className="text-sm text-gray-500">Sin accesorios cargados.</div>
+              ) : (
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left">
+                      <th className="p-2">Descripción</th>
+                      <th className="p-2">N° referencia</th>
+                      <th className="p-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {accItems.map((it, idx) => (
+                      <tr key={idx} className="border-t">
+                        <td className="p-2">{it.accesorio_nombre || (accesCatalogo.find(a=> String(a.id)===String(it.accesorio_id))?.nombre) || it.accesorio_id}</td>
+                        <td className="p-2">{it.referencia || '-'}</td>
+                        <td className="p-2">
+                          <button type="button" className="text-red-600" onClick={()=>{
+                            setAccItems(list => list.filter((_,i)=> i!==idx));
+                          }}>quitar</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </fieldset>

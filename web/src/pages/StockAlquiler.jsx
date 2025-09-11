@@ -30,10 +30,10 @@ export default function StockAlquiler() {
       setErr(""); setLoading(true);
       try {
         // Intento server-side: por ubicacion_id
-        let data = await getGeneralEquipos({ ubicacion_id: TARGET_ID });
+        let data = await getGeneralEquipos({ ubicacion_id: TARGET_ID, solo_taller: false });
         if (!Array.isArray(data) || data.length === 0) {
           // Fallback: traer todo y filtrar en cliente
-          data = await getGeneralEquipos({});
+          data = await getGeneralEquipos({ solo_taller: false });
         }
         const safe = Array.isArray(data) ? data : [];
         setRows(safe.filter(isStockAlquiler));

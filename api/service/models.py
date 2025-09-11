@@ -8,6 +8,7 @@ class User(models.Model):
     hash_pw = models.TextField()
     rol = models.TextField()
     activo = models.BooleanField(default=True)
+    perm_ingresar = models.BooleanField(default=False)
 
     class Meta:
         managed = False
@@ -31,7 +32,7 @@ class Marca(models.Model):
     nombre = models.TextField(unique=True)
     class Meta:
         managed = False
-        db_table = "marca"
+        db_table = "marcas"
 
 class Model(models.Model):
     id = models.AutoField(primary_key=True)
