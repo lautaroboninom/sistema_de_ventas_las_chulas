@@ -768,7 +768,7 @@ class PresupuestadosView(APIView):
                         OR t.presupuesto_estado = 'presupuestado'
                       )
                   AND loc.nombre ILIKE 'taller'
-                  AND t.estado NOT IN ('entregado','liberado')
+                  AND t.estado NOT IN ('entregado','liberado', 'alquilado')
                 ORDER BY COALESCE(q.fecha_emitido, t.fecha_ingreso) ASC;
             """)
             return Response(_fetchall_dicts(cur))
@@ -844,7 +844,7 @@ class GeneralPorClienteView(APIView):
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE c.id = %s
                   AND loc.nombre ILIKE 'taller'
-                  AND t.estado NOT IN ('entregado')
+                  AND t.estado NOT IN ('entregado', 'alquilado')
                 ORDER BY t.fecha_ingreso ASC;
             """, [customer_id])
             return Response(_fetchall_dicts(cur))
@@ -1285,7 +1285,7 @@ class UsuariosView(APIView):
         nombre = (data.get("nombre") or "").strip()
         email = (data.get("email") or "").strip().lower()
         rol_raw = (data.get("rol") or "tecnico")
-        password = data.get("password") or ""
+        # Seguridad: no se acepta password directo por API de alta/ABM
 
         # normalizar: "Jefe veedor" / "jefe-veedor" -> "jefe_veedor"
         rol = rol_raw.strip().lower().replace(" ", "_").replace("-", "_")
@@ -1295,24 +1295,58 @@ class UsuariosView(APIView):
         if rol not in ROLE_KEYS:
             raise ValidationError("Rol inválido")
 
-        if password:
-            q("""
-                INSERT INTO users(nombre, email, rol, hash_pw, activo)
-                VALUES (%(n)s, %(e)s, %(r)s, %(p)s, true)
-                ON CONFLICT (email) DO UPDATE
-                SET nombre = EXCLUDED.nombre,
-                    rol = EXCLUDED.rol,
-                    hash_pw = EXCLUDED.hash_pw
-            """, {"n": nombre, "e": email, "r": rol, "p": make_password(password)})
-        else:
-            q("""
-                INSERT INTO users(nombre, email, rol, activo)
-                VALUES (%(n)s, %(e)s, %(r)s, true)
-                ON CONFLICT (email) DO UPDATE
-                SET nombre = EXCLUDED.nombre,
-                    rol = EXCLUDED.rol
-            """, {"n": nombre, "e": email, "r": rol})
-        return Response({"ok": True})
+        existed = q("SELECT id FROM users WHERE email=%s", [email], one=True)
+        q("""
+            INSERT INTO users(nombre, email, rol, activo)
+            VALUES (%(n)s, %(e)s, %(r)s, true)
+            ON CONFLICT (email) DO UPDATE
+            SET nombre = EXCLUDED.nombre,
+                rol = EXCLUDED.rol
+        """, {"n": nombre, "e": email, "r": rol})
+
+        # Enviar invitación de bienvenida si es nuevo
+        if not existed:
+            try:
+                user = q("SELECT id, nombre, email FROM users WHERE email=%s", [email], one=True)
+                if user:
+                    # Generar token y enviar correo de bienvenida con link para setear contraseña
+                    token = secrets.token_urlsafe(32)
+                    token_hash = hashlib.sha256(token.encode()).hexdigest()
+                    exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
+                    ua = request.META.get("HTTP_USER_AGENT", "")
+                    ip = request.META.get("REMOTE_ADDR", "")
+                    exec_void(
+                        """
+                        INSERT INTO password_reset_tokens(user_id, token_hash, expires_at, ip, user_agent)
+                        VALUES (%s,%s,%s,%s,%s)
+                        """,
+                        [user["id"], token_hash, exp, ip, ua]
+                    )
+                    base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
+                    url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
+                    subj = "Bienvenido a SEPID — Configurá tu contraseña"
+                    txt  = (
+                        f"Hola {user['nombre']},\n\n"
+                        f"Te damos la bienvenida al sistema de reparaciones de SEPID. "
+                        f"Usá este enlace para establecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+                        f"Si no esperabas este correo, ignoralo."
+                    )
+                    html = f"""
+                        <p>Hola {user['nombre']},</p>
+                        <p>Bienvenido al sistema de reparaciones de <strong>SEPID</strong>.</p>
+                        <p>Usá este enlace para establecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):</p>
+                        <p><a href="{url}">{url}</a></p>
+                        <p>Si no esperabas este correo, ignoralo.</p>
+                    """
+                    try:
+                        send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [user["email"]], html_message=html, fail_silently=True)
+                    except Exception:
+                        pass
+            except Exception:
+                # No bloquear el alta si el correo falla
+                pass
+
+        return Response({"ok": True, "invited": not existed})
     
 class UsuarioActivoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -1325,12 +1359,48 @@ class UsuarioActivoView(APIView):
 class UsuarioResetPassView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, uid):
+        # Nuevo comportamiento más seguro: envía un enlace por email para que el usuario
+        # establezca (o reestablezca) su contraseña. No se permite fijarla directamente.
         require_jefe(request)
-        password = (request.data.get("password") or "").strip()
-        if not password:
-            raise ValidationError("Password requerido")
-        q("UPDATE users SET hash_pw=%(p)s WHERE id=%(id)s", {"p": make_password(password), "id": uid})
-        return Response({"ok": True})
+        user = q("SELECT id, email, nombre, activo FROM users WHERE id=%s", [uid], one=True)
+        if not user or not user.get("activo"):
+            return Response({"detail": "Usuario inexistente o inactivo"}, status=404)
+
+        # Generar token válido y enviarlo por mail
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
+        ua = request.META.get("HTTP_USER_AGENT", "")
+        ip = request.META.get("REMOTE_ADDR", "")
+        exec_void(
+            """
+            INSERT INTO password_reset_tokens(user_id, token_hash, expires_at, ip, user_agent)
+            VALUES (%s,%s,%s,%s,%s)
+            """,
+            [user["id"], token_hash, exp, ip, ua]
+        )
+        base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
+        url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
+        subj = "SEPID — Enlace para establecer tu contraseña"
+        txt  = (
+            f"Hola {user['nombre']},\n\n"
+            f"Solicitaron un enlace para establecer o restablecer tu contraseña. "
+            f"Usá este enlace (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+            f"Si no fuiste vos, ignorá este correo."
+        )
+        html = f"""
+            <p>Hola {user['nombre']},</p>
+            <p>Solicitaron un enlace para establecer o restablecer tu contraseña.</p>
+            <p>Usá este enlace (válido {TOKEN_TTL_MIN} minutos):</p>
+            <p><a href="{url}">{url}</a></p>
+            <p>Si no fuiste vos, ignorá este correo.</p>
+        """
+        try:
+            send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [user["email"]], html_message=html, fail_silently=True)
+        except Exception:
+            pass
+
+        return Response({"ok": True, "sent": True})
 
 class UsuarioRolePermView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -1366,6 +1436,8 @@ class UsuarioDeleteView(APIView):
                 exec_void("UPDATE ingresos SET recibido_por = NULL WHERE recibido_por = %s", [uid])  # si existe la FK
                 exec_void("UPDATE models   SET tecnico_id  = NULL WHERE tecnico_id  = %s", [uid])
                 exec_void("UPDATE marcas   SET tecnico_id  = NULL WHERE tecnico_id  = %s", [uid])
+                # Eventos de ingreso: preservar historial pero desvincular usuario
+                exec_void("UPDATE ingreso_events SET usuario_id = NULL WHERE usuario_id = %s", [uid])
 
                 # Borrar el usuario
                 exec_void("DELETE FROM users WHERE id = %s", [uid])
@@ -1580,7 +1652,7 @@ class PendientesGeneralView(APIView):
                 LEFT JOIN models m ON m.id = d.model_id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE loc.nombre ILIKE 'taller'
-                  AND t.estado NOT IN ('liberado','entregado')
+                  AND t.estado NOT IN ('liberado','entregado', 'alquilado')
             """
             params = []
             if tecnico_raw.isdigit():
@@ -1627,10 +1699,11 @@ class AprobadosParaRepararView(APIView):
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE loc.nombre ILIKE 'taller'
                   AND (
-                        t.estado = 'reparar'
-                        OR t.presupuesto_estado = 'aprobado'
+                        (t.presupuesto_estado = 'aprobado'
+                        AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado'))
+                        OR t.estado = 'reparar'
                       )
-                  AND t.estado NOT IN ('reparado','entregado','derivado','liberado')
+                  AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado')
                 ORDER BY COALESCE(q.fecha_aprobado, t.fecha_ingreso) ASC;
             """)
             data = _fetchall_dicts(cur)

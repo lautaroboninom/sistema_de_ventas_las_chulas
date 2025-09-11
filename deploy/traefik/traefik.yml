@@ -1,0 +1,32 @@
+# Traefik static configuration for production
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+  # We use only docker labels for dynamic config to keep it simple.
+
+certificatesResolvers:
+  le:
+    acme:
+      email: ops@example.com
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        # Use the web (80) entrypoint for HTTP-01
+        entryPoint: web
+
+log:
+  level: INFO
+
+accessLog: {}
+

@@ -6,6 +6,7 @@ from service.views import ping, LoginView
 
 urlpatterns = [
     path("api/ping/", ping),
+    path("api/health/", ping),
     path("api/auth/login/", LoginView.as_view(), name="login"),
     path("api/", include("service.urls")),
 

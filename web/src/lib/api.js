@@ -88,8 +88,9 @@
   export const postUsuario = (payload) => api.post("/api/usuarios/", payload);
   export const patchUsuarioActivo = (id, activo) =>
     api.patch(`/api/usuarios/${id}/activar/`, { activo });
-  export const patchUsuarioReset = (id, password) =>
-    api.patch(`/api/usuarios/${id}/reset-pass/`, { password });
+  // Enviar enlace de restablecimiento/invitación por email
+  export const patchUsuarioReset = (id) =>
+    api.patch(`/api/usuarios/${id}/reset-pass/`, {});
   export const patchUsuarioRolePerm = (id, payload) =>
     api.patch(`/api/usuarios/${id}/roleperm/`, payload);
   export const deleteUsuario = (id) => api.del(`/api/usuarios/${id}/`);

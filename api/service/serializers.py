@@ -59,7 +59,8 @@ class IngresoListItemSerializer(serializers.Serializer):
     marca = serializers.CharField(allow_blank=True, required=False)
     modelo = serializers.CharField(allow_blank=True, required=False)
     fecha_servicio = serializers.DateTimeField(required=False, allow_null=True)
-
+    fecha_aprobacion = serializers.DateTimeField(required=False, allow_null=True)
+    
     # Campos opcionales que algunas vistas ya traen
     fecha_reparado = serializers.DateTimeField(required=False, allow_null=True)
     fecha_listo = serializers.DateTimeField(required=False, allow_null=True)

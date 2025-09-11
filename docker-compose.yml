@@ -8,7 +8,6 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      # tus scripts .sql van acá (solo se ejecutan si el data dir está vacío)
       - ./db/init:/docker-entrypoint-initdb.d:ro
       - ./db/data:/var/lib/postgresql/data
     healthcheck:

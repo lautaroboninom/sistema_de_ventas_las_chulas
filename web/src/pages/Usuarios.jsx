@@ -28,8 +28,7 @@ export default function Usuarios() {
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
-  const [nuevo, setNuevo] = useState({ nombre:"", email:"", rol:"tecnico", password:"" });
-  const [resets, setResets] = useState({}); // { [id]: "nuevaPass" }
+  const [nuevo, setNuevo] = useState({ nombre:"", email:"", rol:"tecnico" });
   const [roles, setRoles] = useState([]); // [{value,label}]
   useEffect(() => {
     (async () => {
@@ -57,8 +56,8 @@ export default function Usuarios() {
     e.preventDefault();
     try {
       await postUsuario(nuevo); // crea o actualiza si el email ya existe
-      setNuevo({ nombre:"", email:"", rol:"tecnico", password:"" });
-      setMsg("Usuario creado/actualizado");
+      setNuevo({ nombre:"", email:"", rol:"tecnico" });
+      setMsg("Usuario creado/actualizado. Se envió un mail de bienvenida (si es nuevo)");
       load();
     } catch(e){ setErr(normalizeErr(e)); }
   };
@@ -87,13 +86,10 @@ export default function Usuarios() {
     } catch(e){ setErr(normalizeErr(e)); }
   };
 
-  const resetPw = async (u) => {
-    const pw = resets[u.id] || "";
-    if (!pw) { alert("Ingresá la nueva contraseña"); return; }
+  const enviarLinkPw = async (u) => {
     try {
-      await patchUsuarioReset(u.id, pw);
-      setResets({ ...resets, [u.id]:"" });
-      setMsg("Contraseña reiniciada");
+      await patchUsuarioReset(u.id);
+      setMsg("Enlace de restablecimiento enviado");
     } catch(e){ setErr(normalizeErr(e)); }
   };
 
@@ -133,11 +129,7 @@ export default function Usuarios() {
               {roles.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
             </Select>
           </div>
-          <div className="md:col-span-4">
-            <label className="text-sm">Contraseña (opcional)</label>
-            <Input type="text" value={nuevo.password} onChange={onNew("password")}
-                   placeholder="Si se completa, crea/actualiza con esta clave" />
-          </div>
+          {/* Eliminado: carga de contraseña directa. Ahora se envía invitación por email. */}
           <div className="md:col-span-1 self-end">
             <Btn type="submit" className="w-full">Guardar</Btn>
           </div>
@@ -154,7 +146,7 @@ export default function Usuarios() {
               <th className="p-2">Rol</th>
               <th className="p-2">Perm. Ingresar</th>
               <th className="p-2">Activo</th>
-              <th className="p-2">Reset Pass</th>
+              <th className="p-2">Invitación/Reset</th>
               <th className="p-2 text-right">Acciones</th>
             </tr>
           </thead>
@@ -197,12 +189,7 @@ export default function Usuarios() {
                 </td>
                 <td className="p-2">
                   {soyJefe ? (
-                    <div className="flex items-center gap-2">
-                      <Input placeholder="Nueva clave"
-                             value={resets[u.id] || ""}
-                             onChange={e => setResets({ ...resets, [u.id]: e.target.value })} />
-                      <Btn onClick={() => resetPw(u)}>OK</Btn>
-                    </div>
+                    <Btn onClick={() => enviarLinkPw(u)}>Enviar link</Btn>
                   ) : <span className="text-gray-400">-</span>}
                 </td>
                 <td className="p-2 text-right">
