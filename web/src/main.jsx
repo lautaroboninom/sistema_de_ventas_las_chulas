@@ -34,6 +34,7 @@ import BuscarAccesorio from "./pages/BuscarAccesorio.jsx";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Depositos from "./pages/Depositos.jsx";
+import Derivados from "./pages/Derivados.jsx";
 
 function NotFound() {
   return (
@@ -139,6 +140,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
             <Reparados />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "derivados",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+            <Derivados />
           </ProtectedRoute>
         ),
       },

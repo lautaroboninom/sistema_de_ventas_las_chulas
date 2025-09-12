@@ -6,6 +6,7 @@ import api, {
   getIngreso, getUbicaciones, patchIngreso,
   getTecnicos, patchIngresoTecnico,
   getDerivacionesPorIngreso,
+  postDerivacionDevuelto,
   // presupuesto
   getQuote, postQuoteItem, patchQuoteItem, deleteQuoteItem, patchQuoteResumen,
   postQuoteEmitir, postQuoteAprobar, getBlob, postQuoteAnular, postCerrarReparacion, postMarcarReparado,
@@ -109,6 +110,8 @@ export default function ServiceSheet() {
 
   // derivaciones
   const [derivs, setDerivs] = useState([]);
+  const [fechaDevStr, setFechaDevStr] = useState(() => new Date().toISOString().slice(0,10));
+  const [savingDev, setSavingDev] = useState(false);
 
   // accesorios (catálogo + alta/baja)
   const [accesCatalogo, setAccesCatalogo] = useState([]);
@@ -663,9 +666,7 @@ export default function ServiceSheet() {
               <Row label="Fecha servicio">{data.fecha_servicio ? formatDateTimeHelper(data.fecha_servicio) : "-"}</Row>
               </div>
 
-              <div className="mt-3">
-                <Link to={`/ingresos/${id}/derivar`} className="bg-neutral-800 text-white px-3 py-2 rounded">Derivar a externo</Link>
-              </div>
+              {/* Derivar a externo -> movido a pestaña Derivaciones */}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
                 <div>
@@ -1183,7 +1184,45 @@ export default function ServiceSheet() {
       {/* DERIVACIONES */}
       {tab === "derivaciones" && (
         <div className="border rounded p-4">
-          <h2 className="font-semibold mb-2">Derivaciones</h2>
+          <div className="flex items-center gap-3 mb-3">
+            <h2 className="font-semibold">Derivaciones</h2>
+            <div className="ml-auto flex items-center gap-2">
+              <Link to={`/ingresos/${id}/derivar`} className="bg-neutral-800 text-white px-3 py-2 rounded">Derivar a externo</Link>
+              {/* Botón Devuelto: aplicar a la última derivación sin fecha_entrega */}
+              {Array.isArray(derivs) && derivs.find(d => !d.fecha_entrega) && (
+                <>
+                  <input
+                    type="date"
+                    className="border rounded p-2"
+                    value={fechaDevStr}
+                    onChange={(e) => setFechaDevStr(e.target.value)}
+                    aria-label="Fecha de devolución"
+                  />
+                  <button
+                    className="bg-green-700 text-white px-3 py-2 rounded disabled:opacity-60"
+                    disabled={savingDev}
+                    onClick={async () => {
+                      try {
+                        const abierta = derivs.find(d => !d.fecha_entrega);
+                        if (!abierta) return;
+                        setSavingDev(true);
+                        await postDerivacionDevuelto(id, abierta.id, { fecha_entrega: fechaDevStr || null });
+                        // refrescar listado
+                        try { setDerivs(await getDerivacionesPorIngreso(id)); } catch (_) {}
+                      } catch (e) {
+                        setErr(e?.message || "No se pudo marcar como devuelto");
+                      } finally {
+                        setSavingDev(false);
+                      }
+                    }}
+                    type="button"
+                  >
+                    {savingDev ? "Guardando..." : "Devuelto"}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
           {(!derivs || derivs.length === 0) ? (
             <div className="text-sm text-gray-500">No hay derivaciones.</div>
           ) : (

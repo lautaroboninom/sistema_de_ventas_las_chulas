@@ -24,18 +24,21 @@ class RLSMiddleware:
             pass
 
         try:
-            with connection.cursor() as cur:
-                if user_id:
-                    cur.execute("SET app.user_id = %s;", [str(user_id)])
-                else:
-                    cur.execute("RESET app.user_id;")
-                cur.execute("SET app.user_role = %s;", [str(role)])
+            # RLS variables solo para Postgres
+            if connection.vendor == "postgresql":
+                with connection.cursor() as cur:
+                    if user_id:
+                        cur.execute("SET app.user_id = %s;", [str(user_id)])
+                    else:
+                        cur.execute("RESET app.user_id;")
+                    cur.execute("SET app.user_role = %s;", [str(role)])
             response = self.get_response(request)
         finally:
             try:
-                with connection.cursor() as cur:
-                    cur.execute("RESET app.user_id;")
-                    cur.execute("RESET app.user_role;")
+                if connection.vendor == "postgresql":
+                    with connection.cursor() as cur:
+                        cur.execute("RESET app.user_id;")
+                        cur.execute("RESET app.user_role;")
             except Exception:
                 pass
         return response
@@ -81,14 +84,40 @@ class ActivityLogMiddleware:
         if is_write:
             try:
                 with connection.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO audit_log (ts, user_id, role, method, path, ip, user_agent, status_code, body)
-                        VALUES (now(), %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-                    """, [
-                        user_id, role, request.method, path, ip, ua,
-                        getattr(response, "status_code", None),
-                        json.dumps(body_json) if body_json is not None else None
-                    ])
+                    if connection.vendor == "mysql":
+                        cur.execute(
+                            """
+                            INSERT INTO audit_log (ts, user_id, role, method, path, ip, user_agent, status_code, body)
+                            VALUES (now(), %s, %s, %s, %s, %s, %s, %s, CAST(%s AS JSON))
+                            """,
+                            [
+                                user_id,
+                                role,
+                                request.method,
+                                path,
+                                ip,
+                                ua,
+                                getattr(response, "status_code", None),
+                                json.dumps(body_json) if body_json is not None else None,
+                            ],
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO audit_log (ts, user_id, role, method, path, ip, user_agent, status_code, body)
+                            VALUES (now(), %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                            """,
+                            [
+                                user_id,
+                                role,
+                                request.method,
+                                path,
+                                ip,
+                                ua,
+                                getattr(response, "status_code", None),
+                                json.dumps(body_json) if body_json is not None else None,
+                            ],
+                        )
             except Exception:
                 # No romper la request por problemas de log
                 pass

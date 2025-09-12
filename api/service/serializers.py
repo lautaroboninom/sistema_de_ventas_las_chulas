@@ -76,6 +76,9 @@ class IngresoListItemSerializer(serializers.Serializer):
     accesorio_nombre = serializers.CharField(required=False, allow_blank=True)
     referencia = serializers.CharField(required=False, allow_blank=True)
 
+    # Flags opcionales
+    derivado_devuelto = serializers.BooleanField(required=False)
+
 
 class IngresoDetailSerializer(serializers.Serializer):
     # Identificación / estados

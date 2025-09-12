@@ -17,7 +17,8 @@ from .views import (
     GeneralEquiposView, GeneralPorClienteView,
 
     # ingresos nuevos + derivación
-    NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView,
+    NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView, DevolverDerivacionView,
+    
 
     # catálogos
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView, CatalogoMotivosView,
@@ -85,6 +86,7 @@ urlpatterns = [
     path("ingresos/nuevo/", NuevoIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivar/", DerivarIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/", DerivacionesPorIngresoView.as_view()),
+    path("ingresos/<int:ingreso_id>/derivaciones/<int:deriv_id>/devolver/", DevolverDerivacionView.as_view()),
 
     # catálogos
     path("catalogos/marcas/", CatalogoMarcasView.as_view()),

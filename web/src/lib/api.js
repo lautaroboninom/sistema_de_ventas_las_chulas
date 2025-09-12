@@ -144,6 +144,8 @@ export const postModelo = (brandId, payloadOrNombre) => {
     api.post(`/api/ingresos/${ingresoId}/derivar/`, payload);
   export const getDerivacionesPorIngreso = (ingresoId) =>
     api.get(`/api/ingresos/${ingresoId}/derivaciones/`);
+  export const postDerivacionDevuelto = (ingresoId, derivId, payload) =>
+    api.post(`/api/ingresos/${ingresoId}/derivaciones/${derivId}/devolver/`, payload);
   // Accesorios por ingreso
   export const getAccesoriosPorIngreso = (ingresoId) =>
     api.get(`/api/ingresos/${ingresoId}/accesorios/`);

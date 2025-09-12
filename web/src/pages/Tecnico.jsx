@@ -11,20 +11,23 @@ export default function Tecnico() {
   const navigate = useNavigate();
 
   // helper: detectar motivo urgente control
-  const isUrgente = (row) =>
-    (row?.motivo || "").toLowerCase() === "urgente control";
+  const isUrgente = (row) => (row?.motivo || "").toLowerCase() === "urgente control";
 
-  // ordena: urgentes primero, luego por fecha_ingreso asc
+  // ordena: devueltos de derivación primero, luego urgentes, luego por fecha_ingreso asc
   const sortPendientes = (arr) => {
     return [...arr].sort((a, b) => {
+      const aDev = a?.derivado_devuelto ? 1 : 0;
+      const bDev = b?.derivado_devuelto ? 1 : 0;
+      if (aDev !== bDev) return bDev - aDev;
+
       const au = isUrgente(a) ? 1 : 0;
       const bu = isUrgente(b) ? 1 : 0;
-      if (au !== bu) return bu - au; // urgentes arriba
+      if (au !== bu) return bu - au;
 
       // Fallback: por fecha_ingreso asc (más viejos primero)
-      const ad = a?.fecha_ingreso ? new Date(a.fecha_ingreso) : new Date("9999-12-31");
-      const bd = b?.fecha_ingreso ? new Date(b.fecha_ingreso) : new Date("9999-12-31");
-      return ad - bd;
+      const dtA = a?.fecha_ingreso ? new Date(a.fecha_ingreso) : new Date("9999-12-31");
+      const dtB = b?.fecha_ingreso ? new Date(b.fecha_ingreso) : new Date("9999-12-31");
+      return dtA - dtB;
     });
   };
 
@@ -48,7 +51,6 @@ export default function Tecnico() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Dentro de Tecnico.jsx
   const StateSquare = ({ checked, label, disabled }) => {
     const cls = [
       "inline-flex items-center justify-center w-7 h-7 rounded border text-xs",
@@ -60,11 +62,7 @@ export default function Tecnico() {
       .join(" ");
 
     return (
-      <span
-        className={cls}
-        title={label}
-        aria-label={`${label}: ${checked ? "sí" : "no"}`}
-      >
+      <span className={cls} title={label} aria-label={`${label}: ${checked ? "si" : "no"}`}>
         {checked ? "✓" : ""}
       </span>
     );
@@ -88,9 +86,7 @@ export default function Tecnico() {
       <div className="h1 mb-3">Mis pendientes</div>
 
       {err && (
-        <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">
-          {err}
-        </div>
+        <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">{err}</div>
       )}
 
       {loading ? (
@@ -116,9 +112,11 @@ export default function Tecnico() {
             <tbody>
               {rows.map((row) => {
                 const urgente = isUrgente(row);
+                const devuelto = !!row?.derivado_devuelto;
                 const rowCls = [
                   "hover:bg-gray-50 cursor-pointer",
                   urgente && "text-red-600 font-semibold",
+                  devuelto && "text-blue-700 font-semibold",
                 ]
                   .filter(Boolean)
                   .join(" ");
@@ -136,6 +134,11 @@ export default function Tecnico() {
                   >
                     <td className="p-2 underline">
                       <span>{formatOS(row)}</span>
+                      {devuelto && (
+                        <span className="ml-2 inline-block px-2 py-0.5 text-[10px] rounded bg-blue-100 text-blue-700 align-middle">
+                          DERIVADO DEVUELTO
+                        </span>
+                      )}
                       {urgente && (
                         <span className="ml-2 inline-block px-2 py-0.5 text-[10px] rounded bg-red-100 text-red-700 align-middle">
                           URGENTE
@@ -155,7 +158,6 @@ export default function Tecnico() {
                         label="Diagnosticado"
                         checked={(() => {
                           const e = (row?.estado || "").toLowerCase();
-                          // Se mantiene tildado desde diagnosticado hacia adelante (solo estados del equipo)
                           const diagChain = [
                             "diagnosticado",
                             "reparar",
@@ -174,7 +176,6 @@ export default function Tecnico() {
                         label="Presupuestado"
                         checked={(() => {
                           const p = (row?.presupuesto_estado || "").toLowerCase();
-                          // Presupuesto depende solo del campo presupuesto_estado
                           return ["presupuestado", "aprobado"].includes(p);
                         })()}
                       />
@@ -196,3 +197,4 @@ export default function Tecnico() {
     </div>
   );
 }
+

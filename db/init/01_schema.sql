@@ -23,7 +23,7 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='external_state') THEN
-    EXECUTE $$CREATE TYPE external_state AS ENUM ('derivado','en_servicio','devuelto','entregado_cliente')$$;
+    EXECUTE $$CREATE TYPE external_state AS ENUM ('derivado','devuelto')$$;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='disposition') THEN

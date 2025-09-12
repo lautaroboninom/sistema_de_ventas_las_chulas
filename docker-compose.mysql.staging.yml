@@ -1,0 +1,83 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: sepid-mysql-staging
+    env_file: .env.staging
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
+    command:
+      - "mysqld"
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_0900_ai_ci"
+      - "--innodb_strict_mode=ON"
+      - "--sql_require_primary_key=ON"
+      - "--local_infile=ON"
+      - "--default-time-zone=-03:00"
+    volumes:
+      - mysql-staging-data:/var/lib/mysql
+      - ./mysql.cnf:/etc/mysql/conf.d/mysql.cnf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [staging]
+
+  api-staging:
+    build: ./api
+    container_name: sepid-api-staging
+    env_file: .env.staging
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG}
+      - DJANGO_SETTINGS_MODULE=app.settings_staging_mysql
+      - TZ=${TZ:-America/Argentina/Buenos_Aires}
+      # Conexión MySQL
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      # CORS/Frontend
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - FRONTEND_ORIGIN=${FRONTEND_ORIGIN}
+      - PUBLIC_WEB_URL=${PUBLIC_WEB_URL}
+      - LOGO_PATH=/code/service/static/logo.png
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./api:/code
+      # Monta carpeta de presupuestos (si existe) dentro del contenedor
+      - type: bind
+        source: ${QUOTES_HOST_DIR}
+        target: /quotes
+        consistency: delegated
+    command: >
+      bash -lc "gunicorn app.wsgi:application --bind 0.0.0.0:8000 --workers 2"
+    restart: unless-stopped
+    networks: [staging]
+
+  web-staging:
+    build: ./web
+    container_name: sepid-web-staging
+    env_file: .env.staging
+    environment:
+      # Producción: el frontend usa mismo origen; alternativamente, exportar VITE_API_URL
+      - VITE_API_URL=${VITE_API_URL:-}
+    depends_on:
+      api-staging:
+        condition: service_started
+    volumes:
+      - ./web:/app
+    command: sh -c "npm ci && npm run build"
+    restart: unless-stopped
+    networks: [staging]
+
+networks:
+  staging:
+    name: sepid-staging
+
+volumes:
+  mysql-staging-data:
+    name: sepid-mysql-staging-data

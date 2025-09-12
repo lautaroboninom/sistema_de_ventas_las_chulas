@@ -49,6 +49,7 @@ export default function Sidebar() {
           {techLike && <LinkItem to="/presupuestados">Presupuestados</LinkItem>}
           {techLike && <LinkItem to="/aprobados">Aprobados p/Reparar</LinkItem>}
           {techLike && <LinkItem to="/reparados">Reparados</LinkItem>}
+          {(techLike || admin || recep) && <LinkItem to="/derivados">Derivados</LinkItem>}
 
           <LinkItem to="/listos">Liberados</LinkItem>
           <LinkItem to="/alquiler/stock">Stock de Alquiler</LinkItem>

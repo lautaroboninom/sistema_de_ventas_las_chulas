@@ -28,14 +28,6 @@ CREATE TABLE IF NOT EXISTS proveedores_externos (
 );
 
 -- Tipo de estado externo (solo si no existe)
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_type WHERE typname = 'external_state'
-  ) THEN
-    CREATE TYPE external_state AS ENUM ('derivado','en_servicio','devuelto','entregado_cliente');
-  END IF;
-END$$;
 
 DO $$
 BEGIN

@@ -1,0 +1,11 @@
+id,nombre,email,hash_pw,rol,activo,creado_en,perm_ingresar
+"2","Lautaro","lbonino@sepid.com.ar","pbkdf2_sha256$720000$whkETsmCxtoO8w2Oi0Tbbf$2qFFYJ3g0nOA7hY+LdCZ9hgLOFUNr3TJLQfx/78gBZs=","jefe","t","2025-08-13 13:49:23.004372-03","t"
+"1","Administrador","admin@example.com","reemplazar_por_hash","jefe","t","2025-08-13 12:11:18.808172-03","t"
+"6","recepción ejemplo","recepcion@sepid.com.ar","pbkdf2_sha256$720000$RfBEKoTwkelhXPMa7JiX47$fJ68BGlmaOnNDa0B2q/J1v7AAZjaJx+ZohwGsTLuClU=","recepcion","t","2025-08-22 12:23:25.596176-03","f"
+"10","Lucas Humerez","humerezlucas@gmail.com","pbkdf2_sha256$720000$2PCxPwAaQmkXXzj2hxI6tJ$U0wLu2LED5Lw/pnGzKNIvBo/gjXq5ge/uFkdTTqRZns=","tecnico","t","2025-09-08 12:28:03.950355-03","f"
+"12","Recepción","recepcion@example.com","argon2$argon2id$v=19$m=102400,t=2,p=8$dU9WaHd4U3hmaFYwQ1Q3dU4xQjBydg$2EhKSBL0QjIoQsbsJr1Z3VoBvogDhqEQF6Lb8Kn+6gM","tecnico","t","2025-09-08 14:54:32.292752-03","f"
+"5","Maximiliano Pereletegui","maximiliano@sepid.com.ar","pbkdf2_sha256$720000$8YWlIzbnpVWF3kADZJvTw1$yRAG/jlAKFJPVvhtKz4HbH7xnno/hG7FFrAMi1WgSO4=","jefe_veedor","t","2025-08-18 17:37:41.714093-03","t"
+"7","Gracia","gracia@sepid.com.ar","pbkdf2_sha256$720000$zAVCyvmopnLxdB3J36bY46$PM9ZG7ipVwpAwy33/FAfPAjT4iWnGXJEX2jxE8ACK5A=","admin","t","2025-09-04 10:02:54.650098-03","f"
+"13","Técnica","tecnica@sepid.com.ar","argon2$argon2id$v=19$m=102400,t=2,p=8$QjluM05hcnZoMlZZc0dOVkhlTEJERQ$5DuG7wpr0hIZjOLc9onzzQyA4Samv9to0nAx6fTyB9U","tecnico","t","2025-09-08 17:11:58.923129-03","f"
+"14","Tomás Perez","t.avila@sepid.com.ar",,"recepcion","t","2025-09-11 12:09:25.887421-03","f"
+"15","Prueba tecnico","tomas@sepid.com.ar","argon2$argon2id$v=19$m=102400,t=2,p=8$RW4yeEplaDZzRFV4OGJUaW5xUmZraQ$RseoFvYPRtxQK28rB62b4OF2BTaSp79VpMt2BzNFaJM","tecnico","t","2025-09-11 12:14:42.303492-03","f"

@@ -35,7 +35,7 @@ export default function PendientesGeneral() {
   // helper: detectar motivo urgente control
   const isUrgente = (row) => (row?.motivo || "").toLowerCase() === "urgente control";
 
-  // Aplico filtro y luego ordeno: urgentes primero, después por fecha_ingreso asc
+  // Aplico filtro y luego ordeno: devueltos primero, urgentes después, luego por fecha_ingreso asc
   const filteredAndSorted = useMemo(() => {
     const needle = norm(filter);
     const base = needle
@@ -53,14 +53,20 @@ export default function PendientesGeneral() {
       : rows;
 
     return [...base].sort((a, b) => {
+      // 1) Devueltos de derivación primero
+      const ad = a?.derivado_devuelto ? 1 : 0;
+      const bd = b?.derivado_devuelto ? 1 : 0;
+      if (ad !== bd) return bd - ad;
+
+      // 2) Urgentes después
       const au = isUrgente(a) ? 1 : 0;
       const bu = isUrgente(b) ? 1 : 0;
-      if (au !== bu) return bu - au; // urgentes arriba
+      if (au !== bu) return bu - au;
 
-      // Fallback: por fecha_ingreso asc (más viejos primero)
-      const ad = a?.fecha_ingreso ? new Date(a.fecha_ingreso) : new Date("9999-12-31");
-      const bd = b?.fecha_ingreso ? new Date(b.fecha_ingreso) : new Date("9999-12-31");
-      return ad - bd;
+      // 3) Antigüedad: más viejos primero
+      const dtA = a?.fecha_ingreso ? new Date(a.fecha_ingreso) : new Date("9999-12-31");
+      const dtB = b?.fecha_ingreso ? new Date(b.fecha_ingreso) : new Date("9999-12-31");
+      return dtA - dtB;
     });
   }, [rows, filter]);
 
@@ -122,9 +128,11 @@ export default function PendientesGeneral() {
             <tbody>
               {filteredAndSorted.map((row) => {
                 const urgente = isUrgente(row);
+                const devuelto = !!row?.derivado_devuelto;
                 const rowCls = [
                   "hover:bg-gray-50 cursor-pointer",
                   urgente && "text-red-600 font-semibold",
+                  devuelto && "text-blue-700 font-semibold",
                 ]
                   .filter(Boolean)
                   .join(" ");
@@ -142,6 +150,11 @@ export default function PendientesGeneral() {
                   >
                     <td className="p-2 underline">
                       <span>{formatOS(row)}</span>
+                      {devuelto && (
+                        <span className="ml-2 inline-block px-2 py-0.5 text-[10px] rounded bg-blue-100 text-blue-700 align-middle">
+                          DERIVADO DEVUELTO
+                        </span>
+                      )}
                       {urgente && (
                         <span className="ml-2 inline-block px-2 py-0.5 text-[10px] rounded bg-red-100 text-red-700 align-middle">
                           URGENTE
@@ -169,3 +182,4 @@ export default function PendientesGeneral() {
     </div>
   );
 }
+
