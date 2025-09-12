@@ -48,12 +48,13 @@ def exec_void(sql, params=None):
     with connection.cursor() as cur:
         cur.execute(sql, params or [])
 def _set_audit_user(request):
-    with connection.cursor() as cur:
-        cur.execute(
-            "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-            [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-             getattr(request, "user_role", "")]
-        )
+    if connection.vendor == "postgresql":
+        uid = str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", ""))
+        role = getattr(request, "user_role", "")
+        with connection.cursor() as cur:
+            # SET (no LOCAL) para compatibilidad fuera de transacciones explícitas
+            cur.execute("SET app.user_id = %s;", [uid])
+            cur.execute("SET app.user_role = %s;", [role])
 # ---------------------------------------
 # Utilidades DB
 def q(sql, params=None, one=False):
@@ -70,6 +71,14 @@ def exec_returning(sql, params=None):
         cur.execute(sql, params or [])
         row = cur.fetchone()
         return row[0] if row else None
+
+def last_insert_id():
+    """Devuelve el último ID autoincremental según el motor actual."""
+    if connection.vendor == "postgresql":
+        row = q("SELECT LASTVAL() AS id", one=True)
+    else:
+        row = q("SELECT LAST_INSERT_ID() AS id", one=True)
+    return row and row.get("id")
 
 def _fetchall_dicts(cur):
     cols = [c[0] for c in cur.description]
@@ -117,10 +126,30 @@ def _ensure_quote(ingreso_id: int):
     row = q("SELECT id FROM quotes WHERE ingreso_id=%s", [ingreso_id], one=True)
     if row:
         return row["id"]
-    return exec_returning(
-        "INSERT INTO quotes(ingreso_id) VALUES (%s) ON CONFLICT (ingreso_id) DO NOTHING RETURNING id",
-        [ingreso_id]
-    ) or q("SELECT id FROM quotes WHERE ingreso_id=%s", [ingreso_id], one=True)["id"]
+    if connection.vendor == "postgresql":
+        try:
+            # Insertar si no existe y devolver id
+            new_id = exec_returning(
+                "INSERT INTO quotes(ingreso_id) VALUES (%s) RETURNING id",
+                [ingreso_id],
+            )
+            return new_id
+        except Exception:
+            # Si ya existe por condición de carrera, recuperar id existente
+            row2 = q("SELECT id FROM quotes WHERE ingreso_id=%s", [ingreso_id], one=True)
+            if row2:
+                return row2["id"]
+            raise
+    else:
+        # MySQL upsert + obtener id: ON DUPLICATE KEY + LAST_INSERT_ID
+        exec_void(
+            "INSERT INTO quotes(ingreso_id) VALUES (%s)\n"
+            "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)",
+            [ingreso_id]
+        )
+        # LAST_INSERT_ID() devuelve el id nuevo o el existente por el UPDATE anterior
+        rid = last_insert_id()
+        return rid or q("SELECT id FROM quotes WHERE ingreso_id=%s", [ingreso_id], one=True)["id"]
 
 
 def _load_quote_payload(ingreso_id: int):
@@ -338,31 +367,41 @@ class MisPendientesView(APIView):
     def get(self, request):
         require_roles(request, ["jefe", "tecnico","jefe_veedor"])
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             cur.execute("""
-              SELECT t.id, t.estado, t.presupuesto_estado,
-                     t.motivo, c.razon_social,
+              SELECT t.id,
+                     t.estado,
+                     t.presupuesto_estado,
+                     t.motivo,
+                     c.razon_social,
                      d.numero_serie,
                      COALESCE(b.nombre,'') AS marca,
                      COALESCE(m.nombre,'') AS modelo,
-                     t.fecha_ingreso
+                     t.fecha_ingreso,
+                     CASE WHEN ed.estado = 'devuelto' THEN true ELSE false END AS derivado_devuelto
               FROM ingresos t
               JOIN devices d ON d.id=t.device_id
               JOIN customers c ON c.id=d.customer_id
               LEFT JOIN marcas b ON b.id=d.marca_id
               LEFT JOIN models m ON m.id=d.model_id
               LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+              LEFT JOIN (
+                SELECT e.*, ROW_NUMBER() OVER (
+                  PARTITION BY e.ingreso_id ORDER BY e.fecha_deriv DESC, e.id DESC
+                ) AS rn
+                FROM equipos_derivados e
+              ) ed ON ed.ingreso_id = t.id AND ed.rn = 1
               WHERE t.asignado_a = %s
-                AND loc.nombre ILIKE 'taller'
-                AND t.estado::text NOT IN ('entregado','liberado')
+                AND LOWER(loc.nombre) = LOWER(%s)
+                AND t.estado NOT IN ('entregado','liberado') 
               ORDER BY
+                 (CASE WHEN ed.estado = 'devuelto' THEN 1 ELSE 0 END) DESC,
                  (t.motivo = 'urgente control') DESC,
                  t.fecha_ingreso ASC;
-            """, [getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)])
+            """, [
+                getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None),
+                "taller",
+            ])
             data = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(data, many=True).data)
 
@@ -698,11 +737,7 @@ class PendientesPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             cur.execute("""
               SELECT t.id, t.estado, t.presupuesto_estado,
                      c.razon_social,
@@ -720,10 +755,10 @@ class PendientesPresupuestoView(APIView):
               LEFT JOIN quotes q ON q.ingreso_id = t.id
               LEFT JOIN locations loc ON loc.id = t.ubicacion_id
               WHERE t.presupuesto_estado = 'pendiente'
-                AND loc.nombre ILIKE 'taller'
+                AND LOWER(loc.nombre) = LOWER(%s)
                 AND t.estado = 'diagnosticado'
               ORDER BY t.fecha_servicio ASC;
-            """)
+            """, ["taller"])
             data = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(data, many=True).data)
 
@@ -731,19 +766,15 @@ class PresupuestadosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             cur.execute("""
                 SELECT
                   t.id,
                   t.estado,
                   CASE
-                    WHEN t.presupuesto_estado IS NOT NULL THEN t.presupuesto_estado::text
-                    WHEN q.estado::text IN ('emitido','enviado','presupuestado') THEN 'presupuestado'
-                    ELSE q.estado::text
+                    WHEN t.presupuesto_estado IS NOT NULL THEN t.presupuesto_estado 
+                    WHEN q.estado IN ('emitido','enviado','presupuestado') THEN 'presupuestado' 
+                    ELSE q.estado 
                   END AS presupuesto_estado,
                   c.razon_social,
                   d.numero_serie,
@@ -755,7 +786,7 @@ class PresupuestadosView(APIView):
                   q.subtotal AS presupuesto_monto,
                   'ARS' AS presupuesto_moneda,
                   q.fecha_emitido AS presupuesto_fecha_emision,
-                  NULL::timestamp AS presupuesto_fecha_envio
+                  NULL AS presupuesto_fecha_envio 
                 FROM ingresos t
                 JOIN devices d ON d.id = t.device_id
                 JOIN customers c ON c.id = d.customer_id
@@ -764,13 +795,13 @@ class PresupuestadosView(APIView):
                 LEFT JOIN quotes q ON q.ingreso_id = t.id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE (
-                        q.estado::text IN ('emitido','enviado','presupuestado')
+                        q.estado IN ('emitido','enviado','presupuestado') 
                         OR t.presupuesto_estado = 'presupuestado'
                       )
-                  AND loc.nombre ILIKE 'taller'
+                  AND LOWER(loc.nombre) = LOWER(%s)
                   AND t.estado NOT IN ('entregado','liberado', 'alquilado')
                 ORDER BY COALESCE(q.fecha_emitido, t.fecha_ingreso) ASC;
-            """)
+            """, ["taller"])
             return Response(_fetchall_dicts(cur))
 
 class MarcarReparadoView(APIView):
@@ -798,13 +829,13 @@ class EntregarIngresoView(APIView):
 
         user_id = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")
         user_role = getattr(request, "user_role", "")
+        _set_audit_user(request)
 
         # IMPORTANTE: mismo transaction + mismo cursor para SET LOCAL + UPDATE
         with transaction.atomic():
             with connection.cursor() as cur:
                 # Seteamos GUC para RLS en esta transacción
-                cur.execute("SET LOCAL app.user_id = %s;", [str(user_id)])
-                cur.execute("SET LOCAL app.user_role = %s;", [user_role])
+                
 
                 # Hacemos el UPDATE en el MISMO cursor/conexión
                 cur.execute("""
@@ -823,11 +854,7 @@ class GeneralPorClienteView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request, customer_id):
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             cur.execute("""
                 SELECT
                   t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
@@ -843,10 +870,10 @@ class GeneralPorClienteView(APIView):
                 LEFT JOIN models m ON m.id = d.model_id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE c.id = %s
-                  AND loc.nombre ILIKE 'taller'
+                  AND LOWER(loc.nombre) = LOWER(%s)
                   AND t.estado NOT IN ('entregado', 'alquilado')
                 ORDER BY t.fecha_ingreso ASC;
-            """, [customer_id])
+            """, [customer_id, "taller"])
             return Response(_fetchall_dicts(cur))
 
 
@@ -854,9 +881,7 @@ class ListosParaRetiroView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         with connection.cursor() as cur:
-            cur.execute("SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                        [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                         getattr(request, "user_role", "")])
+            _set_audit_user(request)
             cur.execute("SELECT * FROM vw_listos_para_retiro ORDER BY id DESC;")
             return Response(_fetchall_dicts(cur))
 
@@ -864,9 +889,7 @@ class CustomersListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         with connection.cursor() as cur:
-            cur.execute("SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                        [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                         getattr(request, "user_role", "")])
+            _set_audit_user(request)
             cur.execute("SELECT id, razon_social FROM customers ORDER BY razon_social;")
             return Response(_fetchall_dicts(cur))
 
@@ -952,14 +975,24 @@ class NuevoIngresoView(APIView):
         if dev:
             device_id = dev["id"]
         else:
-            device_id = exec_returning(
-                """
-                INSERT INTO devices (customer_id, marca_id, model_id, numero_serie, garantia_bool, n_de_control)
-                VALUES (%s, %s, %s, NULLIF(%s,''), %s, NULLIF(%s,''))
-                RETURNING id
-                """,
-                [customer_id, equipo["marca_id"], equipo["modelo_id"], numero_serie, garantia_bool, numero_interno]
-            )
+            if connection.vendor == "postgresql":
+                device_id = exec_returning(
+                    """
+                    INSERT INTO devices (customer_id, marca_id, model_id, numero_serie, garantia_bool, n_de_control)
+                    VALUES (%s, %s, %s, NULLIF(%s,''), %s, NULLIF(%s,''))
+                    RETURNING id
+                    """,
+                    [customer_id, equipo["marca_id"], equipo["modelo_id"], numero_serie, garantia_bool, numero_interno]
+                )
+            else:
+                exec_void(
+                    """
+                    INSERT INTO devices (customer_id, marca_id, model_id, numero_serie, garantia_bool, n_de_control)
+                    VALUES (%s, %s, %s, NULLIF(%s,''), %s, NULLIF(%s,''))
+                    """,
+                    [customer_id, equipo["marca_id"], equipo["modelo_id"], numero_serie, garantia_bool, numero_interno]
+                )
+                device_id = last_insert_id()
         if numero_interno:
             exec_void("UPDATE devices SET n_de_control = NULLIF(%s,'') WHERE id=%s", [numero_interno, device_id])
 
@@ -1003,25 +1036,49 @@ class NuevoIngresoView(APIView):
         uid = getattr(request.user, "id", None) or getattr(request, "user_id", None)
         if not uid:
             return Response({"detail": "Usuario no autenticado"}, status=401)
-        exec_void("SELECT set_config('app.user_id', %s, true)", [str(uid)])
+        _set_audit_user(request)
         
         # Ingreso (usa DEFAULT 'ingresado')
-        ingreso_id = exec_returning("""
-            INSERT INTO ingresos (
-              device_id, motivo, ubicacion_id, recibido_por, asignado_a,
-              informe_preliminar, accesorios,
-              propietario_nombre, propietario_contacto, propietario_doc,
-              garantia_reparacion
+        if connection.vendor == "postgresql":
+            ingreso_id = exec_returning(
+                """
+                INSERT INTO ingresos (
+                  device_id, motivo, ubicacion_id, recibido_por, asignado_a,
+                  informe_preliminar, accesorios,
+                  propietario_nombre, propietario_contacto, propietario_doc,
+                  garantia_reparacion
+                )
+                VALUES (%s,%s,%s,%s,%s,
+                        %s,%s,
+                        NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
+                        %s)
+                RETURNING id
+                """,
+                [device_id, motivo, ubicacion_id, uid, tecnico_id,
+                 informe_preliminar, accesorios_text,
+                 prop_nombre, prop_contacto, prop_doc,
+                 garantia_rep_final]
             )
-            VALUES (%s,%s,%s,%s,%s,
-                    %s,%s,
-                    NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
-                    %s)
-            RETURNING id
-          """, [device_id, motivo, ubicacion_id, uid, tecnico_id,
-                informe_preliminar, accesorios_text,
-                prop_nombre, prop_contacto, prop_doc,
-                garantia_rep_final])
+        else:
+            exec_void(
+                """
+                INSERT INTO ingresos (
+                  device_id, motivo, ubicacion_id, recibido_por, asignado_a,
+                  informe_preliminar, accesorios,
+                  propietario_nombre, propietario_contacto, propietario_doc,
+                  garantia_reparacion
+                )
+                VALUES (%s,%s,%s,%s,%s,
+                        %s,%s,
+                        NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
+                        %s)
+                """,
+                [device_id, motivo, ubicacion_id, uid, tecnico_id,
+                 informe_preliminar, accesorios_text,
+                 prop_nombre, prop_contacto, prop_doc,
+                 garantia_rep_final]
+            )
+            ingreso_id = last_insert_id()
 
         # Insertar accesorios normalizados si vienen
         for it in (accesorios_items or []):
@@ -1206,10 +1263,11 @@ class IngresoAccesoriosView(APIView):
         ref = (d.get("referencia") or "").strip() or None
         desc = (d.get("descripcion") or "").strip() or None
         _set_audit_user(request)
-        new_id = exec_returning(
-            "INSERT INTO ingreso_accesorios(ingreso_id, accesorio_id, referencia, descripcion) VALUES (%s,%s,%s,%s) RETURNING id",
+        exec_void(
+            "INSERT INTO ingreso_accesorios(ingreso_id, accesorio_id, referencia, descripcion) VALUES (%s,%s,%s,%s)",
             [ingreso_id, acc_id, ref, desc]
         )
+        new_id = q("SELECT LAST_INSERT_ID() AS id", one=True)["id"]
         row = q(
             """
               SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
@@ -1239,6 +1297,10 @@ class DerivarIngresoView(APIView):
 
     @transaction.atomic
     def post(self, request, ingreso_id: int):
+        # Auditoría y control de permisos
+        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
+
         data = request.data or {}
         # Compat: aceptar proveedor_id (nuevo) o external_service_id (viejo nombre)
         proveedor_id = data.get("proveedor_id") or data.get("external_service_id")
@@ -1254,14 +1316,104 @@ class DerivarIngresoView(APIView):
             return Response({"detail": "Proveedor externo inválido"}, status=400)
 
         # Insertar en el nuevo log
-        exec_returning("""
-            INSERT INTO equipos_derivados (ingreso_id, proveedor_id, remit_deriv, fecha_deriv, comentarios, estado)
-            VALUES (%s, %s, %s, COALESCE(%s::date, CURRENT_DATE), %s, 'derivado')
-            RETURNING id
-        """, [ingreso_id, proveedor_id, data.get("remit_deriv"), data.get("fecha_deriv"), data.get("comentarios")])
+        exec_void(""" 
+            INSERT INTO equipos_derivados (ingreso_id, proveedor_id, remit_deriv, fecha_deriv, comentarios, estado) 
+            VALUES (%s, %s, %s, COALESCE(%s, CURRENT_DATE), %s, 'derivado') 
+        """, [ingreso_id, proveedor_id, data.get("remit_deriv"), data.get("fecha_deriv"), data.get("comentarios")]) 
 
-        # Reflejar estado del ingreso (como venías haciendo)
-        q("UPDATE ingresos SET estado='derivado' WHERE id=%s", [ingreso_id])
+        # Reflejar estado del ingreso solo si cambia (auditable por trigger)
+        exec_void("UPDATE ingresos SET estado='derivado' WHERE id=%s AND estado <> 'derivado'", [ingreso_id])
+
+        return Response({"ok": True})
+
+class DevolverDerivacionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, ingreso_id: int, deriv_id: int):
+        # Roles similares a consulta de derivaciones
+        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
+
+        # Validar existencia y pertenencia
+        row = q(
+            "SELECT id FROM equipos_derivados WHERE id=%s AND ingreso_id=%s",
+            [deriv_id, ingreso_id],
+            one=True,
+        )
+        if not row:
+            return Response({"detail": "Derivación no encontrada"}, status=404)
+
+        data = request.data or {}
+        fecha = data.get("fecha_entrega") or None
+
+        # Marcar fecha de devolución y estado
+        exec_void(
+            """
+            UPDATE equipos_derivados
+               SET fecha_entrega = COALESCE(%s, CURRENT_DATE),
+                   estado = 'devuelto'
+             WHERE id = %s
+            """,
+            [fecha, deriv_id],
+        )
+
+        # También reencolar el ingreso como 'ingresado' (solo si cambia)
+        exec_void("UPDATE ingresos SET estado='ingresado' WHERE id=%s AND estado <> 'ingresado'", [ingreso_id])
+        # Actualizar comentario del último evento de estado para dejar trazabilidad clara
+        try:
+            exec_void(
+                """
+                UPDATE ingreso_events SET comentario='Devolución de externo'
+                WHERE id = (
+                  SELECT id FROM ingreso_events
+                   WHERE ingreso_id=%s AND a_estado='ingresado'
+                   ORDER BY ts DESC, id DESC
+                   LIMIT 1
+                )
+                """,
+                [ingreso_id],
+            )
+        except Exception:
+            pass
+
+        # Enviar aviso al técnico asignado (si tiene email)
+        try:
+            info = q(
+                """
+                SELECT u.email AS tech_email, COALESCE(u.nombre,'') AS tech_nombre,
+                       c.razon_social,
+                       d.numero_serie,
+                       COALESCE(b.nombre,'') AS marca,
+                       COALESCE(m.nombre,'') AS modelo
+                  FROM ingresos t
+                  JOIN devices d   ON d.id = t.device_id
+                  JOIN customers c ON c.id = d.customer_id
+                  LEFT JOIN marcas b ON b.id = d.marca_id
+                  LEFT JOIN models m ON m.id = d.model_id
+                  LEFT JOIN users  u ON u.id = t.asignado_a
+                 WHERE t.id=%s
+                """,
+                [ingreso_id],
+                one=True,
+            )
+            email = (info or {}).get("tech_email")
+            if email:
+                subj = f"Aviso: equipo devuelto de externo — OS #{ingreso_id}"
+                txt = (
+                    f"Hola {info.get('tech_nombre','')},\n\n"
+                    f"El equipo derivado fue devuelto del servicio externo y se reencoló como 'ingresado'.\n\n"
+                    f"Cliente: {info.get('razon_social','')}\n"
+                    f"Equipo: {info.get('marca','')} {info.get('modelo','')}\n"
+                    f"Número de serie: {info.get('numero_serie','')}\n\n"
+                    f"Hoja de servicio: /ingresos/{ingreso_id}\n"
+                )
+                try:
+                    send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [email], fail_silently=True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         return Response({"ok": True})
 # ---------------------------------------
@@ -1296,13 +1448,23 @@ class UsuariosView(APIView):
             raise ValidationError("Rol inválido")
 
         existed = q("SELECT id FROM users WHERE email=%s", [email], one=True)
-        q("""
-            INSERT INTO users(nombre, email, rol, activo)
-            VALUES (%(n)s, %(e)s, %(r)s, true)
-            ON CONFLICT (email) DO UPDATE
-            SET nombre = EXCLUDED.nombre,
-                rol = EXCLUDED.rol
-        """, {"n": nombre, "e": email, "r": rol})
+        if connection.vendor == "postgresql":
+            q("""
+                INSERT INTO users(nombre, email, rol, activo)
+                VALUES (%(n)s, %(e)s, %(r)s, true)
+                ON CONFLICT (email) DO UPDATE
+                SET nombre = EXCLUDED.nombre,
+                    rol = EXCLUDED.rol
+            """, {"n": nombre, "e": email, "r": rol})
+        else:
+            q(
+                """
+                INSERT INTO users(nombre, email, rol, activo)
+                VALUES (%s,%s,%s,true)
+                ON DUPLICATE KEY UPDATE nombre=VALUES(nombre), rol=VALUES(rol)
+                """,
+                [nombre, email, rol],
+            )
 
         # Enviar invitación de bienvenida si es nuevo
         if not existed:
@@ -1484,7 +1646,10 @@ class MarcasView(APIView):
         n = (request.data.get("nombre") or "").strip()
         if not n:
             raise ValidationError("nombre requerido")
-        q("INSERT INTO marcas(nombre) VALUES (%(n)s) ON CONFLICT DO NOTHING", {"n": n})
+        if connection.vendor == "postgresql":
+            q("INSERT INTO marcas(nombre) VALUES (%(n)s) ON CONFLICT DO NOTHING", {"n": n})
+        else:
+            q("INSERT IGNORE INTO marcas(nombre) VALUES (%s)", [n])
         return Response({"ok": True})
 
 class ModeloTecnicoView(APIView):
@@ -1582,13 +1747,25 @@ class ModelosPorMarcaView(APIView):
             if not ok:
                 raise ValidationError("Técnico inválido")
 
-        q("""
-          INSERT INTO models(marca_id, nombre, tecnico_id, tipo_equipo)
-          VALUES (%(b)s, %(n)s, %(t)s, NULLIF(%(te)s,''))
-          ON CONFLICT (marca_id, nombre) DO UPDATE
-             SET tecnico_id = EXCLUDED.tecnico_id,
-                 tipo_equipo = COALESCE(EXCLUDED.tipo_equipo, models.tipo_equipo)
-        """, {"b": bid, "n": n, "t": tecnico_id, "te": tipo_equipo})
+        if connection.vendor == "postgresql":
+            q("""
+              INSERT INTO models(marca_id, nombre, tecnico_id, tipo_equipo)
+              VALUES (%(b)s, %(n)s, %(t)s, NULLIF(%(te)s,''))
+              ON CONFLICT (marca_id, nombre) DO UPDATE
+                 SET tecnico_id = EXCLUDED.tecnico_id,
+                     tipo_equipo = COALESCE(EXCLUDED.tipo_equipo, models.tipo_equipo)
+            """, {"b": bid, "n": n, "t": tecnico_id, "te": tipo_equipo})
+        else:
+            q(
+                """
+                INSERT INTO models(marca_id, nombre, tecnico_id, tipo_equipo)
+                VALUES (%s, %s, %s, NULLIF(%s,''))
+                ON DUPLICATE KEY UPDATE
+                  tecnico_id = VALUES(tecnico_id),
+                  tipo_equipo = IFNULL(VALUES(tipo_equipo), tipo_equipo)
+                """,
+                [bid, n, tecnico_id, tipo_equipo],
+            )
 
         return Response({"ok": True})
 
@@ -1613,8 +1790,11 @@ class ProveedoresExternosView(APIView):
         n = (d.get("nombre") or "").strip()
         if not n:
             raise ValidationError("nombre requerido")
-        q("INSERT INTO proveedores_externos(nombre, contacto) VALUES (%(n)s, %(c)s) ON CONFLICT DO NOTHING",
-          {"n": n, "c": d.get("contacto")})
+        if connection.vendor == "postgresql":
+            q("INSERT INTO proveedores_externos(nombre, contacto) VALUES (%(n)s, %(c)s) ON CONFLICT DO NOTHING",
+              {"n": n, "c": d.get("contacto")})
+        else:
+            q("INSERT IGNORE INTO proveedores_externos(nombre, contacto) VALUES (%s, %s)", [n, d.get("contacto")])
         return Response({"ok": True})
 
     def delete(self, request, pid):
@@ -1630,38 +1810,43 @@ class PendientesGeneralView(APIView):
         tecnico_raw = (request.GET.get("tecnico_id") or "").strip()
 
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [
-                    str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                    getattr(request, "user_role", "")
-                ]
-            )
+            _set_audit_user(request)
 
             sql = """
-                SELECT t.id, t.estado, t.presupuesto_estado,
-                        t.motivo, c.razon_social,
+                SELECT t.id,
+                       t.estado,
+                       t.presupuesto_estado,
+                       t.motivo,
+                       c.razon_social,
                        d.numero_serie,
                        COALESCE(b.nombre,'') AS marca,
                        COALESCE(m.nombre,'') AS modelo,
-                       t.fecha_ingreso
+                       t.fecha_ingreso,
+                       CASE WHEN ed.estado = 'devuelto' THEN true ELSE false END AS derivado_devuelto
                 FROM ingresos t
                 JOIN devices d   ON d.id = t.device_id
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE loc.nombre ILIKE 'taller'
+                LEFT JOIN (
+                  SELECT e.*, ROW_NUMBER() OVER (
+                    PARTITION BY e.ingreso_id ORDER BY e.fecha_deriv DESC, e.id DESC
+                  ) AS rn
+                  FROM equipos_derivados e
+                ) ed ON ed.ingreso_id = t.id AND ed.rn = 1
+                WHERE LOWER(loc.nombre) = LOWER(%s)
                   AND t.estado NOT IN ('liberado','entregado', 'alquilado')
             """
-            params = []
+            params = ["taller"]
             if tecnico_raw.isdigit():
                 sql += " AND t.asignado_a = %s"
                 params.append(int(tecnico_raw))
 
             sql += """
                 ORDER BY
-                  (t.motivo = 'urgente control') DESC, 
+                  (CASE WHEN ed.estado = 'devuelto' THEN 1 ELSE 0 END) DESC,
+                  (t.motivo = 'urgente control') DESC,
                   t.fecha_ingreso ASC
             """
             cur.execute(sql, params)
@@ -1674,11 +1859,7 @@ class AprobadosParaRepararView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             cur.execute("""
                 SELECT
                   t.id,
@@ -1697,7 +1878,7 @@ class AprobadosParaRepararView(APIView):
                 LEFT JOIN models m ON m.id=d.model_id
                 LEFT JOIN quotes q ON q.ingreso_id = t.id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE loc.nombre ILIKE 'taller'
+                WHERE LOWER(loc.nombre) = LOWER(%s)
                   AND (
                         (t.presupuesto_estado = 'aprobado'
                         AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado'))
@@ -1705,7 +1886,7 @@ class AprobadosParaRepararView(APIView):
                       )
                   AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado')
                 ORDER BY COALESCE(q.fecha_aprobado, t.fecha_ingreso) ASC;
-            """)
+            """, ["taller"])
             data = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(data, many=True).data)
 
@@ -1713,11 +1894,7 @@ class AprobadosYReparadosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             cur.execute("""
               SELECT t.id, t.estado, t.presupuesto_estado,
                      c.razon_social,
@@ -1732,17 +1909,16 @@ class AprobadosYReparadosView(APIView):
               LEFT JOIN marcas b ON b.id=d.marca_id
               LEFT JOIN models m ON m.id=d.model_id
               LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-              LEFT JOIN LATERAL (
-                SELECT e.ts AS fecha_reparado
+              LEFT JOIN (
+                SELECT e.ingreso_id, e.ts AS fecha_reparado,
+                       ROW_NUMBER() OVER (PARTITION BY e.ingreso_id ORDER BY e.ts DESC, e.id DESC) AS rn
                 FROM ingreso_events e
-                WHERE e.ingreso_id = t.id AND e.a_estado = 'reparado'
-                ORDER BY e.ts DESC, e.id DESC
-                LIMIT 1
-              ) ev ON TRUE
+                WHERE e.a_estado = 'reparado'
+              ) ev ON ev.ingreso_id = t.id AND ev.rn = 1
               WHERE t.estado IN ('reparado')
-                AND loc.nombre ILIKE 'taller'
+                AND LOWER(loc.nombre) = LOWER(%s)
               ORDER BY COALESCE(ev.fecha_reparado, t.fecha_ingreso) DESC;
-            """)
+            """, ["taller"])
             rows = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(rows, many=True).data)
 
@@ -1750,11 +1926,7 @@ class LiberadosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             cur.execute("""
                 SELECT
                   t.id,
@@ -1774,17 +1946,16 @@ class LiberadosView(APIView):
                 LEFT JOIN marcas    b ON b.id = d.marca_id
                 LEFT JOIN models    m ON m.id = d.model_id
                 LEFT JOIN locations l ON l.id = t.ubicacion_id
-                LEFT JOIN LATERAL (
-                  SELECT e.ts AS fecha_listo
+                LEFT JOIN (
+                  SELECT e.ingreso_id, e.ts AS fecha_listo,
+                         ROW_NUMBER() OVER (PARTITION BY e.ingreso_id ORDER BY e.ts DESC, e.id DESC) AS rn
                   FROM ingreso_events e
-                  WHERE e.ingreso_id = t.id AND e.a_estado = 'liberado'
-                  ORDER BY e.ts DESC, e.id DESC
-                  LIMIT 1
-                ) ev ON TRUE
+                  WHERE e.a_estado = 'liberado'
+                ) ev ON ev.ingreso_id = t.id AND ev.rn = 1
                 WHERE t.estado = 'liberado'
-                  AND l.nombre ILIKE 'taller'
+                  AND LOWER(l.nombre) = LOWER(%s)
                 ORDER BY COALESCE(ev.fecha_listo, t.fecha_ingreso) DESC;
-            """)
+            """, ["taller"])
             rows = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(rows, many=True).data)
     
@@ -1796,11 +1967,7 @@ class GeneralEquiposView(APIView):
         ubicacion_id = (request.GET.get("ubicacion_id") or "").strip()
         solo_taller = (request.GET.get("solo_taller") or "1") in ("1","true","t","yes","y")
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             base = """
               SELECT t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
                      COALESCE(loc.nombre, '') AS ubicacion_nombre,
@@ -1818,7 +1985,8 @@ class GeneralEquiposView(APIView):
             """
             params = []
             if solo_taller:
-                base += " AND loc.nombre ILIKE 'taller'"
+                base += " AND LOWER(loc.nombre) = LOWER(%s)"
+                params.append("taller")
             if estado:
                 base += " AND t.estado = %s"
                 params.append(estado)
@@ -1826,7 +1994,7 @@ class GeneralEquiposView(APIView):
                 base += " AND t.ubicacion_id = %s"
                 params.append(int(ubicacion_id))
             if qtxt:
-                base += " AND (c.razon_social ILIKE %s OR d.numero_serie ILIKE %s OR b.nombre ILIKE %s OR m.nombre ILIKE %s)"
+                base += " AND (LOWER(c.razon_social) LIKE LOWER(%s) OR LOWER(d.numero_serie) LIKE LOWER(%s) OR LOWER(b.nombre) LIKE LOWER(%s) OR LOWER(m.nombre) LIKE LOWER(%s))"
                 like = f"%{qtxt}%"
                 params += [like, like, like, like]
             base += " ORDER BY t.fecha_ingreso DESC LIMIT 1000"
@@ -1913,7 +2081,8 @@ class IngresoDetalleView(APIView):
 
         # Setear variables de auditoría en la sesión DB (para triggers audit.*)
         _set_audit_user(request)
-        exec_void("SET LOCAL app.ingreso_id = %s", [ingreso_id])
+        if connection.vendor == "postgresql":
+            exec_void("SET LOCAL app.ingreso_id = %s", [ingreso_id])
 
         # Estado y asignación actuales
         row_est = q("SELECT estado, asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
@@ -2143,6 +2312,7 @@ class EquiposDerivadosView(APIView):
         rows = q("""
           SELECT t.id,
                  t.estado,
+                 ed.id         AS deriv_id,
                  c.razon_social,
                  d.numero_serie,
                  COALESCE(b.nombre,'') AS marca,
@@ -2157,13 +2327,12 @@ class EquiposDerivadosView(APIView):
           JOIN customers c ON c.id=d.customer_id
           LEFT JOIN marcas b ON b.id=d.marca_id
           LEFT JOIN models m ON m.id=d.model_id
-          JOIN LATERAL (
-            SELECT e.*
+          JOIN (
+            SELECT e.*, ROW_NUMBER() OVER (
+              PARTITION BY e.ingreso_id ORDER BY e.fecha_deriv DESC, e.id DESC
+            ) AS rn
             FROM equipos_derivados e
-            WHERE e.ingreso_id = t.id
-            ORDER BY e.fecha_deriv DESC, e.id DESC
-            LIMIT 1
-          ) ed ON TRUE
+          ) ed ON ed.ingreso_id = t.id AND ed.rn = 1
           LEFT JOIN proveedores_externos pe ON pe.id = ed.proveedor_id
           WHERE t.estado = 'derivado'
           ORDER BY ed.fecha_deriv DESC, t.id DESC
@@ -2185,11 +2354,7 @@ class CerrarReparacionView(APIView):
             return Response({"detail": "resolución inválida"}, status=400)
 
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request,"user",None),"id",None) or getattr(request,"user_id","")),
-                 getattr(request,"user_role","")]
-            )
+            _set_audit_user(request)
             cur.execute("""
                  UPDATE ingresos
                     SET resolucion = %s
@@ -2246,11 +2411,7 @@ class BuscarAccesorioPorReferenciaView(APIView):
             return Response([], status=200)
         like = f"%{ref}%"
         with connection.cursor() as cur:
-            cur.execute(
-                "SET LOCAL app.user_id = %s; SET LOCAL app.user_role = %s;",
-                [str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", "")),
-                 getattr(request, "user_role", "")]
-            )
+            _set_audit_user(request)
             cur.execute("""
                 SELECT
                   t.id,
@@ -2270,7 +2431,7 @@ class BuscarAccesorioPorReferenciaView(APIView):
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
                 LEFT JOIN catalogo_accesorios ca ON ca.id = ia.accesorio_id
-                WHERE (ia.referencia ILIKE %s)
+                WHERE (LOWER(ia.referencia) LIKE LOWER(%s))
                 ORDER BY t.fecha_ingreso DESC, t.id DESC;
             """, [like])
             rows = _fetchall_dicts(cur)
