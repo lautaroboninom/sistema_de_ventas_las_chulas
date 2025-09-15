@@ -21,6 +21,7 @@ class Customer(models.Model):
     cuit = models.TextField(null=True)
     contacto = models.TextField(null=True)
     telefono = models.TextField(null=True)
+    telefono_2 = models.TextField(null=True)
     email = models.TextField(null=True)
 
     class Meta:

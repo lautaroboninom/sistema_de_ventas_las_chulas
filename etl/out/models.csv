@@ -1,9 +1,0 @@
-id,marca_id,nombre,tecnico_id,tipo_equipo
-"2","2","JAY-10D",,
-"4","4","iMEC 10",,
-"6","6","DemoModelo",,
-"3","3","Fleximag Max","2",
-"5","5","KSM-201","2",
-"1","1","G3 AutoCPAP","10","CPAP AUTO"
-"7","3","Fleximag MAX 300","2","RESPIRADOR"
-"8","1","G2 BPAP V30T","10","BPAP"

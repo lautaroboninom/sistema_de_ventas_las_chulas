@@ -45,8 +45,8 @@ export default function Sidebar() {
           )}
 
           {techLike && <LinkItem to="/tecnico">Mis pendientes</LinkItem>}
-          {techLike && <LinkItem to="/pendientes-presupuesto">Pendientes de Presupuesto</LinkItem>}
-          {techLike && <LinkItem to="/presupuestados">Presupuestados</LinkItem>}
+          {jefe && <LinkItem to="/pendientes-presupuesto">Pendientes de Presupuesto</LinkItem>}
+          {jefe && <LinkItem to="/presupuestados">Presupuestados</LinkItem>}
           {techLike && <LinkItem to="/aprobados">Aprobados p/Reparar</LinkItem>}
           {techLike && <LinkItem to="/reparados">Reparados</LinkItem>}
           {(techLike || admin || recep) && <LinkItem to="/derivados">Derivados</LinkItem>}

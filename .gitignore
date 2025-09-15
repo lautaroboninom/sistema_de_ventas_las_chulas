@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-.env
 *.sqlite3
 
 # --- Node / Vite / React
@@ -11,7 +10,7 @@ web/.vite/
 web/dist/
 web/.DS_Store
 
-# --- Docker / Postgres
+# --- Docker / DB
 db/data/
 db/backups/
 *.log
@@ -26,4 +25,20 @@ Thumbs.db
 *.cache
 *.log
 coverage/
-git config core.autocrlf true
+
+# --- Local env files
+.env
+/.env.prod
+/.env.staging
+
+# --- Generated data / outputs
+etl/out/
+tmp/
+
+# --- Avoid committing PDFs accidentally from api/
+api/**/*.pdf
+
+# --- Traefik ACME store and quotes mount
+deploy/traefik/acme.json
+quotes/
+

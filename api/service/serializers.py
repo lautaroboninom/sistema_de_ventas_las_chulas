@@ -25,7 +25,8 @@ class CustomerSerializer(serializers.ModelSerializer):
 class DeviceListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Device
-        fields = ("id", "customer_id", "marca_id", "model_id", "numero_serie")
+        # Usar nombres de campo Django (FKs), no los *_id internos
+        fields = ("id", "customer", "marca", "model", "numero_serie")
 
 
 class MarcaSerializer(serializers.ModelSerializer):
@@ -112,13 +113,11 @@ class IngresoDetailSerializer(serializers.Serializer):
     # Equipo
     device_id = serializers.IntegerField()
     numero_serie = serializers.CharField()
-    numero_interno = serializers.CharField(allow_blank=True, required=False)
     garantia = serializers.BooleanField()
     marca_id = serializers.IntegerField()
     marca = serializers.CharField()
     model_id = serializers.IntegerField()
     modelo = serializers.CharField()
-    numero_interno = serializers.CharField(allow_blank=True, required=False)
 
     # Cliente
     customer_id = serializers.IntegerField()

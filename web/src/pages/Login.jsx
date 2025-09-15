@@ -1,19 +1,33 @@
-// web/src/pages/Login.jsx
-import { useState } from "react";
+﻿// web/src/pages/Login.jsx
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import api from "../lib/api";
 
 export default function Login() {
-  const [email, setEmail] = useState("");         // vacío, solo placeholder
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [backendOk, setBackendOk] = useState(true);
 
   const nav = useNavigate();
   const loc = useLocation();
   const { login } = useAuth();
 
   const from = loc.state?.from?.pathname || "/";
+
+  // Verificacion rapida del backend para diferenciar error de red vs. credenciales
+  useEffect(() => {
+    (async () => {
+      try {
+        await api.get("/api/health/");
+        setBackendOk(true);
+      } catch {
+        setBackendOk(false);
+      }
+    })();
+  }, []);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -23,7 +37,12 @@ export default function Login() {
       await login(email.trim().toLowerCase(), password);
       nav(from, { replace: true });
     } catch (e) {
-      setErr("Usuario o contraseña inválidos");
+      const msg = e?.message || "Credenciales invalidas";
+      if (!backendOk) {
+        setErr("Backend no disponible en /api. Verifica que la API este levantada (http://localhost:8000).");
+      } else {
+        setErr(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -31,6 +50,11 @@ export default function Login() {
 
   return (
     <div className="max-w-md mx-auto mt-16 card">
+      {!backendOk && (
+        <div className="mb-3 text-sm bg-yellow-100 text-yellow-800 p-2 rounded">
+          Backend no disponible.
+        </div>
+      )}
       <div className="h1 mb-4">Ingresar</div>
       <form className="space-y-3" onSubmit={onSubmit}>
         <input
@@ -38,16 +62,16 @@ export default function Login() {
           type="email"
           placeholder="...@sepid.com.ar"
           value={email}
-          onChange={e => setEmail(e.target.value)}
+          onChange={(e) => setEmail(e.target.value)}
           autoComplete="email"
           required
         />
         <input
           className="input"
           type="password"
-          placeholder="Contraseña"
+          placeholder="Contrasena"
           value={password}
-          onChange={e => setPassword(e.target.value)}
+          onChange={(e) => setPassword(e.target.value)}
           autoComplete="current-password"
           required
         />
@@ -57,7 +81,7 @@ export default function Login() {
         </button>
 
         <Link to="/recuperar" className="text-sm text-blue-700 underline inline-block mt-1">
-          ¿Olvidaste tu contraseña?
+          ¿Olvidaste tu contrasena?
         </Link>
       </form>
     </div>

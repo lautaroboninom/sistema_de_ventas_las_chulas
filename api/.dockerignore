@@ -1,0 +1,21 @@
+# Python cache and artifacts
+__pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+.mypy_cache/
+
+# Virtual envs
+.venv/
+venv/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+
+# VCS
+.git/
+
+# Ignore any accidentally placed PDFs inside api
+**/*.pdf
+

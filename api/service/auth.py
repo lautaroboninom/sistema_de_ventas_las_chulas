@@ -10,6 +10,9 @@ from .models import User
 JWT_SECRET = os.getenv("DJANGO_SECRET_KEY", "change-me")
 JWT_ALG = "HS256"
 JWT_TTL_MIN = 60 * 8  # 8 horas
+# Overrides por entorno (si están presentes)
+JWT_SECRET = os.getenv("JWT_SECRET") or JWT_SECRET
+JWT_TTL_MIN = int(os.getenv("JWT_TTL_MIN", str(JWT_TTL_MIN)))
 
 def make_hash(raw: str) -> str:
     return make_password(raw)

@@ -71,16 +71,24 @@ MIDDLEWARE = [
 ROOT_URLCONF = "app.urls"
 WSGI_APPLICATION = "app.wsgi.application"
 
-# --- Base de datos: usar POSTGRES_* como en .env/.env.prod ---
+# --- Base de datos por defecto: MySQL 8 ---
+# Variables esperadas: MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_HOST, MYSQL_PORT
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("POSTGRES_DB", "servicio_tecnico"),
-        "USER": os.getenv("POSTGRES_USER", "sepid"),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "supersegura"),
-        "HOST": os.getenv("POSTGRES_HOST", "db"),
-        "PORT": os.getenv("POSTGRES_PORT", "5432"),
-        "ATOMIC_REQUESTS": True,  # necesario para SET LOCAL en el middleware RLS
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": os.getenv("MYSQL_DATABASE", "servicio_tecnico"),
+        "USER": os.getenv("MYSQL_USER", "sepid"),
+        "PASSWORD": os.getenv("MYSQL_PASSWORD", "supersegura"),
+        "HOST": os.getenv("MYSQL_HOST", "mysql"),
+        "PORT": os.getenv("MYSQL_PORT", "3306"),
+        "ATOMIC_REQUESTS": True,
+        "OPTIONS": {
+            # modo estricto y charset
+            "init_command": "SET sql_mode='STRICT_ALL_TABLES'",
+            "charset": "utf8mb4",
+        },
+        # Reutilización de conexiones
+        "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
     }
 }
 

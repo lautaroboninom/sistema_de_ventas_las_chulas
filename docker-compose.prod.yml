@@ -5,6 +5,8 @@ services:
     image: traefik:v3.0
     container_name: sepid-traefik
     command: []
+    environment:
+      - TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL=${TRAEFIK_ACME_EMAIL:-ops@example.com}
     ports:
       - "80:80"
       - "443:443"
@@ -31,24 +33,25 @@ services:
     networks:
       - proxy
 
-  db:
-    image: postgres:16
-    container_name: sepid-db
+  mysql:
+    image: mysql:8
+    container_name: sepid-mysql
     env_file: .env.prod
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
     volumes:
-      - ./db/init:/docker-entrypoint-initdb.d:ro
-      - db_data:/var/lib/postgresql/data
-      - db_backups:/backups
+      - ./mysql:/docker-entrypoint-initdb.d:ro
+      - ./mysql.cnf:/etc/mysql/conf.d/custom.cnf:ro
+      - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 30
     restart: unless-stopped
     networks:
       - backend
@@ -63,7 +66,7 @@ services:
       - DJANGO_SETTINGS_MODULE=app.settings_prod
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
     depends_on:
-      db:
+      mysql:
         condition: service_healthy
     command: >
       bash -lc "python manage.py migrate --noinput && \
@@ -71,7 +74,7 @@ services:
     volumes:
       - staticfiles:/app/staticfiles
       - type: bind
-        source: ${QUOTES_HOST_DIR}
+        source: ${QUOTES_HOST_DIR:-./quotes}
         target: /quotes
     labels:
       - "traefik.enable=true"
@@ -122,7 +125,5 @@ networks:
     internal: true
 
 volumes:
-  db_data:
-  db_backups:
+  mysql_data:
   staticfiles:
-

@@ -1,0 +1,62 @@
+name: CI MySQL
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  mysql-verify:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: servicio_tecnico
+          MYSQL_USER: sepid
+          MYSQL_PASSWORD: supersegura
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot --silent"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wait for MySQL
+        run: |
+          for i in {1..60}; do
+            if mysqladmin ping -h 127.0.0.1 -proot --silent; then echo ready; break; fi
+            sleep 2
+          done
+
+      - name: Install MySQL client
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: Apply schema (MySQL)
+        env:
+          MYSQL_PWD: supersegura
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/01_schema.sql
+          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/02_indexes.sql
+          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/03_fkeys.sql
+          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/04_procs.sql
+          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/05_triggers.sql
+
+      - name: Smoke tests (MySQL)
+        env:
+          MYSQL_PWD: supersegura
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/05_smoke_test.sql | tee smoke.out
+          grep -q OK_SMOKE smoke.out
+
+      - name: Verify integrity
+        env:
+          MYSQL_PWD: supersegura
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/99_verify_mysql.sql
+

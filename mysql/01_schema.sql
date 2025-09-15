@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS customers (
   cuit          TEXT,
   contacto      TEXT,
   telefono      TEXT,
+  telefono_2    TEXT,
   email         TEXT
 ) ENGINE=InnoDB;
 
@@ -90,7 +91,7 @@ CREATE TABLE IF NOT EXISTS ingresos (
   id                   INT AUTO_INCREMENT PRIMARY KEY,
   device_id            INT            NOT NULL,
   estado               ENUM('ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','derivado','liberado','alquilado') NOT NULL DEFAULT 'ingresado',
-  motivo               ENUM('reparación','service preventivo','baja alquiler','reparación alquiler','otros','urgente control') NOT NULL,
+  motivo               ENUM('reparación','service preventivo','baja alquiler','reparación alquiler','urgente control','devolución demo','otros') NOT NULL,
   fecha_ingreso        TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   fecha_servicio       TIMESTAMP NULL,
   ubicacion_id         INT NULL,
@@ -226,4 +227,3 @@ CREATE TABLE IF NOT EXISTS audit_log (
   status_code  INT,
   body         JSON
 ) ENGINE=InnoDB;
-
