@@ -1,6 +1,6 @@
 # service/serializers.py
 from rest_framework import serializers
-from .models import Ingreso, Quote, Customer, Device, Marca, Model as DeviceModel
+from .models import Ingreso, Quote, Customer, Device, Marca, Model as DeviceModel, IngresoMedia
 
 
 # --- ModelSerializers base (lo que ya usabas) ---
@@ -59,6 +59,7 @@ class IngresoListItemSerializer(serializers.Serializer):
     numero_serie = serializers.CharField(allow_blank=True, required=False)
     marca = serializers.CharField(allow_blank=True, required=False)
     modelo = serializers.CharField(allow_blank=True, required=False)
+    tipo_equipo = serializers.CharField(allow_blank=True, required=False)
     fecha_servicio = serializers.DateTimeField(required=False, allow_null=True)
     fecha_aprobacion = serializers.DateTimeField(required=False, allow_null=True)
     
@@ -144,6 +145,23 @@ class IngresoAccesorioItemSerializer(serializers.Serializer):
 
 class IngresoDetailWithAccesoriosSerializer(IngresoDetailSerializer):
     accesorios_items = IngresoAccesorioItemSerializer(many=True, required=False)
+
+
+class IngresoMediaItemSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    ingreso_id = serializers.IntegerField()
+    usuario_id = serializers.IntegerField()
+    usuario_nombre = serializers.CharField(allow_blank=True)
+    comentario = serializers.CharField(allow_null=True, allow_blank=True)
+    mime_type = serializers.CharField()
+    size_bytes = serializers.IntegerField()
+    width = serializers.IntegerField()
+    height = serializers.IntegerField()
+    original_name = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    url = serializers.CharField()
+    thumbnail_url = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
 
 class QuoteItemSerializer(serializers.Serializer):
     id = serializers.IntegerField()

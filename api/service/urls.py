@@ -1,10 +1,10 @@
-# service/urls.py
+﻿# service/urls.py
 from django.urls import path, include
 from .views import (
     # salud / login
-    ping, LoginView, ForgotPasswordView, ResetPasswordView,
+    ping, LoginView, LogoutView, SessionView, ForgotPasswordView, ResetPasswordView,
 
-    # flujo ingresos / técnico
+    # flujo ingresos / tÃ©cnico
     MisPendientesView,
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     PendientesPresupuestoView, PresupuestadosView,
@@ -16,16 +16,16 @@ from .views import (
     AprobadosParaRepararView, AprobadosYReparadosView, LiberadosView,
     GeneralEquiposView, GeneralPorClienteView,
 
-    # ingresos nuevos + derivación
+    # ingresos nuevos + derivaciÃ³n
     NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView, DevolverDerivacionView,
     
 
-    # catálogos
+    # catÃ¡logos
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView, CatalogoMotivosView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
 
-    # administración de usuarios
+    # administraciÃ³n de usuarios
     UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
     CatalogoRolesView, CerrarReparacionView,
 
@@ -38,6 +38,7 @@ from .views import (
     IngresoDetalleView, IngresoAsignarTecnicoView, CatalogoTecnicosView,
     MarcaTecnicoView,MarcaAplicarTecnicoAModelosView,ModeloTecnicoView,
     EquiposDerivadosView,
+    IngresoMediaListCreateView, IngresoMediaDetailView, IngresoMediaFileView, IngresoMediaThumbnailView,
 
     QuoteDetailView, QuoteItemsView, QuoteItemDetailView, QuoteResumenView, AnularPresupuestoView,
     RemitoSalidaPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
@@ -48,10 +49,12 @@ urlpatterns = [
 
     path("ping/", ping),
     path("auth/login/", LoginView.as_view()),
+    path("auth/logout/", LogoutView.as_view()),
+    path("auth/session/", SessionView.as_view()),
     path("auth/forgot/", ForgotPasswordView.as_view()),
     path("auth/reset/", ResetPasswordView.as_view()),
 
-    # técnico / ingresos (acciones)
+    # tÃ©cnico / ingresos (acciones)
     path("tecnico/mis-pendientes/", MisPendientesView.as_view()),
     path("ingresos/<int:ingreso_id>/reparado/", MarcarReparadoView.as_view()),
     path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
@@ -70,7 +73,7 @@ urlpatterns = [
     path("ingresos/liberados/", LiberadosView.as_view()),
     path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
 
-    # ALIAS de compatibilidad con el front (si existían)
+    # ALIAS de compatibilidad con el front (si existÃ­an)
     path("ingresos/aprobados/", AprobadosParaRepararView.as_view()),
     path("ingresos/reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
@@ -82,13 +85,13 @@ urlpatterns = [
     # utilidades
     path("equipos/garantia-reparacion/", GarantiaReparacionCheckView.as_view()),
 
-    # ingresos nuevos / derivación
+    # ingresos nuevos / derivaciÃ³n
     path("ingresos/nuevo/", NuevoIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivar/", DerivarIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/", DerivacionesPorIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/<int:deriv_id>/devolver/", DevolverDerivacionView.as_view()),
 
-    # catálogos
+    # catÃ¡logos
     path("catalogos/marcas/", CatalogoMarcasView.as_view()),
     path("catalogos/modelos/", CatalogoModelosView.as_view()),                   # ?marca_id=#
     path("catalogos/ubicaciones/", CatalogoUbicacionesView.as_view()),
@@ -98,7 +101,7 @@ urlpatterns = [
     path("catalogos/proveedores-externos/<int:pid>/", ProveedoresExternosView.as_view()),
 
 
-    # administración de clientes / marcas / modelos
+    # administraciÃ³n de clientes / marcas / modelos
     path("catalogos/clientes/", ClientesView.as_view()),                         # GET/POST
     path("catalogos/clientes/<int:cid>/", ClienteDeleteView.as_view()),          # DELETE
     path("catalogos/marcas/<int:bid>/", MarcaDeleteView.as_view()),              # DELETE
@@ -111,6 +114,11 @@ urlpatterns = [
     path("ingresos/<int:ingreso_id>/accesorios/", IngresoAccesoriosView.as_view()),
     path("ingresos/<int:ingreso_id>/accesorios/<int:item_id>/", IngresoAccesorioDetailView.as_view()),
     path("accesorios/buscar/", BuscarAccesorioPorReferenciaView.as_view()),
+    path("ingresos/<int:ingreso_id>/fotos/", IngresoMediaListCreateView.as_view()),
+    path("ingresos/<int:ingreso_id>/fotos/<int:media_id>/", IngresoMediaDetailView.as_view()),
+    path("ingresos/<int:ingreso_id>/fotos/<int:media_id>/archivo/", IngresoMediaFileView.as_view()),
+    path("ingresos/<int:ingreso_id>/fotos/<int:media_id>/miniatura/", IngresoMediaThumbnailView.as_view()),
+
 
     # usuarios (class-based)
     path("usuarios/", UsuariosView.as_view()),                                   # GET lista, POST upsert
@@ -124,7 +132,7 @@ urlpatterns = [
 
 
 
-    # (si usás los endpoints para asignar técnico y setear técnico de marca/modelo)
+    # (si usÃ¡s los endpoints para asignar tÃ©cnico y setear tÃ©cnico de marca/modelo)
     path('catalogos/marcas/<int:bid>/tecnico/', MarcaTecnicoView.as_view()),
     path('catalogos/marcas/<int:bid>/tecnico/aplicar-a-modelos/', MarcaAplicarTecnicoAModelosView.as_view()),
     path('catalogos/marcas/<int:bid>/modelos/<int:mid>/tecnico/', ModeloTecnicoView.as_view()),
@@ -138,16 +146,16 @@ urlpatterns = [
     path("quotes/<int:ingreso_id>/pdf/", QuotePdfView.as_view()),
     path("quotes/<int:ingreso_id>/anular/", AnularPresupuestoView.as_view()),
 
-    # técnico / ingresos (acciones)
+    # tÃ©cnico / ingresos (acciones)
 
 
-    path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # 👈 nuevo
+    path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # ðŸ‘ˆ nuevo
     path("ingresos/<int:ingreso_id>/cerrar/", CerrarReparacionView.as_view()),
 
     # tipos de equipo (alias singular/plural por compat)
     path("catalogos/tipos-equipo/", TiposEquipoView.as_view()),
     path("catalogo/tipos-equipo/", TiposEquipoView.as_view()),
-    # asignación de tipo de equipo al modelo (alias singular/plural por compat)
+    # asignaciÃ³n de tipo de equipo al modelo (alias singular/plural por compat)
     path("catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
     path("catalogo/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
 
@@ -156,3 +164,5 @@ urlpatterns = [
     # historial de cambios por ingreso
     path("ingresos/<int:ingreso_id>/historial/", IngresoHistorialView.as_view()),
 ]
+
+

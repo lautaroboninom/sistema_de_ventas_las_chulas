@@ -66,6 +66,15 @@ SET @t := (SELECT COUNT(*) FROM information_schema.table_constraints WHERE const
 SET @sql := IF(@t=0, 'ALTER TABLE ingreso_events ADD CONSTRAINT ingreso_events_ticket_id_fkey FOREIGN KEY (ticket_id) REFERENCES ingresos(id) ON DELETE CASCADE', 'DO 0');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- ingreso_media -> ingresos, users
+SET @t := (SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema = DATABASE() AND table_name='ingreso_media' AND constraint_name='ingreso_media_ingreso_id_fkey');
+SET @sql := IF(@t=0, 'ALTER TABLE ingreso_media ADD CONSTRAINT ingreso_media_ingreso_id_fkey FOREIGN KEY (ingreso_id) REFERENCES ingresos(id) ON DELETE CASCADE', 'DO 0');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @t := (SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema = DATABASE() AND table_name='ingreso_media' AND constraint_name='ingreso_media_usuario_id_fkey');
+SET @sql := IF(@t=0, 'ALTER TABLE ingreso_media ADD CONSTRAINT ingreso_media_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES users(id) ON DELETE RESTRICT', 'DO 0');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- equipos_derivados → ingresos, proveedores_externos
 SET @t := (SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema = DATABASE() AND table_name='equipos_derivados' AND constraint_name='equipos_derivados_ingreso_id_fkey');
 SET @sql := IF(@t=0, 'ALTER TABLE equipos_derivados ADD CONSTRAINT equipos_derivados_ingreso_id_fkey FOREIGN KEY (ingreso_id) REFERENCES ingresos(id) ON DELETE CASCADE', 'DO 0');

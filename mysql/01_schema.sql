@@ -159,13 +159,34 @@ CREATE TABLE IF NOT EXISTS ingreso_events (
   comentario  TEXT
 ) ENGINE=InnoDB;
 
+-- =============================================\r\n-- Ingreso media (fotos)
 -- =============================================
+CREATE TABLE IF NOT EXISTS ingreso_media (
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  ingreso_id     INT NOT NULL,
+  usuario_id     INT NOT NULL,
+  storage_path   TEXT NOT NULL,
+  thumbnail_path TEXT NOT NULL,
+  original_name  TEXT,
+  mime_type      VARCHAR(80) NOT NULL,
+  size_bytes     BIGINT NOT NULL,
+  width          INT NOT NULL,
+  height         INT NOT NULL,
+  comentario     TEXT,
+  created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
 -- Derivación a servicio externo
 -- =============================================
 CREATE TABLE IF NOT EXISTS proveedores_externos (
-  id       INT AUTO_INCREMENT PRIMARY KEY,
-  nombre   TEXT NOT NULL,
-  contacto TEXT,
+  id        INT AUTO_INCREMENT PRIMARY KEY,
+  nombre    TEXT NOT NULL,
+  contacto  TEXT,
+  telefono  TEXT,
+  email     TEXT,
+  direccion TEXT,
+  notas     TEXT,
   UNIQUE KEY uq_prov_ext_nombre (nombre(191))
 ) ENGINE=InnoDB;
 
@@ -227,3 +248,4 @@ CREATE TABLE IF NOT EXISTS audit_log (
   status_code  INT,
   body         JSON
 ) ENGINE=InnoDB;
+
