@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
 
 
 // Ajustá si tu backend usa otra ruta (histórico completo)
@@ -50,6 +50,7 @@ export default function GeneralEquipos() {
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
         row?.modelo ?? row?.equipo?.modelo,
+        tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
         row?.ubicacion_nombre,
@@ -116,6 +117,7 @@ export default function GeneralEquipos() {
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Marca</th>
                 <th scope="col" className="p-2">Modelo</th>
+                <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Ubicación</th>
@@ -141,6 +143,7 @@ export default function GeneralEquipos() {
                   </td>
                   <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
                   <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                  <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">{row?.estado ?? "-"}</td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
                   <td className="p-2">{row?.ubicacion_nombre ?? "-"}</td>

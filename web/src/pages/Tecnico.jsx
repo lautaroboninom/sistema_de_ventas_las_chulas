@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf } from "../lib/ui-helpers";
 
 export default function Tecnico() {
   const [rows, setRows] = useState([]);
@@ -102,6 +102,7 @@ export default function Tecnico() {
                 <th className="p-2">Fecha Ingreso</th>
                 <th className="p-2">Marca</th>
                 <th className="p-2">Modelo</th>
+                <th className="p-2">Tipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
                 <th className="p-2 text-right">Diagnosticado</th>
@@ -150,6 +151,7 @@ export default function Tecnico() {
                     </td>
                     <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
                     <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                    <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2">{row?.estado ?? "-"}</td>
                     <td className="p-2">{row?.numero_serie ?? "-"}</td>
 

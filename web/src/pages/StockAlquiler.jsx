@@ -3,15 +3,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getGeneralEquipos } from "../lib/api";
-import { ingresoIdOf, formatOS, norm } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { useAuth } from "../context/AuthContext";
 
 // Catálogo (DB):
 const TARGET_ID = 2;
-const TARGET_NAME = "Estantería alquileres";
+const TARGET_NAME = "Estanteria de Alquiler";
+const ESTADOS_EXCLUIR = new Set(['entregado', 'alquilado']);
 const isStockAlquiler = (r) => {
   const id = Number(r?.ubicacion_id ?? NaN);
   const name = r?.ubicacion_nombre;
   return id === TARGET_ID || norm(name) === norm(TARGET_NAME);
+};
+
+const estadoValido = (r) => {
+  const estado = (r?.estado || '').toLowerCase();
+  return !ESTADOS_EXCLUIR.has(estado);
 };
 
 export default function StockAlquiler() {
@@ -21,35 +28,46 @@ export default function StockAlquiler() {
   const [filter, setFilter] = useState("");
   const nav = useNavigate();
 
-  useEffect(() => {
-    // ⛑️ Si no hay token (p. ej., estás en /login), no llamamos a la API
-    const tok = localStorage.getItem("token");
-    if (!tok) { setLoading(false); return; }
+  const { user, loading: authLoading } = useAuth();
 
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
     (async () => {
-      setErr(""); setLoading(true);
+      setErr("");
+      setLoading(true);
       try {
-        // Intento server-side: por ubicacion_id
-        let data = await getGeneralEquipos({ ubicacion_id: TARGET_ID, solo_taller: false });
+        let data = await getGeneralEquipos({ ubicacion_id: TARGET_ID, solo_taller: false, excluir_estados: 'entregado,alquilado' });
         if (!Array.isArray(data) || data.length === 0) {
-          // Fallback: traer todo y filtrar en cliente
-          data = await getGeneralEquipos({ solo_taller: false });
+          data = await getGeneralEquipos({ solo_taller: false, excluir_estados: 'entregado,alquilado' });
         }
+        if (!active) return;
         const safe = Array.isArray(data) ? data : [];
-        setRows(safe.filter(isStockAlquiler));
+        setRows(safe.filter((row) => isStockAlquiler(row) && estadoValido(row)));
       } catch (e) {
+        if (!active) return;
         setErr(e?.message || "Error cargando stock");
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     })();
-  }, []);
+
+    return () => {
+      active = false;
+    };
+  }, [authLoading, user]);
 
   const filtered = useMemo(() => {
     const needle = norm(filter);
     if (!needle) return rows;
     return rows.filter(r => {
-      const campos = [formatOS(r), r?.marca, r?.modelo, r?.numero_serie, r?.razon_social];
+      if (!estadoValido(r)) return false;
+      const campos = [formatOS(r), r?.marca, r?.modelo, tipoEquipoOf(r), r?.numero_serie, r?.razon_social];
       return campos.some(c => norm(c).includes(needle));
     });
   }, [rows, filter]);
@@ -70,7 +88,7 @@ export default function StockAlquiler() {
 
       {loading ? "Cargando..." :
         filtered.length === 0 ? (
-          <div className="text-sm text-gray-500">No hay equipos en Estantería alquileres.</div>
+          <div className="text-sm text-gray-500">No hay equipos en Estanteria de Alquiler.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -79,6 +97,7 @@ export default function StockAlquiler() {
                   <th className="p-2">OS</th>
                   <th className="p-2">Marca</th>
                   <th className="p-2">Modelo</th>
+                  <th className="p-2">Tipo</th>
                   <th className="p-2">Serie</th>
                 </tr>
               </thead>
@@ -92,6 +111,7 @@ export default function StockAlquiler() {
                     <td className="p-2 underline">{formatOS(row)}</td>
                     <td className="p-2">{row.marca}</td>
                     <td className="p-2">{row.modelo}</td>
+                    <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2">{row.numero_serie}</td>
                   </tr>
                 ))}
@@ -103,3 +123,4 @@ export default function StockAlquiler() {
     </div>
   );
 }
+

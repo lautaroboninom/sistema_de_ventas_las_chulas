@@ -7,6 +7,7 @@ import {
   formatOS,
   formatDateTime,
   norm,
+  tipoEquipoOf,
   formatMoney,
 } from "../lib/ui-helpers";
 
@@ -56,6 +57,7 @@ export default function JefePresupuestos() {
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
         row?.modelo ?? row?.equipo?.modelo,
+        tipoEquipoOf(row),
         row?.estado,
         row?.presupuesto_estado,
         row?.numero_serie,
@@ -140,6 +142,7 @@ export default function JefePresupuestos() {
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Marca</th>
                 <th scope="col" className="p-2">Modelo</th>
+                <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Presupuesto #</th>
@@ -172,6 +175,7 @@ export default function JefePresupuestos() {
                     </td>
                     <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
                     <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                    <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2">{row?.numero_serie ?? "-"}</td>
                     <td className="p-2">{row?.estado ?? "-"}</td>
                     <td className="p-2">{row?.presupuesto_numero ?? row?.quote_number ?? "-"}</td>

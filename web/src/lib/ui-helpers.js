@@ -15,6 +15,29 @@ export const formatOS = (rowOrId, prefix = "OS ") => {
 export const formatDateTime = (s, locale = "es-AR") =>
   s ? new Date(s).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : "-";
 
+export const tipoEquipoOf = (row, fallback = "-") => {
+  if (!row) return fallback;
+  const candidates = [
+    row?.tipo_equipo,
+    row?.equipo?.tipo_equipo,
+    row?.tipo_equipo_nombre,
+    row?.equipo?.tipo_equipo_nombre,
+    row?.tipo,
+    row?.equipo?.tipo,
+    row?.tipoEquipo,
+    row?.equipo?.tipoEquipo,
+    row?.modelo_tipo,
+    row?.equipo?.modelo_tipo,
+  ];
+  for (const raw of candidates) {
+    if (typeof raw === "string") {
+      const value = raw.trim();
+      if (value) return value;
+    }
+  }
+  return fallback;
+};
+
 export const norm = (v) => {
   const s = (v ?? "").toString().toLowerCase().trim();
   try {

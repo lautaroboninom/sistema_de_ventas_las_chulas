@@ -1,6 +1,7 @@
 // web/src/pages/NuevoIngreso.jsx
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { norm } from "@/lib/ui-helpers";
 import {
   getClientes,
   getMarcas,

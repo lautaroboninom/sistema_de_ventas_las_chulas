@@ -1,4 +1,4 @@
-// ResetPassword.jsx
+﻿// ResetPassword.jsx
 import { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { postAuthReset } from "../lib/api";
@@ -17,7 +17,7 @@ export default function ResetPassword(){
   async function submit(e){
     e.preventDefault();
     setErr("");
-    if(p1.length < 6) return setErr("La contraseña debe tener al menos 6 caracteres.");
+    if(p1.length < 8) return setErr("La contraseña debe tener al menos 8 caracteres.");
     if(p1 !== p2)   return setErr("Las contraseñas no coinciden.");
     try{
       await postAuthReset(token, p1);
@@ -44,3 +44,4 @@ export default function ResetPassword(){
     </div>
   );
 }
+

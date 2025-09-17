@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { getClientes } from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
 
 
 
@@ -67,6 +67,7 @@ export default function GeneralPorCliente() {
         formatOS(row),
         row?.marca ?? row?.equipo?.marca,
         row?.modelo ?? row?.equipo?.modelo,
+        tipoEquipoOf(row),
         row?.estado,
         row?.presupuesto_estado,
         row?.numero_serie,
@@ -156,6 +157,7 @@ export default function GeneralPorCliente() {
               <tr className="text-left">
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Equipo</th>
+                <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Presupuesto</th>
@@ -182,6 +184,7 @@ export default function GeneralPorCliente() {
                       " " +
                       (row?.modelo ?? row?.equipo?.modelo ?? "")}
                   </td>
+                  <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
                   <td className="p-2">{row?.estado ?? "-"}</td>
                   <td className="p-2">{row?.presupuesto_estado ?? "-"}</td>

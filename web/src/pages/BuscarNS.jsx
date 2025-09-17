@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getGeneralEquipos } from "../lib/api";
-import { formatDateTime as formatDateTimeHelper, formatOS as formatOSHelper } from "../lib/ui-helpers";
+import { formatDateTime as formatDateTimeHelper, formatOS as formatOSHelper, tipoEquipoOf } from "../lib/ui-helpers";
 
 export default function BuscarNS() {
   const [sp] = useSearchParams();
@@ -43,6 +43,7 @@ export default function BuscarNS() {
                 <th className="p-2">OS</th>
                 <th className="p-2">Marca</th>
                 <th className="p-2">Modelo</th>
+                <th className="p-2">Tipo</th>
                 <th className="p-2">Fecha de ingreso</th>
               </tr>
             </thead>
@@ -59,6 +60,7 @@ export default function BuscarNS() {
                     <td className="p-2 underline">{formatOSHelper(r, ingresoId)}</td>
                     <td className="p-2">{r?.marca || "-"}</td>
                     <td className="p-2">{r?.modelo || "-"}</td>
+                    <td className="p-2">{tipoEquipoOf(r)}</td>
                     <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(r?.fecha_ingreso)}</td>
                   </tr>
                 );

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getMarcas, postMarca, deleteMarca,
   getModelos, postModelo, deleteModelo,
   getTecnicos, patchMarcaTecnico, postMarcaAplicarTecnico, patchModeloTecnico,
   getTiposEquipo, patchModeloTipoEquipo, // 👈 NUEVO
 } from "../lib/api";
+import { norm } from "@/lib/ui-helpers";
 
 const Input  = (p) => <input  {...p} className="border rounded p-2 w-full" />;
 const Select = (p) => <select {...p} className="border rounded p-2 w-full" />;
@@ -29,10 +30,27 @@ export default function CatalogoMarcas() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [marcaQuery, setMarcaQuery] = useState("");
+  const listRef = useRef(null);
+
+  const filteredMarcas = useMemo(() => {
+    const q = norm(marcaQuery);
+    if (!q) return marcas;
+    return marcas.filter((m) => norm(m.nombre).includes(q));
+  }, [marcaQuery, marcas]);
+
   // ==== CARGAS ====
-  const loadMarcas = async () => {
-    setErr(""); setMsg("");
-    try { setMarcas(await getMarcas()); } catch(e){ setErr(e.message); }
+  const loadMarcas = async (preserveMsg = false) => {
+    setErr("");
+    if (!preserveMsg) setMsg("");
+    try {
+      const rows = await getMarcas();
+      setMarcas(rows);
+      return rows;
+    } catch(e){
+      setErr(e.message);
+      return [];
+    }
   };
   const loadTecnicos = async () => {
     try { setTecnicos(await getTecnicos()); } catch { /* puede haber RLS */ }
@@ -59,25 +77,62 @@ export default function CatalogoMarcas() {
 
   useEffect(() => { loadMarcas(); loadTecnicos(); loadTipos(); }, []);
   useEffect(() => {
+    setExpandedModelId(null);
     if (sel) {
       setMarcaTecId(sel?.tecnico_id ?? "");
       loadModelos(sel.id);
+      const node = listRef.current?.querySelector(`[data-id="${sel.id}"]`);
+      if (node && typeof node.scrollIntoView === "function") {
+        node.scrollIntoView({ block: "nearest" });
+      }
     } else {
       setMarcaTecId("");
       setModelos([]); setMdlTecSel({}); setMdlTipoSel({});
     }
   }, [sel?.id]);
 
+  const handleSelectMarca = (marca) => {
+    setSel(marca);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
   // ==== ABM MARCAS/MODELOS ====
   const addMarca = async (e) => {
     e.preventDefault();
-    try { await postMarca(fm.nombre); setFm({nombre:""}); setMsg("Marca agregada"); loadMarcas(); }
-    catch(e){ setErr(e.message); }
+    const nombre = (fm.nombre || "").trim();
+    if (!nombre) return;
+    setErr("");
+    try {
+      const res = await postMarca(nombre);
+      setFm({ nombre: "" });
+      setMarcaQuery("");
+      const rows = await loadMarcas(true);
+      if (Array.isArray(rows) && res?.id) {
+        const found = rows.find((m) => m.id === res.id);
+        if (found) handleSelectMarca(found);
+      }
+      if (res?.created) {
+        setMsg("Marca agregada");
+      } else if (res?.updated) {
+        setMsg("Marca actualizada");
+      } else {
+        setMsg("Marca disponible");
+      }
+    } catch(e){
+      setErr(e.message);
+    }
   };
   const delMarca = async (id) => {
     if (!confirm("¿Eliminar marca?")) return;
-    try { await deleteMarca(id); setSel(null); loadMarcas(); }
-    catch(e){ setErr(e.message); }
+    setErr("");
+    try {
+      await deleteMarca(id);
+      setSel(null);
+      await loadMarcas(true);
+      setMsg("Marca eliminada");
+    } catch(e){ setErr(e.message); }
   };
   const addModelo = async (e) => {
     e.preventDefault(); if (!sel) return;
@@ -163,12 +218,36 @@ export default function CatalogoMarcas() {
           <button className="bg-blue-600 text-white px-4 py-2 rounded">Agregar</button>
         </form>
 
-        <ul className="border rounded divide-y">
-          {marcas.map(m => (
-            <li key={m.id} className={`p-2 ${sel?.id===m.id ? "bg-gray-50" : ""}`}>
+        <div className="mb-3">
+          <Input
+            placeholder="Buscar marca"
+            value={marcaQuery}
+            onChange={(e) => setMarcaQuery(e.target.value)}
+          />
+        </div>
+
+        <ul ref={listRef} className="border rounded divide-y max-h-[60vh] overflow-auto">
+          {filteredMarcas.map(m => (
+            <li
+              key={m.id}
+              data-id={m.id}
+              className={`p-2 border-l-4 ${sel?.id === m.id ? "border-blue-500 bg-blue-50" : "border-transparent hover:bg-gray-50"}`}
+            >
               <div className="flex items-center justify-between">
-                <button className="text-left" onClick={() => setSel(m)}>{m.nombre}</button>
-                <button className="px-2 py-1 border rounded" onClick={() => delMarca(m.id)}>Eliminar</button>
+                <button
+                  type="button"
+                  className="text-left font-medium hover:underline flex-1"
+                  onClick={() => handleSelectMarca(m)}
+                >
+                  {m.nombre}
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-1 border rounded text-xs"
+                  onClick={(ev) => { ev.stopPropagation(); delMarca(m.id); }}
+                >
+                  Eliminar
+                </button>
               </div>
 
               {sel?.id === m.id && (
@@ -197,7 +276,11 @@ export default function CatalogoMarcas() {
               )}
             </li>
           ))}
-          {!marcas.length && <li className="p-3 text-center text-gray-500">Sin marcas</li>}
+          {!filteredMarcas.length && (
+            <li className="p-3 text-center text-gray-500">
+              {marcaQuery.trim() ? "Sin coincidencias" : "Sin marcas"}
+            </li>
+          )}
         </ul>
       </div>
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getUbicaciones, getGeneralEquipos } from "../lib/api";
-import { ingresoIdOf, formatOS, formatDateTime } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf } from "../lib/ui-helpers";
 import { useNavigate } from "react-router-dom";
 
 export default function Depositos() {
@@ -49,6 +49,7 @@ export default function Depositos() {
                 <th className="p-2 text-left">Cliente</th>
                 <th className="p-2 text-left">Marca</th>
                 <th className="p-2 text-left">Modelo</th>
+                <th className="p-2 text-left">Tipo</th>
                 <th className="p-2 text-left">N° Serie</th>
                 <th className="p-2 text-left">Estado</th>
                 <th className="p-2 text-left">Fecha ingreso</th>
@@ -61,6 +62,7 @@ export default function Depositos() {
                   <td className="p-2">{r.razon_social}</td>
                   <td className="p-2">{r.marca}</td>
                   <td className="p-2">{r.modelo}</td>
+                  <td className="p-2">{tipoEquipoOf(r)}</td>
                   <td className="p-2">{r.numero_serie}</td>
                   <td className="p-2">{r.estado}</td>
                   <td className="p-2">{formatDateTime(r.fecha_ingreso)}</td>
