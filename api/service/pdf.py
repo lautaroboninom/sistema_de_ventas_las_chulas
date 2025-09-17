@@ -193,11 +193,14 @@ def render_quote_pdf(ingreso_id: int):
     EMPRESA_LINEA2 = getattr(settings, "COMPANY_HEADER_L2", "IMPORTADORES DE EQUIPOS")
     EMPRESA_LINEA3 = getattr(settings, "COMPANY_HEADER_L3", "MEDICOS Y REPARACIONES")
 
-    cliente_name = safe_name(head["cliente"]) or "Cliente"
-    filename = f'{head["ingreso_id"]} {cliente_name}.pdf'
+    cliente_display = (head.get("cliente") or "Cliente").strip()
+    os_label = f"OS {str(head['ingreso_id']).zfill(6)}"
+    title = f"{os_label} {cliente_display}".strip()
+    filename = f"{safe_name(title)}.pdf"
 
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
+    c.setTitle(title)
     W, H = A4
 
     ml, mt = 18*mm, 18*mm
@@ -225,7 +228,7 @@ def render_quote_pdf(ingreso_id: int):
     c.drawCentredString(W/2, y-14*mm, EMPRESA_LINEA1)
 
     c.setFont("Helvetica-Bold", 18)
-    c.drawRightString(W - ml, H - mt - 6, f'{head["ingreso_id"]} {cliente_name}')
+    c.drawRightString(W - ml, H - mt - 6, title)
 
     y -= 22*mm
     c.setLineWidth(0.8)

@@ -39,11 +39,17 @@ class JWTAuthentication(BaseAuthentication):
     keyword = "Bearer"
 
     def authenticate(self, request):
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith(self.keyword + " "):
+        auth_header = request.headers.get("Authorization", "")
+        token = None
+        if auth_header.startswith(self.keyword + " "):
+            token = auth_header.split(" ", 1)[1].strip()
+        else:
+            cookie_token = request.COOKIES.get("auth_token")
+            if cookie_token:
+                token = cookie_token.strip()
+        if not token:
             return None  # permite endpoints AllowAny y otros autenticadores si hubiera
 
-        token = auth.split(" ", 1)[1].strip()
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
         except jwt.ExpiredSignatureError:

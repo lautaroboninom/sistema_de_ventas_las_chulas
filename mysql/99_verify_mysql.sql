@@ -13,6 +13,7 @@ UNION ALL SELECT 'quotes', COUNT(*) FROM quotes
 UNION ALL SELECT 'quote_items', COUNT(*) FROM quote_items
 UNION ALL SELECT 'proveedores_externos', COUNT(*) FROM proveedores_externos
 UNION ALL SELECT 'equipos_derivados', COUNT(*) FROM equipos_derivados
+UNION ALL SELECT 'ingreso_media', COUNT(*) FROM ingreso_media
 UNION ALL SELECT 'ingreso_events', COUNT(*) FROM ingreso_events
 UNION ALL SELECT 'handoffs', COUNT(*) FROM handoffs
 UNION ALL SELECT 'password_reset_tokens', COUNT(*) FROM password_reset_tokens
@@ -28,6 +29,8 @@ UNION ALL SELECT 'ingresos.asignado_a', COUNT(*) FROM ingresos t LEFT JOIN users
 UNION ALL SELECT 'ingresos.recibido_por', COUNT(*) FROM ingresos t LEFT JOIN users u ON u.id=t.recibido_por WHERE t.recibido_por IS NOT NULL AND u.id IS NULL
 UNION ALL SELECT 'equipos_derivados.ingreso_id', COUNT(*) FROM equipos_derivados ed LEFT JOIN ingresos i ON i.id=ed.ingreso_id WHERE ed.ingreso_id IS NOT NULL AND i.id IS NULL
 UNION ALL SELECT 'equipos_derivados.proveedor_id', COUNT(*) FROM equipos_derivados ed LEFT JOIN proveedores_externos p ON p.id=ed.proveedor_id WHERE ed.proveedor_id IS NOT NULL AND p.id IS NULL
+UNION ALL SELECT 'ingreso_media.ingreso_id', COUNT(*) FROM ingreso_media m LEFT JOIN ingresos i ON i.id=m.ingreso_id WHERE m.ingreso_id IS NOT NULL AND i.id IS NULL
+UNION ALL SELECT 'ingreso_media.usuario_id', COUNT(*) FROM ingreso_media m LEFT JOIN users u ON u.id=m.usuario_id WHERE m.usuario_id IS NOT NULL AND u.id IS NULL
 UNION ALL SELECT 'handoffs.ingreso_id', COUNT(*) FROM handoffs h LEFT JOIN ingresos i ON i.id=h.ingreso_id WHERE h.ingreso_id IS NOT NULL AND i.id IS NULL
 UNION ALL SELECT 'password_reset_tokens.user_id', COUNT(*) FROM password_reset_tokens t LEFT JOIN users u ON u.id=t.user_id WHERE t.user_id IS NOT NULL AND u.id IS NULL;
 

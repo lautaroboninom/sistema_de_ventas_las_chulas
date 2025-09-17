@@ -1,5 +1,6 @@
 from django.db import connection
 from django.conf import settings
+from .ip_utils import get_client_ip
 import json
 
 
@@ -35,7 +36,7 @@ class ActivityLogMiddleware:
         user = getattr(request, "user", None)
         user_id = getattr(user, "id", None)
         role = getattr(user, "rol", None)
-        ip = request.META.get("REMOTE_ADDR")
+        ip = get_client_ip(request.META)
         ua = request.META.get("HTTP_USER_AGENT", "")[:512]
 
         body_json = None
@@ -72,4 +73,5 @@ class ActivityLogMiddleware:
                 pass  # nunca romper la request por problemas de log
 
         return response
+
 

@@ -108,3 +108,15 @@ SET @sql := IF(@cnt>0, 'DROP INDEX idx_audit_log_user ON audit_log', 'DO 0'); PR
 SET @cnt := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name='audit_log' AND index_name='idx_audit_log_user');
 SET @sql := IF(@cnt=0, 'CREATE INDEX idx_audit_log_user ON audit_log(user_id)', 'DO 0'); PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
 
+
+
+-- ingreso_media
+SET @cnt := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name='ingreso_media' AND index_name='idx_ingreso_media_ingreso_created');
+SET @sql := IF(@cnt>0, 'DROP INDEX idx_ingreso_media_ingreso_created ON ingreso_media', 'DO 0'); PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+SET @cnt := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name='ingreso_media' AND index_name='idx_ingreso_media_ingreso_created');
+SET @sql := IF(@cnt=0, 'CREATE INDEX idx_ingreso_media_ingreso_created ON ingreso_media(ingreso_id, created_at DESC)', 'DO 0'); PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @cnt := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name='ingreso_media' AND index_name='idx_ingreso_media_usuario');
+SET @sql := IF(@cnt>0, 'DROP INDEX idx_ingreso_media_usuario ON ingreso_media', 'DO 0'); PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+SET @cnt := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name='ingreso_media' AND index_name='idx_ingreso_media_usuario');
+SET @sql := IF(@cnt=0, 'CREATE INDEX idx_ingreso_media_usuario ON ingreso_media(usuario_id)', 'DO 0'); PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;

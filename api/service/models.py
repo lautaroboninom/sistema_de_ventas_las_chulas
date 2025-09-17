@@ -99,3 +99,26 @@ class Quote(models.Model):
     class Meta:
         managed = False
         db_table = "quotes"
+
+class IngresoMedia(models.Model):
+    id = models.AutoField(primary_key=True)
+    ingreso = models.ForeignKey(Ingreso, on_delete=models.CASCADE, db_column="ingreso_id", related_name="media_items")
+    usuario = models.ForeignKey(User, on_delete=models.CASCADE, db_column="usuario_id")
+    storage_path = models.TextField()
+    thumbnail_path = models.TextField()
+    original_name = models.TextField(null=True, blank=True)
+    mime_type = models.CharField(max_length=80)
+    size_bytes = models.BigIntegerField()
+    width = models.IntegerField()
+    height = models.IntegerField()
+    comentario = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = "ingreso_media"
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"IngresoMedia({self.id})"

@@ -39,6 +39,13 @@ LIMIT 1;
 
 SET @ing := (SELECT id FROM ingresos ORDER BY id DESC LIMIT 1);
 
+SET @tech := (SELECT id FROM users WHERE email='tech@example.com' LIMIT 1);
+INSERT INTO ingreso_media(ingreso_id, usuario_id, storage_path, thumbnail_path, original_name, mime_type, size_bytes, width, height, comentario)
+SELECT @ing, @tech, 'smoke/test.jpg', 'smoke/test_thumb.jpg', 'smoke.jpg', 'image/jpeg', 1024, 100, 100, 'smoke test'
+FROM DUAL
+WHERE @tech IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM ingreso_media WHERE ingreso_id=@ing);
+
 -- Quote emitida
 INSERT INTO quotes(ingreso_id, estado, subtotal, autorizado_por, forma_pago, fecha_emitido)
 VALUES (@ing, 'emitido', 1000.00, 'Cliente', '30 F.F.', NOW())
