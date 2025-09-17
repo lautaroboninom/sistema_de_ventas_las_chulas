@@ -11,12 +11,10 @@
       ? `${window.location.protocol}//${window.location.hostname}:8000`
       : ""); // producción: mismo origen + rutas /api/ relativas
 
-  /* ===== Token en memoria + localStorage (para AuthContext) ===== */
-  let token = localStorage.getItem("token") || null;
+  /* ===== Token en memoria (compatibilidad) ===== */
+  let token = null;
   export const setToken = (t) => {
     token = t;
-    if (t) localStorage.setItem("token", t);
-    else localStorage.removeItem("token");
   };
 
   /* ===== Logout forzado ante 401/403 ===== */
@@ -26,7 +24,6 @@
     forcingLogout = true;
     try {
       setToken(null);
-      localStorage.removeItem("user");
     } finally {
       const loginPath = "/login";
       if (window.location.pathname !== loginPath) {
@@ -41,6 +38,7 @@
   async function http(path, { method = "GET", body, headers } = {}) {
     const res = await fetch(`${BASE}${path}`, {
       method,
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -81,6 +79,8 @@
     api.post("/api/auth/forgot/", { email });
   export const postAuthReset = (token, password) =>
     api.post("/api/auth/reset/", { token, password });
+  export const getAuthSession = () => api.get("/api/auth/session/");
+  export const postAuthLogout = () => api.post("/api/auth/logout/");
 
 
   /* =============== USUARIOS ================= */
@@ -153,6 +153,43 @@ export const postModelo = (brandId, payloadOrNombre) => {
     api.post(`/api/ingresos/${ingresoId}/accesorios/`, payload);
   export const deleteAccesorioIngreso = (ingresoId, itemId) =>
     api.del(`/api/ingresos/${ingresoId}/accesorios/${itemId}/`);
+
+  export const getIngresoFotos = (ingresoId, params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/ingresos/${ingresoId}/fotos/${qs ? `?${qs}` : ""}`);
+  };
+
+  export async function uploadIngresoFotos(ingresoId, files) {
+    const form = new FormData();
+    (files || []).forEach((file) => {
+      if (file) form.append('files', file);
+    });
+    const res = await fetch(`${BASE}/api/ingresos/${ingresoId}/fotos/`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: form,
+    });
+    const ct = res.headers.get("content-type") || "";
+    const data = ct.includes("application/json") ? await res.json() : await res.text();
+    if (res.status === 401 || res.status === 403) {
+      forceLogout();
+    }
+    if (!res.ok) {
+      const detail = typeof data === "string" ? data : data.detail || JSON.stringify(data);
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  export const patchIngresoFoto = (ingresoId, mediaId, payload) =>
+    api.patch(`/api/ingresos/${ingresoId}/fotos/${mediaId}/`, payload);
+
+  export const deleteIngresoFoto = (ingresoId, mediaId) =>
+    api.del(`/api/ingresos/${ingresoId}/fotos/${mediaId}/`);
+
   // Búsqueda por referencia de accesorio
   export const buscarAccesorioPorRef = (ref) =>
     api.get(`/api/accesorios/buscar/?ref=${encodeURIComponent(ref||"")}`);
@@ -226,18 +263,17 @@ export const postModelo = (brandId, payloadOrNombre) => {
   // === GET binario (Blob) con auth y cookies ===
   export async function getBlob(path, opts = {}) {
     const url = path.startsWith("http") ? path : `${BASE}${path}`;
-    const token =
-      localStorage.getItem("token") ||
-      localStorage.getItem("authToken") ||
-      "";
+    const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
+    const { headers: extraHeaders, ...restOpts } = opts;
 
     const res = await fetch(url, {
       method: "GET",
       headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...authHeader,
+        ...(extraHeaders || {}),
       },
       credentials: "include",
-      ...opts,
+      ...restOpts,
     });
 
     if (!res.ok) {

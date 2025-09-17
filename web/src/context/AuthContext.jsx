@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { postLogin, setToken } from "../lib/api";
+import { getAuthSession, postAuthLogout, postLogin, setToken } from "../lib/api";
 
 // Normalizador local para no generar dependencia circular
 function sanitizeUser(u) {
@@ -12,35 +12,54 @@ const AuthCtx = createContext(null);
 export const useAuth = () => useContext(AuthCtx);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
-    const raw = localStorage.getItem("user");
-    return raw ? sanitizeUser(JSON.parse(raw)) : null;
-  });
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  // Al montar, si hay token guardado lo cargamos en api.js
   useEffect(() => {
-    const t = localStorage.getItem("token");
-    if (t) setToken(t);
+    let active = true;
+    (async () => {
+      try {
+        const data = await getAuthSession();
+        if (active && data?.user) {
+          setUser(sanitizeUser(data.user));
+        }
+      } catch (err) {
+        if (import.meta.env.DEV) {
+          console.debug("Auth session bootstrap failed", err);
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   async function login(email, password) {
     const data = await postLogin(email, password); // { token, user }
     const cleanUser = sanitizeUser(data.user);
     setToken(data.token);
-    localStorage.setItem("token", data.token);
-    localStorage.setItem("user", JSON.stringify(cleanUser));
     setUser(cleanUser);
+    setLoading(false);
   }
 
-  function logout() {
+  async function logout() {
     setToken(null);
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    setUser(null);
+    try {
+      await postAuthLogout();
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.debug("Auth logout request failed", err);
+      }
+    } finally {
+      setUser(null);
+      setLoading(false);
+    }
   }
 
   return (
-    <AuthCtx.Provider value={{ user, login, logout }}>
+    <AuthCtx.Provider value={{ user, login, logout, loading }}>
       {children}
     </AuthCtx.Provider>
   );

@@ -50,6 +50,17 @@ export default function Login() {
 
   return (
     <div className="max-w-md mx-auto mt-16 card">
+      <div className="flex justify-center mb-4">
+        <img
+          src="/branding/logo-empresa.png"
+          alt="SEPID Reparaciones"
+          className="h-12 object-contain"
+          onError={(e) => {
+            e.currentTarget.onerror = null;
+            e.currentTarget.src = "/icons/logo-empresa-180.png";
+          }}
+        />
+      </div>
       {!backendOk && (
         <div className="mb-3 text-sm bg-yellow-100 text-yellow-800 p-2 rounded">
           Backend no disponible.

@@ -82,4 +82,14 @@ WHERE m.tipo_equipo IS NULL AND (
   UPPER(b.nombre) LIKE '%SILFAB%' AND UPPER(m.nombre) LIKE '%N-33%'
 );
 
+-- Infusión: bombas (ABBOTT/ALARIS/ARGUS/SAMTRONIC)
+UPDATE models m JOIN marcas b ON b.id = m.marca_id
+SET m.tipo_equipo = 'bomba de infusión'
+WHERE m.tipo_equipo IS NULL AND (
+  UPPER(b.nombre) LIKE '%ABBOTT%'
+  OR UPPER(b.nombre) LIKE '%ALARIS%'
+  OR UPPER(b.nombre) LIKE '%ARGUS%'
+  OR UPPER(b.nombre) LIKE '%SAMTRONIC%'
+);
+
 SET FOREIGN_KEY_CHECKS=1;
