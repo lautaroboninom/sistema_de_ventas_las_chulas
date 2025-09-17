@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/build-sw.mjs",
     "build": "vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "icons": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-icons.ps1"
   },
   "dependencies": {
     "react": "^18.3.1",
