@@ -28,11 +28,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Wait for MySQL
+        shell: bash
         run: |
+          set -euxo pipefail
           for i in {1..60}; do
             if mysqladmin ping -h 127.0.0.1 -proot --silent; then echo ready; break; fi
             sleep 2
           done
+          mysqladmin version -h 127.0.0.1 -proot || true
 
       - name: Install MySQL client
         run: sudo apt-get update && sudo apt-get install -y mysql-client
@@ -40,23 +43,37 @@ jobs:
       - name: Apply schema (MySQL)
         env:
           MYSQL_PWD: supersegura
+        shell: bash
         run: |
-          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/01_schema.sql
-          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/02_indexes.sql
-          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/03_fkeys.sql
-          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/04_procs.sql
-          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/05_triggers.sql
+          set -euxo pipefail
+          for f in 01_schema.sql 02_indexes.sql 03_fkeys.sql 04_procs.sql 05_triggers.sql; do
+            echo "Applying $f";
+            mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < "mysql/$f";
+          done
+          echo "Schema applied"
 
       - name: Smoke tests (MySQL)
         env:
           MYSQL_PWD: supersegura
+        shell: bash
         run: |
-          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/05_smoke_test.sql | tee smoke.out
-          grep -q OK_SMOKE smoke.out
+          set -euxo pipefail
+          mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/05_smoke_test.sql | tee smoke.out
+          echo "----- SMOKE OUTPUT -----"; cat smoke.out || true; echo "------------------------"
+          grep -n "OK_SMOKE" smoke.out
+
+      - name: Upload smoke output (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-out
+          path: smoke.out
 
       - name: Verify integrity
         env:
           MYSQL_PWD: supersegura
+        shell: bash
         run: |
-          mysql -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/99_verify_mysql.sql
+          set -euxo pipefail
+          mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 3306 -u sepid --protocol=TCP servicio_tecnico < mysql/99_verify_mysql.sql
 
