@@ -302,8 +302,9 @@ CHARACTER SET utf8mb4
 FIELDS TERMINATED BY ',' ENCLOSED BY '"'
 ESCAPED BY '\\'
 LINES TERMINATED BY '\n' IGNORE 1 LINES (nombre, contacto);
-INSERT IGNORE INTO proveedores_externos(nombre, contacto)
-SELECT NULLIF(TRIM(nombre),''), NULLIF(TRIM(contacto),'') FROM staging_prov_ext WHERE NULLIF(TRIM(nombre),'') IS NOT NULL;
+INSERT IGNORE INTO proveedores_externos(nombre, contacto, telefono, email, direccion, notas)
+SELECT NULLIF(TRIM(nombre),''), NULLIF(TRIM(contacto),'') , NULL, NULL, NULL, NULL
+FROM staging_prov_ext WHERE NULLIF(TRIM(nombre),'') IS NOT NULL;
 DROP TEMPORARY TABLE staging_prov_ext;
 SET FOREIGN_KEY_CHECKS=1;
 SQL

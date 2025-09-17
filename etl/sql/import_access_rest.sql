@@ -32,8 +32,9 @@ INTO TABLE staging_prov_ext
 CHARACTER SET utf8mb4
 FIELDS TERMINATED BY ',' ENCLOSED BY '"'
 IGNORE 1 LINES (nombre, contacto);
-INSERT IGNORE INTO proveedores_externos(nombre, contacto)
-SELECT NULLIF(TRIM(nombre),''), NULLIF(TRIM(contacto),'') FROM staging_prov_ext WHERE NULLIF(TRIM(nombre),'') IS NOT NULL;
+INSERT IGNORE INTO proveedores_externos(nombre, contacto, telefono, email, direccion, notas)
+SELECT NULLIF(TRIM(nombre),''), NULLIF(TRIM(contacto),'') , NULL, NULL, NULL, NULL
+FROM staging_prov_ext WHERE NULLIF(TRIM(nombre),'') IS NOT NULL;
 DROP TEMPORARY TABLE staging_prov_ext;
 
 -- Devices (id preservado)
@@ -97,7 +98,15 @@ ON DUPLICATE KEY UPDATE
   alquilado=VALUES(alquilado);
 DROP TEMPORARY TABLE staging_devices_access;
 
+-- Ubicacion especial para stock de alquiler
+INSERT INTO locations (nombre)
+SELECT 'Estanteria alquileres'
+WHERE NOT EXISTS (
+  SELECT 1 FROM locations WHERE LOWER(nombre) = LOWER('Estanteria alquileres')
+);
+
 -- Ingresos
+SET @loc_stock := (SELECT id FROM locations WHERE LOWER(nombre) = LOWER('Estanteria alquileres') ORDER BY id ASC LIMIT 1);
 DROP TEMPORARY TABLE IF EXISTS staging_ingresos_access;
 CREATE TEMPORARY TABLE staging_ingresos_access (
   id INT,
@@ -120,13 +129,29 @@ FIELDS TERMINATED BY ',' ENCLOSED BY '"'
 IGNORE 1 LINES
 (id, device_id, estado, motivo, fecha_ingreso, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado);
 
-REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
-SELECT s.id, s.id,
-       (CASE WHEN s.estado IN ('ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','derivado','liberado','alquilado') THEN s.estado ELSE 'ingresado' END),
-       'otros',
-       (CASE WHEN NULLIF(s.fecha_ingreso,'') IS NOT NULL THEN STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s') ELSE NOW() END),
-       NULLIF(s.informe_preliminar,''), NULLIF(s.accesorios,''), NULLIF(s.remito_ingreso,''), NULLIF(s.comentarios,''), NULLIF(s.propietario_nombre,''), NULLIF(s.propietario_contacto,''),
-       CASE WHEN s.presupuesto_estado IN ('pendiente','emitido','aprobado','rechazado','presupuestado') THEN s.presupuesto_estado ELSE 'pendiente' END
+REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, ubicacion_id, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
+SELECT
+  s.id,
+  s.id,
+  CASE
+    WHEN LOWER(TRIM(s.estado)) IN ('ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','derivado','liberado','alquilado') THEN LOWER(TRIM(s.estado))
+    WHEN TRIM(s.estado) IN ('6','06','006') THEN 'ingresado'
+    WHEN LOWER(TRIM(s.estado)) IN ('deposito','depósito') THEN 'ingresado'
+    ELSE 'ingresado'
+  END,
+  'otros',
+  CASE WHEN NULLIF(s.fecha_ingreso,'') <> '' THEN STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s') ELSE NOW() END,
+  CASE
+    WHEN @loc_stock IS NOT NULL AND (TRIM(s.estado) IN ('6','06','006') OR LOWER(TRIM(s.estado)) IN ('deposito','depósito')) THEN @loc_stock
+    ELSE NULL
+  END,
+  NULLIF(s.informe_preliminar,''),
+  NULLIF(s.accesorios,''),
+  NULLIF(s.remito_ingreso,''),
+  NULLIF(s.comentarios,''),
+  NULLIF(s.propietario_nombre,''),
+  NULLIF(s.propietario_contacto,''),
+  CASE WHEN s.presupuesto_estado IN ('pendiente','emitido','aprobado','rechazado','presupuestado') THEN s.presupuesto_estado ELSE 'pendiente' END
 FROM staging_ingresos_access s
 JOIN devices d ON d.id = s.id;
 DROP TEMPORARY TABLE staging_ingresos_access;

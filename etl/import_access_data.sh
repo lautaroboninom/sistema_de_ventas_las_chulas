@@ -20,6 +20,7 @@ file_path() { cygpath -wa "$1" 2>/dev/null || realpath "$1"; }
 echo "Importando datos Access desde $IN_DIR"
 run_sql "SET NAMES utf8mb4"
 run_sql "SET sql_log_bin=0"
+run_sql "INSERT INTO locations (nombre) SELECT 'Estanteria alquileres' FROM (SELECT 1) AS _tmp WHERE NOT EXISTS (SELECT 1 FROM locations WHERE LOWER(nombre) = LOWER('Estanteria alquileres'))"
 
 # =============== customers.csv (REPLACE) ===============
 if [[ -f "$IN_DIR/customers.csv" ]]; then
@@ -272,8 +273,9 @@ DROP TEMPORARY TABLE IF EXISTS staging_prov_ext;
 CREATE TEMPORARY TABLE staging_prov_ext ( nombre TEXT, contacto TEXT );
 LOAD DATA LOCAL INFILE '${fp//\\/\\\\}' INTO TABLE staging_prov_ext
 CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '\\' LINES TERMINATED BY '\n' IGNORE 1 LINES (nombre, contacto);
-INSERT IGNORE INTO proveedores_externos(nombre, contacto)
-SELECT NULLIF(TRIM(nombre),''), NULLIF(TRIM(contacto),'') FROM staging_prov_ext WHERE NULLIF(TRIM(nombre),'') IS NOT NULL;
+INSERT IGNORE INTO proveedores_externos(nombre, contacto, telefono, email, direccion, notas)
+SELECT NULLIF(TRIM(nombre),''), NULLIF(TRIM(contacto),'') , NULL, NULL, NULL, NULL
+FROM staging_prov_ext WHERE NULLIF(TRIM(nombre),'') IS NOT NULL;
 DROP TEMPORARY TABLE staging_prov_ext;
 SQL
 else
@@ -337,6 +339,7 @@ if [[ -f "$IN_DIR/ingresos_access.csv" ]]; then
   fp=$(file_path "$IN_DIR/ingresos_access.csv")
   "${mysql_cli[@]}" --local-infile=1 <<SQL
 SET FOREIGN_KEY_CHECKS=0;
+SET @loc_stock := (SELECT id FROM locations WHERE LOWER(nombre) = LOWER('Estanteria alquileres') ORDER BY id ASC LIMIT 1);
 DROP TEMPORARY TABLE IF EXISTS staging_ingresos_access;
 CREATE TEMPORARY TABLE staging_ingresos_access (
   id INT,
@@ -356,11 +359,29 @@ LOAD DATA LOCAL INFILE '${fp//\\/\\\\}' INTO TABLE staging_ingresos_access
 CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '\\' LINES TERMINATED BY '\n' IGNORE 1 LINES
 (id, device_id, estado, motivo, fecha_ingreso, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado);
 
-REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
-SELECT s.id, s.device_id, s.estado, s.motivo,
-       STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s'),
-       NULLIF(s.informe_preliminar,''), NULLIF(s.accesorios,''), NULLIF(s.remito_ingreso,''), NULLIF(s.comentarios,''), NULLIF(s.propietario_nombre,''), NULLIF(s.propietario_contacto,''),
-       CASE WHEN s.presupuesto_estado IN ('pendiente','emitido','aprobado','rechazado','presupuestado') THEN s.presupuesto_estado ELSE 'pendiente' END
+REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, ubicacion_id, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
+SELECT
+  s.id,
+  s.device_id,
+  CASE
+    WHEN LOWER(TRIM(s.estado)) IN ('ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','derivado','liberado','alquilado') THEN LOWER(TRIM(s.estado))
+    WHEN TRIM(s.estado) IN ('6','06','006') THEN 'ingresado'
+    WHEN LOWER(TRIM(s.estado)) = 'deposito' THEN 'ingresado'
+    ELSE 'ingresado'
+  END,
+  s.motivo,
+  CASE WHEN NULLIF(s.fecha_ingreso,'') <> '' THEN STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s') ELSE NULL END,
+  CASE
+    WHEN @loc_stock IS NOT NULL AND (TRIM(s.estado) IN ('6','06','006') OR LOWER(TRIM(s.estado)) = 'deposito') THEN @loc_stock
+    ELSE NULL
+  END,
+  NULLIF(s.informe_preliminar,''),
+  NULLIF(s.accesorios,''),
+  NULLIF(s.remito_ingreso,''),
+  NULLIF(s.comentarios,''),
+  NULLIF(s.propietario_nombre,''),
+  NULLIF(s.propietario_contacto,''),
+  CASE WHEN s.presupuesto_estado IN ('pendiente','emitido','aprobado','rechazado','presupuestado') THEN s.presupuesto_estado ELSE 'pendiente' END
 FROM staging_ingresos_access s;
 DROP TEMPORARY TABLE staging_ingresos_access;
 SET FOREIGN_KEY_CHECKS=1;
