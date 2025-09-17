@@ -57,7 +57,7 @@ export default function Login() {
           className="h-12 object-contain"
           onError={(e) => {
             e.currentTarget.onerror = null;
-            e.currentTarget.src = "/icons/logo-empresa-180.png";
+            e.currentTarget.src = "/icons/logo-app-180.png";
           }}
         />
       </div>
