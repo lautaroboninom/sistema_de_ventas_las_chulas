@@ -25,6 +25,8 @@ import {
 import { canActAsTech, canRelease, hasAnyRole, ROLES } from "../lib/authz";
 import { RESOLUCION, RESOLUCION_OPTIONS, resolutionLabel } from "../lib/constants";
 
+import IngresoPhotos from "../components/IngresoPhotos";
+
 // UI helpers
 const Row = ({ label, children, className = "" }) => (
   <div className={`flex gap-3 py-1 ${className}`}>
@@ -62,7 +64,7 @@ export default function ServiceSheet() {
   const release = canRelease(user);
   const canEditBasics = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]);
   const [editBasics, setEditBasics] = useState(false);
-  const canSeeHistory = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]);
+  const canSeeHistory = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO]);
   const [formBasics, setFormBasics] = useState(null); // valores en edición local
   const [savingBasics, setSavingBasics] = useState(false);
 
@@ -482,6 +484,11 @@ export default function ServiceSheet() {
 
   if (!data) return <div className="p-4">Cargando...</div>;
   const isAprobado = data.presupuesto_estado === "aprobado";
+
+  const userId = Number(user?.id || 0);
+  const canManagePhotos = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) ||
+    (user?.rol === ROLES.TECNICO && userId && data?.asignado_a === userId);
+
 
   return (
     <div className="max-w-6xl mx-auto p-4">
@@ -996,6 +1003,8 @@ export default function ServiceSheet() {
               </button>
             </div>
           </div>
+
+          <IngresoPhotos ingresoId={Number(id)} canManage={canManagePhotos} />
 
           <Row label="Faja de garantía N°">
             <input
