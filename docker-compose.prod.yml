@@ -73,6 +73,7 @@ services:
       gunicorn app.wsgi:application -w 3 -k gthread --threads 8 -b 0.0.0.0:8000"
     volumes:
       - staticfiles:/app/staticfiles
+      - mediafiles:/app/media
       - type: bind
         source: ${QUOTES_HOST_DIR:-./quotes}
         target: /quotes
@@ -127,3 +128,4 @@ networks:
 volumes:
   mysql_data:
   staticfiles:
+  mediafiles:
