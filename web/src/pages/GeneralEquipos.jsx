@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, modeloSerieVarianteOf } from "../lib/ui-helpers";
 
 
 // Ajustá si tu backend usa otra ruta (histórico completo)
@@ -24,8 +24,8 @@ export default function GeneralEquipos() {
       // Si tu API ya ordena por fecha, podés omitir el sort local:
       const safe = Array.isArray(data) ? data : [];
       safe.sort((a, b) => {
-        const da = new Date(a?.fecha_ingreso ?? 0).getTime();
-        const db = new Date(b?.fecha_ingreso ?? 0).getTime();
+        const da = new Date(resolveFechaCreacion(a) ?? 0).getTime();
+        const db = new Date(resolveFechaCreacion(b) ?? 0).getTime();
         return db - da; // más recientes primero
       });
       setRows(safe);
@@ -49,7 +49,7 @@ export default function GeneralEquipos() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        row?.modelo ?? row?.equipo?.modelo,
+        modeloSerieVarianteOf(row),
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
@@ -142,12 +142,12 @@ export default function GeneralEquipos() {
                     {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
                   </td>
                   <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                  <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                  <td className="p-2">{modeloSerieVarianteOf(row) ?? "-"}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">{row?.estado ?? "-"}</td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
                   <td className="p-2">{row?.ubicacion_nombre ?? "-"}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_ingreso)}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">
                     {formatDateTime(
                       row?.fecha_actualizacion ??

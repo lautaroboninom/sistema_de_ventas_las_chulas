@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { getClientes } from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, modeloSerieVarianteOf } from "../lib/ui-helpers";
 
 
 
@@ -46,8 +46,8 @@ export default function GeneralPorCliente() {
       const list = Array.isArray(data) ? data : [];
       // Si necesitás ordenar por fecha de ingreso (recientes primero):
       list.sort((a, b) => {
-        const da = new Date(a?.fecha_ingreso ?? 0).getTime();
-        const db = new Date(b?.fecha_ingreso ?? 0).getTime();
+        const da = new Date(resolveFechaCreacion(a) ?? 0).getTime();
+        const db = new Date(resolveFechaCreacion(b) ?? 0).getTime();
         return db - da;
       });
       setRows(list);
@@ -66,7 +66,7 @@ export default function GeneralPorCliente() {
       const campos = [
         formatOS(row),
         row?.marca ?? row?.equipo?.marca,
-        row?.modelo ?? row?.equipo?.modelo,
+        modeloSerieVarianteOf(row),
         tipoEquipoOf(row),
         row?.estado,
         row?.presupuesto_estado,
@@ -182,14 +182,14 @@ export default function GeneralPorCliente() {
                   <td className="p-2">
                     {(row?.marca ?? row?.equipo?.marca ?? "-") +
                       " " +
-                      (row?.modelo ?? row?.equipo?.modelo ?? "")}
+                      (modeloSerieVarianteOf(row) ?? "")}
                   </td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
                   <td className="p-2">{row?.estado ?? "-"}</td>
                   <td className="p-2">{row?.presupuesto_estado ?? "-"}</td>
                   <td className="p-2">{row?.ubicacion_nombre ?? row?.ubicacion_id ?? "-"}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_ingreso)}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">
                     {formatDateTime(
                       row?.fecha_actualizacion ??

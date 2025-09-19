@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { getTecnicos } from "../lib/api";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, modeloSerieVarianteOf } from "../lib/ui-helpers";
+import StatusChip from "../components/StatusChip.jsx";
 
 
 export default function PendientesPorTecnico() {
@@ -69,9 +70,9 @@ export default function PendientesPorTecnico() {
                   <td className="p-2">{row.marca}</td>
                   <td className="p-2">{row.modelo}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
-                  <td className="p-2">{row.estado}</td>
+                  <td className="p-2"><StatusChip value={row.estado} /></td>
                   <td className="p-2">{row.numero_serie}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row.fecha_ingreso)}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                 </tr>
               ))}
             </tbody>

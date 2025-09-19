@@ -2,14 +2,13 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import {
-  ingresoIdOf,
+import { ingresoIdOf,
   formatOS,
   formatDateTime,
   norm,
   tipoEquipoOf,
   formatMoney,
-} from "../lib/ui-helpers";
+  resolveFechaCreacion,, modeloSerieVarianteOf } from "../lib/ui-helpers";
 
 // ENDPOINT para "presupuestados" (ya emitidos/enviados)
 const ENDPOINT = "/api/ingresos/presupuestados/"; // <-- AJUSTAR si tu API usa otra ruta
@@ -31,8 +30,8 @@ export default function JefePresupuestos() {
       const list = Array.isArray(data) ? data : [];
       // Orden sugerido: más recientes primero por fecha de emisión/envío o ingreso
       list.sort((a, b) => {
-        const da = new Date(a?.presupuesto_fecha_envio ?? a?.presupuesto_fecha_emision ?? a?.fecha_ingreso ?? 0).getTime();
-        const db = new Date(b?.presupuesto_fecha_envio ?? b?.presupuesto_fecha_emision ?? b?.fecha_ingreso ?? 0).getTime();
+        const da = new Date(a?.presupuesto_fecha_envio ?? a?.presupuesto_fecha_emision ?? resolveFechaCreacion(a) ?? 0).getTime();
+        const db = new Date(b?.presupuesto_fecha_envio ?? b?.presupuesto_fecha_emision ?? resolveFechaCreacion(b) ?? 0).getTime();
         return db - da;
       });
       setRows(list);
@@ -56,12 +55,10 @@ export default function JefePresupuestos() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        row?.modelo ?? row?.equipo?.modelo,
+        modeloSerieVarianteOf(row),
         tipoEquipoOf(row),
         row?.estado,
-        row?.presupuesto_estado,
         row?.numero_serie,
-        String(row?.presupuesto_numero ?? ""),
         String(row?.presupuesto_monto ?? row?.presupuesto_total ?? ""),
       ];
       return campos.some((c) => norm(c).includes(needle));
@@ -145,8 +142,6 @@ export default function JefePresupuestos() {
                 <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
-                <th scope="col" className="p-2">Presupuesto #</th>
-                <th scope="col" className="p-2">Estado presupuesto</th>
                 <th scope="col" className="p-2">Monto</th>
                 <th scope="col" className="p-2">Fecha emisión</th>
                 <th scope="col" className="p-2 text-right">Acciones</th>
@@ -174,12 +169,10 @@ export default function JefePresupuestos() {
                       {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
                     </td>
                     <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                    <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                    <td className="p-2">{modeloSerieVarianteOf(row) ?? "-"}</td>
                     <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2">{row?.numero_serie ?? "-"}</td>
                     <td className="p-2">{row?.estado ?? "-"}</td>
-                    <td className="p-2">{row?.presupuesto_numero ?? row?.quote_number ?? "-"}</td>
-                    <td className="p-2">{row?.presupuesto_estado ?? row?.quote_status ?? "-"}</td>
                     <td className="p-2">{formatMoney(monto, moneda)}</td>
                     <td className="p-2 whitespace-nowrap">
                       {formatDateTime(row?.presupuesto_fecha_emision ?? row?.fecha_emision)}

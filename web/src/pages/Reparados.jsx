@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, modeloSerieVarianteOf } from "../lib/ui-helpers";
+import StatusChip from "../components/StatusChip.jsx";
 
 // Ajustá si tu backend usa otra ruta
 
@@ -43,7 +44,7 @@ export default function Reparados() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        row?.modelo ?? row?.equipo?.modelo,
+        modeloSerieVarianteOf(row),
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
@@ -130,11 +131,13 @@ export default function Reparados() {
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                   <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                  <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                  <td className="p-2">{modeloSerieVarianteOf(row) ?? "-"}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
-                  <td className="p-2">{row?.estado ?? "-"}</td>
+                  <td className="p-2">
+                    <StatusChip value={row?.estado} />
+                  </td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_ingreso)}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">
                     {formatDateTime(
                       row?.fecha_reparado ??

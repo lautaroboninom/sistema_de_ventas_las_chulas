@@ -2,7 +2,9 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, modeloSerieVarianteOf } from "../lib/ui-helpers";
+import StatusChip from "../components/StatusChip.jsx";
+import { resolutionLabel } from "../lib/constants";
 
 
 // Ajustá si tu backend usa otra ruta
@@ -52,11 +54,12 @@ export default function AdminListos() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        row?.modelo ?? row?.equipo?.modelo,
+        modeloSerieVarianteOf(row),
         tipoEquipoOf(row),
         row?.estado,
+        row?.resolucion,
+        resolutionLabel(row?.resolucion ?? ""),
         row?.numero_serie,
-        row?.ubicacion_nombre ?? String(row?.ubicacion_id ?? ""),
       ];
       return campos.some((c) => norm(c).includes(needle));
     });
@@ -104,7 +107,7 @@ export default function AdminListos() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, equipo, serie, estado…"
+          placeholder="Filtrar por OS, cliente, equipo, serie, resolución…"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar listos para retiro"
         />
@@ -133,9 +136,8 @@ export default function AdminListos() {
                 <th scope="col" className="p-2">Marca</th>
                 <th scope="col" className="p-2">Modelo</th>
                 <th scope="col" className="p-2">Tipo</th>
-                <th scope="col" className="p-2">Estado</th>
+                <th scope="col" className="p-2">Resolución</th>
                 <th scope="col" className="p-2">Serie</th>
-                <th scope="col" className="p-2">Ubicación</th>
                 <th scope="col" className="p-2">Fecha listo</th>
                 <th scope="col" className="p-2 text-right">Acciones</th>
               </tr>
@@ -155,11 +157,12 @@ export default function AdminListos() {
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                   <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                  <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                  <td className="p-2">{modeloSerieVarianteOf(row) ?? "-"}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
-                  <td className="p-2">{row?.estado ?? "-"}</td>
+                  <td className="p-2">
+                    <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolución" />
+                  </td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
-                  <td className="p-2">{row?.ubicacion_nombre ?? row?.ubicacion_id ?? "-"}</td>
                   <td className="p-2 whitespace-nowrap">
                     {formatDateTime(row?.fecha_listo ?? row?.fecha_reparado ?? row?.fecha_estado)}
                   </td>
