@@ -1,15 +1,15 @@
   // web/src/lib/api.js
 
   // === BASE del API robusto ===
-  // 1) Si está definida VITE_API_URL, la usamos.
-  // 2) Si no, caemos al host actual pero en puerto 8000 (útil en LAN).
+  // 1) Si est├í definida VITE_API_URL, la usamos.
+  // 2) Si no, caemos al host actual pero en puerto 8000 (├║til en LAN).
   const API_FALLBACK = `${window.location.protocol}//${window.location.hostname}:8000`;
   const isDevVite = window.location.port === "5173";
   const BASE =
     import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ||
     (isDevVite
       ? `${window.location.protocol}//${window.location.hostname}:8000`
-      : ""); // producción: mismo origen + rutas /api/ relativas
+      : ""); // producci├│n: mismo origen + rutas /api/ relativas
 
   /* ===== Token en memoria (compatibilidad) ===== */
   let token = null;
@@ -88,14 +88,14 @@
   export const postUsuario = (payload) => api.post("/api/usuarios/", payload);
   export const patchUsuarioActivo = (id, activo) =>
     api.patch(`/api/usuarios/${id}/activar/`, { activo });
-  // Enviar enlace de restablecimiento/invitación por email
+  // Enviar enlace de restablecimiento/invitaci├│n por email
   export const patchUsuarioReset = (id) =>
     api.patch(`/api/usuarios/${id}/reset-pass/`, {});
   export const patchUsuarioRolePerm = (id, payload) =>
     api.patch(`/api/usuarios/${id}/roleperm/`, payload);
   export const deleteUsuario = (id) => api.del(`/api/usuarios/${id}/`);
 
-  /* =============== CATÁLOGOS =============== */
+  /* =============== CAT├üLOGOS =============== */
   export const getClientes = () => api.get("/api/catalogos/clientes/");
   export const postCliente = (payload) =>
     api.post("/api/catalogos/clientes/", payload);
@@ -107,6 +107,70 @@
     api.post("/api/catalogos/marcas/", { nombre });
   export const deleteMarca = (id) =>
     api.del(`/api/catalogos/marcas/${id}/`);
+
+export const getCatalogBrandsV2 = () => api.get("/api/catalogo/marcas/");
+export const getCatalogTypes = (brandId) => {
+  if (brandId === undefined || brandId === null || brandId === "") {
+    return Promise.reject(new Error("brandId requerido"));
+  }
+  const params = new URLSearchParams({ marca_id: String(brandId) });
+  return api.get(`/api/catalogo/tipos/?${params.toString()}`);
+};
+export const createCatalogType = (brandId, name) =>
+  api.post("/api/catalogo/tipos/", { marca_id: Number(brandId), name });
+export const updateCatalogType = (typeId, payload) =>
+  api.patch(`/api/catalogo/tipos/${typeId}/`, payload);
+export const deleteCatalogType = (typeId) =>
+  api.del(`/api/catalogo/tipos/${typeId}/`);
+
+export const getCatalogSeries = (brandId, typeId) => {
+  if (
+    brandId === undefined || brandId === null || brandId === "" ||
+    typeId === undefined || typeId === null || typeId === ""
+  ) {
+    return Promise.reject(new Error("Parametros incompletos"));
+  }
+  const params = new URLSearchParams({
+    marca_id: String(brandId),
+    tipo_id: String(typeId),
+  });
+  return api.get(`/api/catalogo/modelos/?${params.toString()}`);
+};
+export const createCatalogSeries = (brandId, typeId, payload) =>
+  api.post("/api/catalogo/modelos/", {
+    marca_id: Number(brandId),
+    tipo_id: Number(typeId),
+    ...payload,
+  });
+export const updateCatalogSeries = (seriesId, payload) =>
+  api.patch(`/api/catalogo/modelos/${seriesId}/`, payload);
+export const deleteCatalogSeries = (seriesId) =>
+  api.del(`/api/catalogo/modelos/${seriesId}/`);
+
+export const getCatalogVariants = (brandId, typeId, seriesId) => {
+  if (
+    brandId === undefined || brandId === null || brandId === "" ||
+    typeId === undefined || typeId === null || typeId === "" ||
+    seriesId === undefined || seriesId === null || seriesId === ""
+  ) {
+    return Promise.reject(new Error("Parametros incompletos"));
+  }
+  const params = new URLSearchParams({
+    marca_id: String(brandId),
+    tipo_id: String(typeId),
+    serie_id: String(seriesId),
+  });
+  return api.get(`/api/catalogo/variantes/?${params.toString()}`);
+};
+export const createCatalogVariant = (payload) =>
+  api.post("/api/catalogo/variantes/", payload);
+export const updateCatalogVariant = (variantId, payload) =>
+  api.patch(`/api/catalogo/variantes/${variantId}/`, payload);
+export const deleteCatalogVariant = (variantId) =>
+  api.del(`/api/catalogo/variantes/${variantId}/`);
+
+export const composeCatalogSelection = (payload) =>
+  api.post("/api/catalogo/compose/", payload);
 
   export const getTiposEquipo = () =>
     api.get("/api/catalogos/tipos-equipo/");
@@ -190,7 +254,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const deleteIngresoFoto = (ingresoId, mediaId) =>
     api.del(`/api/ingresos/${ingresoId}/fotos/${mediaId}/`);
 
-  // Búsqueda por referencia de accesorio
+  // B├║squeda por referencia de accesorio
   export const buscarAccesorioPorRef = (ref) =>
     api.get(`/api/accesorios/buscar/?ref=${encodeURIComponent(ref||"")}`);
   // Entregar (requiere remito; opcional factura y fecha)
@@ -209,7 +273,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/equipos/${qs ? `?${qs}` : ""}`);
   };
-  // Check garantía de reparación por N/S
+  // Check garant├¡a de reparaci├│n por N/S
   export const checkGarantiaReparacion = (numero_serie) =>
     api.get(`/api/equipos/garantia-reparacion/?numero_serie=${encodeURIComponent(numero_serie||"")}`);
   export const getGeneralPorCliente = (customerId) =>
@@ -235,7 +299,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const patchMarcaTecnico = (marcaId, tecnico_id) =>
     api.patch(`/api/catalogos/marcas/${marcaId}/tecnico/`, { tecnico_id });
 
-  // Aplica el técnico de la marca a TODOS los modelos (sobrescribe)
+  // Aplica el t├®cnico de la marca a TODOS los modelos (sobrescribe)
   export const postMarcaAplicarTecnico = (marcaId) =>
     api.post(`/api/catalogos/marcas/${marcaId}/tecnico/aplicar-a-modelos/`);
 
@@ -286,7 +350,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const postQuoteAnular = (ingresoId) =>
     api.post(`/api/quotes/${ingresoId}/anular/`);
 
-  // Cerrar reparación (setea la resolución)
+  // Cerrar reparaci├│n (setea la resoluci├│n)
   export async function postCerrarReparacion(id, body) {
     // body = { resolucion: "reparado" | "no_reparado" | "no_se_encontro_falla" | "presupuesto_rechazado" }
     return api.post(`/api/ingresos/${id}/cerrar/`, body);
