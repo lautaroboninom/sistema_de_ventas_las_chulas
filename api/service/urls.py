@@ -24,7 +24,6 @@ from .views import (
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView, CatalogoMotivosView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
-    CatalogoMarcasSimpleView, CatalogoTiposEquipoV2View, CatalogoSeriesView, CatalogoVariantesView, CatalogoComposeView, CatalogoMarcaTreeView,
 
     # administraciÃ³n de usuarios
     UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
@@ -100,16 +99,6 @@ urlpatterns = [
     path("catalogos/accesorios/", CatalogoAccesoriosView.as_view()),
     path("catalogos/proveedores-externos/", ProveedoresExternosView.as_view()),
     path("catalogos/proveedores-externos/<int:pid>/", ProveedoresExternosView.as_view()),
-    path("catalogo/marcas/", CatalogoMarcasSimpleView.as_view()),
-    path("catalogo/tipos/", CatalogoTiposEquipoV2View.as_view()),
-    path("catalogo/modelos/", CatalogoSeriesView.as_view()),
-    path("catalogo/variantes/", CatalogoVariantesView.as_view()),
-    path("catalogo/compose/", CatalogoComposeView.as_view()),
-    path("catalogo/marcas/<int:marca_id>/arbol/", CatalogoMarcaTreeView.as_view()),
-    path("catalogo/tipos/<int:tipo_id>/", CatalogoTiposEquipoV2View.as_view()),
-    path("catalogo/modelos/<int:serie_id>/", CatalogoSeriesView.as_view()),
-    path("catalogo/variantes/<int:variante_id>/", CatalogoVariantesView.as_view()),
-
 
 
     # administraciÃ³n de clientes / marcas / modelos

@@ -1,4 +1,4 @@
-﻿// web/src/main.jsx
+// web/src/main.jsx
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
@@ -15,8 +15,6 @@ import AdminListos from "./pages/AdminListos";
 import GeneralPorCliente from "./pages/GeneralPorCliente";
 import Usuarios from "./pages/Usuarios";
 import NuevoIngreso from "./pages/NuevoIngreso";
-import NuevoIngresoV2 from "./pages/NuevoIngresoV2";
-import { featureEnabled } from "@/lib/features";
 import CatalogoClientes from "./pages/CatalogoClientes";
 import CatalogoMarcas from "./pages/CatalogoMarcas";
 import CatalogoProveedores from "./pages/CatalogoProveedores";
@@ -45,8 +43,6 @@ function NotFound() {
     </div>
   );
 }
-
-const NuevoIngresoScreen = featureEnabled("catalog_v2_selects") ? NuevoIngresoV2 : NuevoIngreso;
 
 const router = createBrowserRouter([
   // públicas
@@ -94,7 +90,7 @@ const router = createBrowserRouter([
       {
         path: "tecnico",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe"]}>
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
             <Tecnico />
           </ProtectedRoute>
         ),
@@ -166,7 +162,7 @@ const router = createBrowserRouter([
       {
         path: "alquiler/stock",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin","recepcion","tecnico"]}>
+          <ProtectedRoute roles={["jefe","admin","recepcion","tecnico"]}>
             <StockAlquiler />
           </ProtectedRoute>
         ),
@@ -203,7 +199,7 @@ const router = createBrowserRouter([
         path: "ingresos/nuevo",
         element: (
           <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
-            <NuevoIngresoScreen />
+            <NuevoIngreso />
           </ProtectedRoute>
         ),
       },
@@ -284,5 +280,3 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
     });
   });
 }
-
-
