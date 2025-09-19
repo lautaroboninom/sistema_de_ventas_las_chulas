@@ -9,7 +9,7 @@ from django.core.cache import cache
 from django.core.mail import send_mail
 from django.core.files.storage import default_storage
 from django.utils import timezone
-from django.http import HttpResponse, FileResponse
+from django.http import HttpResponse, FileResponse, Http404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -17,7 +17,7 @@ from rest_framework import permissions
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.exceptions import PermissionDenied, ValidationError, AuthenticationFailed
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_datetime, parse_date
 from django.contrib.auth.hashers import make_password
 from .auth import issue_token, verify_hash, JWT_TTL_MIN as AUTH_JWT_TTL_MIN
 from .ip_utils import get_client_ip
@@ -32,6 +32,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from .pdf import ( render_quote_pdf, render_remito_salida_pdf)
 from .media_utils import (process_upload, save_processed_image, delete_media_paths, MediaValidationError, MediaProcessingError)
 logger = logging.getLogger(__name__)
+logger_uiux = logging.getLogger("service.uiux")
 
 TOKEN_TTL_MIN = 30       # vence en 30 minutos
 COOLDOWN_MIN  = 1       # máx 1 mail cada 1 minutos por usuario
@@ -170,15 +171,249 @@ def last_insert_id():
         row = q("SELECT LAST_INSERT_ID() AS id", one=True)
     return row and row.get("id")
 
+
+
+class RateLimitExceeded(Exception):
+    pass
+
+
+def feature_enabled(name: str) -> bool:
+    return bool(getattr(settings, "FEATURE_FLAGS", {}).get(name))
+
+
+def _catalog_feature_enabled() -> bool:
+    return feature_enabled("catalog_v2_selects")
+
+
+def _require_catalog_feature():
+    if not _catalog_feature_enabled():
+        raise Http404()
+
+
+def _catalog_cache_key(scope: str, *parts) -> str:
+    suffix = ":".join(str(p) for p in parts if p is not None)
+    return f"catalog_v2:{scope}:{suffix}" if suffix else f"catalog_v2:{scope}"
+
+
+def _catalog_get_cached(scope: str, loader, ttl: int = 300, *parts):
+    key = _catalog_cache_key(scope, *parts)
+    try:
+        cached = cache.get(key)
+    except Exception:
+        cached = None
+    if cached is None:
+        data = loader()
+        try:
+            cache.set(key, data, ttl)
+        except Exception:
+            logger.debug('No se pudo cachear catálogo %s', scope, exc_info=True)
+        return data
+    return cached
+
+
+def _catalog_invalidate(*keys):
+    for key in keys:
+        try:
+            cache.delete(key)
+        except Exception:
+            logger.debug('No se pudo invalidar cache %s', key, exc_info=True)
+
+
+def _catalog_rate_key(request, scope: str, extra: str = "") -> str:
+    user_id = _current_user_id(request)
+    if user_id:
+        ident = f"user:{user_id}"
+    else:
+        ident = f"ip:{get_client_ip(request) or 'anon'}"
+    return f"catalog_v2:{scope}:{ident}:{extra}"
+
+
+def enforce_catalog_rate_limit(request, scope: str, limit: int = 60, window: int = 60):
+    key = _catalog_rate_key(request, scope)
+    try:
+        current = cache.get(key, 0) or 0
+        if current >= limit:
+            raise RateLimitExceeded()
+        cache.set(key, current + 1, window)
+    except RateLimitExceeded:
+        raise
+    except Exception:
+        logger.debug('No se pudo aplicar rate limit en catálogo %s', scope, exc_info=True)
+
+
+def _as_int(value, field: str, allow_null: bool = False):
+    if value in (None, "", "null"):
+        if allow_null:
+            return None
+        raise ValidationError({field: 'requerido'})
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValidationError({field: 'inválido'})
+
 def _fetchall_dicts(cur):
     cols = [c[0] for c in cur.description]
     return [_fix_row(dict(zip(cols, row))) for row in cur.fetchall()]
 
 
-MEDIA_VIEW_ROLES = {"jefe", "admin", "jefe_veedor", "recepcion", "tecnico"}
-MEDIA_MANAGE_ROLES = {"jefe", "admin", "jefe_veedor", "tecnico"}
+MEDIA_VIEW_ROLES
 
-MEDIA_SELECT_BASE = """
+def _normalize_catalog_value(value: str) -> str:
+    if value is None:
+        return ''
+    return ' '.join(str(value).strip().split())
+
+
+def _canon(value: str) -> str:
+    return _normalize_catalog_value(value).upper()
+
+
+def resolve_catalog_hierarchy(brand_id: int, type_id: int, series_id: int, variant_id=None):
+    brand = q("SELECT id, nombre FROM marcas WHERE id=%s", [brand_id], one=True)
+    if not brand:
+        raise ValidationError({"brand_id": "marca inexistente"})
+    tipo = q(
+        """
+        SELECT id, nombre, activo
+        FROM marca_tipos_equipo
+        WHERE id=%s AND marca_id=%s
+        """,
+        [type_id, brand_id],
+        one=True,
+    )
+    if not tipo or not tipo.get("activo"):
+        raise ValidationError({"type_id": "tipo inexistente o inactivo"})
+    serie = q(
+        """
+        SELECT id, nombre, activo
+        FROM marca_series
+        WHERE id=%s AND marca_id=%s AND tipo_id=%s
+        """,
+        [series_id, brand_id, type_id],
+        one=True,
+    )
+    if not serie or not serie.get("activo"):
+        raise ValidationError({"series_id": "modelo/serie inexistente o inactivo"})
+    variant_row = None
+    if variant_id not in (None, "", "null"):
+        variant_id = int(variant_id)
+        variant_row = q(
+            """
+            SELECT id, nombre, activo
+            FROM marca_series_variantes
+            WHERE id=%s AND marca_id=%s AND tipo_id=%s AND serie_id=%s
+            """,
+            [variant_id, brand_id, type_id, series_id],
+            one=True,
+        )
+        if not variant_row or not variant_row.get("activo"):
+            raise ValidationError({"variant_id": "variante inexistente o inactiva"})
+    else:
+        variant_id = None
+
+    brand_name = _normalize_catalog_value(brand.get("nombre"))
+    type_name = _normalize_catalog_value(tipo.get("nombre"))
+    series_name = _normalize_catalog_value(serie.get("nombre"))
+    variant_name = _normalize_catalog_value((variant_row or {}).get("nombre"))
+
+    type_label = _canon(type_name)
+    series_label = _canon(series_name)
+    variant_label = _canon(variant_name) if variant_name else ''
+    brand_label = _canon(brand_name)
+
+    serie_variant_display = series_label
+    if variant_label:
+        serie_variant_display = f"{series_label} {variant_label}".strip()
+
+    type_model_label = type_label
+    if series_label:
+        type_model_label = f"{type_label} {series_label}".strip()
+    if variant_label:
+        type_model_label = f"{type_model_label} {variant_label}".strip()
+
+    full_model_name = brand_label
+    if type_label:
+        full_model_name = f"{full_model_name} {type_label}".strip()
+    if series_label:
+        full_model_name = f"{full_model_name} {series_label}".strip()
+    if variant_label:
+        full_model_name = f"{full_model_name} {variant_label}".strip()
+
+    return {
+        "brand_id": brand_id,
+        "brand_name": brand_name,
+        "brand_label": brand_label,
+        "type_id": type_id,
+        "type_name": type_name,
+        "type_label": type_label,
+        "series_id": series_id,
+        "series_name": series_name,
+        "series_label": series_label,
+        "variant_id": variant_id,
+        "variant_name": variant_name,
+        "variant_label": variant_label,
+        "type_model_label": type_model_label,
+        "serie_variant_label": serie_variant_display,
+        "full_model_name": full_model_name,
+    }
+
+
+def ensure_model_hierarchy(mapping: dict) -> int:
+    brand_id = mapping["brand_id"]
+    type_id = mapping["type_id"]
+    series_id = mapping["series_id"]
+    variant_id = mapping.get("variant_id")
+    type_label = mapping["type_label"]
+    type_model_label = mapping["type_model_label"]
+
+    params = [brand_id, type_id, series_id, variant_id, variant_id]
+    mapping_row = q(
+        """
+        SELECT mh.model_id
+        FROM model_hierarchy mh
+        WHERE mh.marca_id=%s
+          AND mh.tipo_id=%s
+          AND mh.serie_id=%s
+          AND ((mh.variante_id IS NULL AND %s IS NULL) OR mh.variante_id = %s)
+        LIMIT 1
+        """,
+        params,
+        one=True,
+    )
+    if mapping_row and mapping_row.get("model_id"):
+        model_id = mapping_row["model_id"]
+    else:
+        row_by_name = q(
+            "SELECT id FROM models WHERE marca_id=%s AND UPPER(nombre)=UPPER(%s) LIMIT 1",
+            [brand_id, type_model_label],
+            one=True,
+        )
+        if row_by_name:
+            model_id = row_by_name["id"]
+        else:
+            exec_void(
+                "INSERT INTO models (marca_id, nombre, tipo_equipo) VALUES (%s, %s, %s)",
+                [brand_id, type_model_label, type_label],
+            )
+            model_id = last_insert_id()
+    exec_void(
+        """
+        INSERT INTO model_hierarchy (model_id, marca_id, tipo_id, serie_id, variante_id, full_name)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            full_name=VALUES(full_name),
+            tipo_id=VALUES(tipo_id),
+            serie_id=VALUES(serie_id),
+            variante_id=VALUES(variante_id),
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        [model_id, brand_id, type_id, series_id, variant_id, type_model_label],
+    )
+    exec_void(
+        "UPDATE models SET tipo_equipo=%s WHERE id=%s",
+        [type_label, model_id],
+    )
+    return model_id
 
 def _fetch_media_row(ingreso_id: int, media_id: int):
     sql = MEDIA_SELECT_BASE + " WHERE im.ingreso_id=%s AND im.id=%s"
@@ -186,21 +421,13 @@ def _fetch_media_row(ingreso_id: int, media_id: int):
 
 
 def _fetch_media_page(ingreso_id: int, limit: int, offset: int):
-    sql = (MEDIA_SELECT_BASE +
-           " WHERE im.ingreso_id=%s"
-           " ORDER BY im.created_at DESC, im.id DESC"
-           " LIMIT %s OFFSET %s")
+    sql = (
+        MEDIA_SELECT_BASE
+        + " WHERE im.ingreso_id=%s"
+        + " ORDER BY im.created_at DESC, im.id DESC"
+        + " LIMIT %s OFFSET %s"
+    )
     return q(sql, [ingreso_id, limit, offset])
-
-    SELECT
-      im.id, im.ingreso_id, im.usuario_id,
-      COALESCE(u.nombre, '') AS usuario_nombre,
-      im.comentario, im.mime_type, im.size_bytes, im.width, im.height,
-      im.original_name, im.storage_path, im.thumbnail_path,
-      im.created_at, im.updated_at
-    FROM ingreso_media im
-    LEFT JOIN users u ON u.id = im.usuario_id
-"""
 
 
 def _current_user_id(request):
@@ -237,6 +464,18 @@ def _ensure_media_manage_perm(request, ingreso_row):
 
 def _serialize_media_row(row, ingreso_id: int, request=None):
     base_path = f"/api/ingresos/{ingreso_id}/fotos/{row['id']}"
+
+    def _abs(path: str) -> str:
+        if request is not None:
+            try:
+                return request.build_absolute_uri(path)
+            except Exception:
+                pass
+        try:
+            return _frontend_url(request, path)
+        except Exception:
+            return path
+
     item = {
         "id": row.get("id"),
         "ingreso_id": ingreso_id,
@@ -248,8 +487,8 @@ def _serialize_media_row(row, ingreso_id: int, request=None):
         "width": row.get("width"),
         "height": row.get("height"),
         "original_name": row.get("original_name"),
-        "url": base_path + "/archivo/",
-        "thumbnail_url": base_path + "/miniatura/",
+        "url": _abs(base_path + "/archivo/"),
+        "thumbnail_url": _abs(base_path + "/miniatura/"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -307,6 +546,10 @@ def ensure_default_locations():
 # Helpers auth/roles
 def _rol(request):
     return getattr(request.user, "rol", None) or (getattr(request.user, "data", {}) or {}).get("rol")
+
+# ---------------------------------------
+# Marcas/modelos: normalizaciones puntuales
+
 
 def require_roles(request, roles):
     r = _rol(request)
@@ -628,6 +871,7 @@ class MisPendientesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["jefe", "tecnico","jefe_veedor"])
+        _set_audit_user(request)
         with connection.cursor() as cur:
             _set_audit_user(request)
             cur.execute("""
@@ -638,15 +882,20 @@ class MisPendientesView(APIView):
                      c.razon_social,
                      d.numero_serie,
                      COALESCE(b.nombre,'') AS marca,
-                     COALESCE(m.nombre,'') AS modelo,
-                     COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                     t.fecha_ingreso,
+                     COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                     COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+                     COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                     t.fecha_creacion,
                      CASE WHEN ed.estado = 'devuelto' THEN true ELSE false END AS derivado_devuelto
               FROM ingresos t
               JOIN devices d ON d.id=t.device_id
               JOIN customers c ON c.id=d.customer_id
               LEFT JOIN marcas b ON b.id=d.marca_id
               LEFT JOIN models m ON m.id=d.model_id
+              LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
               LEFT JOIN locations loc ON loc.id = t.ubicacion_id
               LEFT JOIN (
                 SELECT e.*, ROW_NUMBER() OVER (
@@ -660,7 +909,7 @@ class MisPendientesView(APIView):
               ORDER BY
                  (CASE WHEN ed.estado = 'devuelto' THEN 1 ELSE 0 END) DESC,
                  (t.motivo = 'urgente control') DESC,
-                 t.fecha_ingreso ASC;
+                 t.fecha_creacion ASC;
             """, [
                 getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None),
                 "taller",
@@ -672,6 +921,7 @@ class QuoteDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
         _ensure_quote(ingreso_id)
         data = _load_quote_payload(ingreso_id)
         return Response(QuoteDetailSerializer(data).data)
@@ -683,6 +933,7 @@ class QuoteItemsView(APIView):
 
     def post(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
+        _set_audit_user(request)
         d = request.data or {}
         tipo = (d.get("tipo") or "").strip()
         if tipo not in ("repuesto", "mano_obra", "servicio"):
@@ -717,6 +968,7 @@ class QuoteItemDetailView(APIView):
 
     def patch(self, request, ingreso_id: int, item_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
+        _set_audit_user(request)
         d = request.data or {}
         sets, params = [], []
         if "tipo" in d:
@@ -759,6 +1011,7 @@ class QuoteItemDetailView(APIView):
     def delete(self, request, ingreso_id: int, item_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
         _set_audit_user(request)
+        _set_audit_user(request)
         exec_void("""
           DELETE FROM quote_items qi
           USING quotes q
@@ -778,6 +1031,7 @@ class QuoteResumenView(APIView):
 
     def patch(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
+        _set_audit_user(request)
         mo = request.data.get("mano_obra")
         if mo is None:
             raise ValidationError("mano_obra requerido")
@@ -804,6 +1058,7 @@ class EmitirPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
 
         autorizado_por = (request.data.get("autorizado_por") or "Cliente").strip()
         forma_pago     = (request.data.get("forma_pago") or "A definir").strip()
@@ -865,6 +1120,7 @@ class QuotePdfView(APIView):
 
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
 
         fname, pdf = render_quote_pdf(ingreso_id)   # <- ahora sí, 2 valores
         if not pdf:
@@ -882,6 +1138,7 @@ class AprobarPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         qid = _ensure_quote(ingreso_id)
         _set_audit_user(request)
 
@@ -930,9 +1187,11 @@ class AprobarPresupuestoView(APIView):
                   u.email, COALESCE(u.nombre,'') AS tecnico_nombre,
                   c.razon_social AS cliente,
                   COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                  COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
                   COALESCE(d.numero_serie,'') AS numero_serie
                 FROM ingresos t
                 LEFT JOIN users   u ON u.id = t.asignado_a
@@ -960,7 +1219,7 @@ class AprobarPresupuestoView(APIView):
                     "",
                     f"Abrir hoja de servicio: {link}",
                     "",
-                    "Aviso automático â no responder a este correo.",
+                    "Aviso automático â?? no responder a este correo.",
                 ]
                 body = "\n".join(body_lines)
                 send_mail(subject, body, getattr(settings, 'DEFAULT_FROM_EMAIL', None), [to_email], fail_silently=True)
@@ -987,6 +1246,7 @@ class ComenzarReparacionView(APIView):
     def post(self, request, ingreso_id: int):
         require_roles(request, ["tecnico","jefe","jefe_veedor"])
         _set_audit_user(request)
+        _set_audit_user(request)
         # Si ya está en reparar, OK; si venía de estados previos válidos, permitir; si no, 409
         row = q("SELECT estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row:
@@ -1005,6 +1265,7 @@ class AnularPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin"])
+        _set_audit_user(request)
 
         row = q("SELECT presupuesto_estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row:
@@ -1058,9 +1319,13 @@ class PendientesPresupuestoView(APIView):
                      c.razon_social,
                      d.numero_serie,
                      COALESCE(b.nombre,'') AS marca,
-                     COALESCE(m.nombre,'') AS modelo,
-                     COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                     t.fecha_ingreso,
+                     COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                     COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+                     COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                     t.fecha_creacion,
                      t.fecha_servicio,
                      q.fecha_emitido AS presupuesto_fecha_emision
               FROM ingresos t
@@ -1068,6 +1333,7 @@ class PendientesPresupuestoView(APIView):
               JOIN customers c ON c.id=d.customer_id
               LEFT JOIN marcas b ON b.id=d.marca_id
               LEFT JOIN models m ON m.id=d.model_id
+              LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
               LEFT JOIN quotes q ON q.ingreso_id = t.id
               LEFT JOIN locations loc ON loc.id = t.ubicacion_id
               WHERE t.presupuesto_estado = 'pendiente'
@@ -1095,9 +1361,13 @@ class PresupuestadosView(APIView):
                   c.razon_social,
                   d.numero_serie,
                   COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  t.fecha_ingreso,
+                  COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                  COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+                  COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                  t.fecha_creacion,
                   q.id AS presupuesto_id,
                   q.id AS presupuesto_numero,
                   q.subtotal AS presupuesto_monto,
@@ -1109,6 +1379,7 @@ class PresupuestadosView(APIView):
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
                 LEFT JOIN quotes q ON q.ingreso_id = t.id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE (
@@ -1117,7 +1388,7 @@ class PresupuestadosView(APIView):
                       )
                   AND LOWER(loc.nombre) = LOWER(%s)
                   AND t.estado NOT IN ('entregado','liberado', 'alquilado')
-                ORDER BY COALESCE(q.fecha_emitido, t.fecha_ingreso) ASC;
+                ORDER BY COALESCE(q.fecha_emitido, t.fecha_creacion) ASC;
             """, ["taller"])
             return Response(_fetchall_dicts(cur))
 
@@ -1125,6 +1396,7 @@ class MarcarReparadoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id):
         require_roles(request, ["tecnico","jefe","jefe_veedor"])
+        _set_audit_user(request)
         _set_audit_user(request)
         exec_void("UPDATE ingresos SET estado='reparado' WHERE id=%s", [ingreso_id])
         return Response({"ok": True})
@@ -1135,6 +1407,7 @@ class EntregarIngresoView(APIView):
 
     def post(self, request, ingreso_id: int):
         require_roles(request, ["jefe","jefe_veedor","admin","recepcion"])
+        _set_audit_user(request)
         data = request.data or {}
 
         remito = (data.get("remito_salida") or "").strip()
@@ -1174,23 +1447,27 @@ class GeneralPorClienteView(APIView):
             _set_audit_user(request)
             cur.execute("""
                 SELECT
-                  t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
+                  t.id, t.estado, t.presupuesto_estado, COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso, t.fecha_creacion, t.ubicacion_id,
                   COALESCE(loc.nombre,'') AS ubicacion_nombre,
                   c.id AS customer_id, c.razon_social,
                   d.numero_serie,
                   COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo
+                  COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                  COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante
                 FROM ingresos t
                 JOIN devices   d ON d.id = t.device_id
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE c.id = %s
                   AND LOWER(loc.nombre) = LOWER(%s)
                   AND t.estado NOT IN ('entregado', 'alquilado')
-                ORDER BY t.fecha_ingreso DESC;
+                ORDER BY t.fecha_creacion DESC;
             """, [customer_id, "taller"])
             return Response(_fetchall_dicts(cur))
 
@@ -1246,12 +1523,76 @@ class NuevoIngresoView(APIView):
         informe_preliminar = (data.get("informe_preliminar") or "").strip()
         accesorios_text = (data.get("accesorios") or "").strip()
         accesorios_items = data.get("accesorios_items") or []
+        remito_ingreso = (data.get("remito_ingreso") or "").strip()
+        fecha_ingreso_raw = (data.get("fecha_ingreso") or "").strip()
+        fecha_ingreso_dt = None
+        if fecha_ingreso_raw:
+            dt_val = parse_datetime(fecha_ingreso_raw)
+            if not dt_val:
+                date_val = parse_date(fecha_ingreso_raw)
+                if date_val:
+                    dt_val = dt.datetime.combine(date_val, dt.time.min)
+            if not dt_val:
+                return Response({"detail": "fecha_ingreso invalida. Usa formato AAAA-MM-DD o ISO."}, status=400)
+            if timezone.is_naive(dt_val):
+                dt_val = timezone.make_aware(dt_val, timezone.get_default_timezone())
+            fecha_ingreso_dt = dt_val
 
         if not motivo:
             return Response({"detail": "motivo requerido"}, status=400)
-        
-        if not equipo.get("marca_id") or not equipo.get("modelo_id"):
-            return Response({"detail": "equipo.marca_id y equipo.modelo_id son requeridos"}, status=400)
+
+        marca_raw = equipo.get("marca_id")
+        if marca_raw in (None, "", "null"):
+            return Response({"detail": "equipo.marca_id es requerido"}, status=400)
+        try:
+            marca_id = int(marca_raw)
+        except (TypeError, ValueError):
+            return Response({"detail": "equipo.marca_id invalido"}, status=400)
+        equipo["marca_id"] = marca_id
+
+        modelo_raw = equipo.get("modelo_id")
+        tipo_raw = equipo.get("tipo_id")
+        serie_raw = equipo.get("serie_id")
+        variante_raw = equipo.get("variante_id")
+        catalog_enabled = _catalog_feature_enabled()
+        use_hierarchy = catalog_enabled and tipo_raw not in (None, "", "null") and serie_raw not in (None, "", "null")
+        mapping = None
+        full_model_name_payload = (data.get("full_model_name") or equipo.get("full_model_name") or "").strip()
+        if use_hierarchy:
+            tipo_id = _as_int(tipo_raw, "equipo.tipo_id")
+            serie_id = _as_int(serie_raw, "equipo.serie_id")
+            variant_id = None
+            if variante_raw not in (None, "", "null"):
+                variant_id = _as_int(variante_raw, "equipo.variante_id", allow_null=True)
+            mapping = resolve_catalog_hierarchy(marca_id, tipo_id, serie_id, variant_id)
+            modelo_id = ensure_model_hierarchy(mapping)
+            equipo["modelo_id"] = modelo_id
+            equipo["tipo_id"] = tipo_id
+            equipo["serie_id"] = serie_id
+            equipo["variante_id"] = variant_id
+            if not full_model_name_payload:
+                full_model_name_payload = mapping["full_model_name"]
+            equipo["full_model_name"] = full_model_name_payload
+            logger_uiux.info(
+                "catalog_v2_selection submit brand=%s type=%s series=%s variant=%s user=%s",
+                marca_id,
+                tipo_id,
+                serie_id,
+                variant_id or "-",
+                _current_user_id(request) or "-",
+            )
+        else:
+            if modelo_raw in (None, "", "null"):
+                return Response({"detail": "equipo.modelo_id es requerido"}, status=400)
+            try:
+                modelo_id = int(modelo_raw)
+            except (TypeError, ValueError):
+                return Response({"detail": "equipo.modelo_id invalido"}, status=400)
+            equipo["modelo_id"] = modelo_id
+            if full_model_name_payload:
+                equipo["full_model_name"] = full_model_name_payload
+
+        modelo_id = equipo["modelo_id"]
 
         # Cliente
         c = None
@@ -1275,11 +1616,10 @@ class NuevoIngresoView(APIView):
         customer_id = c["id"]
 
         # Marca/Modelo
-        marca = q("SELECT id FROM marcas WHERE id=%s", [equipo["marca_id"]], one=True)
-        model = q("SELECT id FROM models WHERE id=%s AND marca_id=%s", [equipo["modelo_id"], equipo["marca_id"]], one=True)
+        marca = q("SELECT id FROM marcas WHERE id=%s", [marca_id], one=True)
+        model = q("SELECT id FROM models WHERE id=%s AND marca_id=%s", [modelo_id, marca_id], one=True)
         if not marca or not model:
             return Response({"detail": "Marca o modelo inexistente"}, status=400)
-
         # ---- Propietario (opcional) ----
         prop = data.get("propietario") or {}
         prop_nombre   = (prop.get("nombre") or "").strip()
@@ -1292,6 +1632,10 @@ class NuevoIngresoView(APIView):
         dev = q("SELECT id FROM devices WHERE numero_serie=%s", [numero_serie], one=True) if numero_serie else None
         if dev:
             device_id = dev["id"]
+            exec_void(
+                "UPDATE devices SET marca_id=%s, model_id=%s, garantia_bool=%s WHERE id=%s",
+                [equipo["marca_id"], equipo["modelo_id"], garantia_bool, device_id],
+            )
         else:
             if connection.vendor == "postgresql":
                 device_id = exec_returning(
@@ -1315,17 +1659,19 @@ class NuevoIngresoView(APIView):
             exec_void("UPDATE devices SET n_de_control = NULLIF(%s,'') WHERE id=%s", [numero_interno, device_id])
 
         # --- Garantía de reparación por N/S: último ingreso < 90 días ---
-        from django.utils import timezone
         auto_gar_rep = False
         if numero_serie:
             row_last = q("""
-              SELECT MAX(t.fecha_ingreso) AS last_in
+              SELECT MAX(t.fecha_creacion) AS last_in
                 FROM ingresos t
                 JOIN devices d ON d.id = t.device_id
                WHERE d.numero_serie = %s
             """, [numero_serie], one=True)
             last_in = row_last and row_last.get("last_in")
             if last_in:
+                if timezone.is_naive(last_in):
+                    # MySQL devuelve TIMESTAMP sin tz; forzamos la zona configurada
+                    last_in = timezone.make_aware(last_in, timezone.get_default_timezone())
                 delta = (timezone.now() - last_in).days
                 auto_gar_rep = delta <= 90
         garantia_rep_payload = bool(data.get("garantia_reparacion"))
@@ -1338,7 +1684,7 @@ class NuevoIngresoView(APIView):
             tdef = q("SELECT tecnico_id FROM models WHERE id=%s", [equipo["modelo_id"]], one=True)
             tecnico_id = tdef["tecnico_id"] if tdef else None
 
-        # â 3) fallback por marca si el modelo no tiene
+        # â?? 3) fallback por marca si el modelo no tiene
         if not tecnico_id:
             tmarca = q("SELECT tecnico_id FROM marcas WHERE id=%s", [equipo["marca_id"]], one=True)
             tecnico_id = (tmarca or {}).get("tecnico_id")
@@ -1362,18 +1708,20 @@ class NuevoIngresoView(APIView):
                 """
                 INSERT INTO ingresos (
                   device_id, motivo, ubicacion_id, recibido_por, asignado_a,
-                  informe_preliminar, accesorios,
+                  fecha_ingreso,
+                  informe_preliminar, accesorios, remito_ingreso,
                   propietario_nombre, propietario_contacto, propietario_doc,
                   garantia_reparacion
                 )
                 VALUES (%s,%s,%s,%s,%s,
-                        %s,%s,
+                        %s,
+                        %s,%s, NULLIF(%s,''),
                         NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
                         %s)
                 RETURNING id
                 """,
-                [device_id, motivo, ubicacion_id, uid, tecnico_id,
-                 informe_preliminar, accesorios_text,
+                [device_id, motivo, ubicacion_id, uid, tecnico_id, fecha_ingreso_dt,
+                 informe_preliminar, accesorios_text, remito_ingreso,
                  prop_nombre, prop_contacto, prop_doc,
                  garantia_rep_final]
             )
@@ -1382,17 +1730,19 @@ class NuevoIngresoView(APIView):
                 """
                 INSERT INTO ingresos (
                   device_id, motivo, ubicacion_id, recibido_por, asignado_a,
-                  informe_preliminar, accesorios,
+                  fecha_ingreso,
+                  informe_preliminar, accesorios, remito_ingreso,
                   propietario_nombre, propietario_contacto, propietario_doc,
                   garantia_reparacion
                 )
                 VALUES (%s,%s,%s,%s,%s,
-                        %s,%s,
+                        %s,
+                        %s,%s, NULLIF(%s,''),
                         NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
                         %s)
                 """,
-                [device_id, motivo, ubicacion_id, uid, tecnico_id,
-                 informe_preliminar, accesorios_text,
+                [device_id, motivo, ubicacion_id, uid, tecnico_id, fecha_ingreso_dt,
+                 informe_preliminar, accesorios_text, remito_ingreso,
                  prop_nombre, prop_contacto, prop_doc,
                  garantia_rep_final]
             )
@@ -1420,7 +1770,7 @@ class GarantiaReparacionCheckView(APIView):
         if not ns:
             return Response({"within_90_days": False, "last_ingreso": None})
         row = q("""
-          SELECT MAX(t.fecha_ingreso) AS last_in
+          SELECT MAX(t.fecha_creacion) AS last_in
             FROM ingresos t
             JOIN devices d ON d.id = t.device_id
            WHERE d.numero_serie = %s
@@ -1428,7 +1778,6 @@ class GarantiaReparacionCheckView(APIView):
         last_in = row and row.get("last_in")
         if not last_in:
             return Response({"within_90_days": False, "last_ingreso": None})
-        from django.utils import timezone
         within = (timezone.now() - last_in).days <= 90
         return Response({"within_90_days": within, "last_ingreso": last_in})
 # ---------------------------------------
@@ -1449,6 +1798,7 @@ class CatalogoMarcasView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         data = request.data or {}
         nombre = (data.get("nombre") or "").strip()
         if not nombre:
@@ -1523,13 +1873,491 @@ class CatalogoModelosView(APIView):
             SELECT m.id, m.nombre,
                    m.tecnico_id,
                    COALESCE(u.nombre,'') AS tecnico_nombre,
-                   COALESCE(m.tipo_equipo,'') AS tipo_equipo
+                   COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante
             FROM models m
             LEFT JOIN users u ON u.id = m.tecnico_id
             WHERE m.marca_id=%s
             ORDER BY m.nombre
         """, [marca_id])
         return Response(rows)
+
+
+class CatalogoMarcasSimpleView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not _catalog_feature_enabled():
+            return Response([])
+        try:
+            enforce_catalog_rate_limit(request, "marcas", limit=120, window=60)
+        except RateLimitExceeded:
+            return Response({"detail": "demasiadas consultas"}, status=429)
+        rows = _catalog_get_cached("marcas", lambda: q(
+            "SELECT id, nombre FROM marcas ORDER BY nombre"
+        ), 300)
+        data = []
+        for row in rows or []:
+            data.append({
+                "id": row["id"],
+                "name": row["nombre"],
+                "label": _canon(row["nombre"]),
+            })
+        return Response(data)
+
+
+class CatalogoTiposEquipoV2View(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_catalog_feature()
+        marca_id = _as_int(request.GET.get("marca_id"), "marca_id")
+        try:
+            enforce_catalog_rate_limit(request, "tipos", limit=180, window=60)
+        except RateLimitExceeded:
+            return Response({"detail": "demasiadas consultas"}, status=429)
+
+        def loader():
+            return q(
+                """
+                SELECT id, nombre, activo
+                FROM marca_tipos_equipo
+                WHERE marca_id=%s
+                ORDER BY nombre
+                """,
+                [marca_id],
+            )
+
+        rows = _catalog_get_cached("tipos", loader, 300, marca_id)
+        data = []
+        for row in rows or []:
+            data.append({
+                "id": row["id"],
+                "name": row["nombre"],
+                "label": _canon(row["nombre"]),
+                "active": bool(row.get("activo")),
+            })
+        return Response(data)
+
+    def post(self, request):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        data = request.data or {}
+        marca_id = _as_int(data.get("marca_id"), "marca_id")
+        nombre = _normalize_catalog_value(data.get("name") or data.get("nombre") or "")
+        if not nombre:
+            raise ValidationError({"name": "requerido"})
+
+        try:
+            exec_void(
+                "INSERT INTO marca_tipos_equipo (marca_id, nombre, activo) VALUES (%s, %s, true)",
+                [marca_id, nombre],
+            )
+            tipo_id = last_insert_id()
+        except IntegrityError:
+            row = q(
+                "SELECT id FROM marca_tipos_equipo WHERE marca_id=%s AND UPPER(nombre)=UPPER(%s)",
+                [marca_id, nombre],
+                one=True,
+            )
+            if row:
+                tipo_id = row["id"]
+            else:
+                raise
+        _catalog_invalidate(
+            _catalog_cache_key("tipos", marca_id),
+            _catalog_cache_key("marcas"),
+        )
+        return Response({"ok": True, "id": tipo_id}, status=201)
+
+    def patch(self, request, tipo_id: int):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        row = q("SELECT marca_id FROM marca_tipos_equipo WHERE id=%s", [tipo_id], one=True)
+        if not row:
+            return Response(status=404)
+        marca_id = row["marca_id"]
+        data = request.data or {}
+        sets = []
+        params = []
+        if "name" in data or "nombre" in data:
+            nombre = _normalize_catalog_value(data.get("name") or data.get("nombre") or "")
+            if not nombre:
+                raise ValidationError({"name": "requerido"})
+            sets.append("nombre=%s")
+            params.append(nombre)
+        if "active" in data:
+            sets.append("activo=%s")
+            params.append(bool(data.get("active")))
+        if not sets:
+            return Response({"ok": True})
+        params.append(tipo_id)
+        exec_void(f"UPDATE marca_tipos_equipo SET {', '.join(sets)} WHERE id=%s", params)
+        _catalog_invalidate(
+            _catalog_cache_key("tipos", marca_id),
+            _catalog_cache_key("series", marca_id, tipo_id),
+        )
+        return Response({"ok": True})
+
+    def delete(self, request, tipo_id: int):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        row = q("SELECT marca_id FROM marca_tipos_equipo WHERE id=%s", [tipo_id], one=True)
+        if not row:
+            return Response(status=404)
+        marca_id = row["marca_id"]
+        exec_void("UPDATE marca_tipos_equipo SET activo=false WHERE id=%s", [tipo_id])
+        _catalog_invalidate(
+            _catalog_cache_key("tipos", marca_id),
+            _catalog_cache_key("series", marca_id, tipo_id),
+        )
+        return Response({"ok": True})
+
+
+class CatalogoSeriesView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_catalog_feature()
+        marca_id = _as_int(request.GET.get("marca_id"), "marca_id")
+        tipo_id = _as_int(request.GET.get("tipo_id"), "tipo_id")
+        try:
+            enforce_catalog_rate_limit(request, "series", limit=240, window=60)
+        except RateLimitExceeded:
+            return Response({"detail": "demasiadas consultas"}, status=429)
+
+        def loader():
+            return q(
+                """
+                SELECT ms.id, ms.nombre, ms.alias, ms.activo,
+                  (SELECT COUNT(*) FROM marca_series_variantes mv WHERE mv.serie_id = ms.id AND mv.activo) AS variant_count
+                FROM marca_series ms
+                WHERE ms.marca_id=%s AND ms.tipo_id=%s
+                ORDER BY ms.nombre
+                """,
+                [marca_id, tipo_id],
+            )
+
+        rows = _catalog_get_cached("series", loader, 300, marca_id, tipo_id)
+        data = []
+        for row in rows or []:
+            data.append({
+                "id": row["id"],
+                "name": row["nombre"],
+                "label": _canon(row["nombre"]),
+                "alias": row.get("alias") or "",
+                "active": bool(row.get("activo")),
+                "has_variants": (row.get("variant_count") or 0) > 0,
+            })
+        return Response(data)
+
+    def post(self, request):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        data = request.data or {}
+        marca_id = _as_int(data.get("marca_id"), "marca_id")
+        tipo_id = _as_int(data.get("tipo_id"), "tipo_id")
+        nombre = _normalize_catalog_value(data.get("name") or data.get("nombre") or "")
+        alias = _normalize_catalog_value(data.get("alias") or "") or None
+        if not nombre:
+            raise ValidationError({"name": "requerido"})
+        try:
+            exec_void(
+                "INSERT INTO marca_series (marca_id, tipo_id, nombre, alias, activo) VALUES (%s, %s, %s, %s, true)",
+                [marca_id, tipo_id, nombre, alias],
+            )
+            serie_id = last_insert_id()
+        except IntegrityError:
+            row = q(
+                """
+                SELECT id FROM marca_series
+                WHERE marca_id=%s AND tipo_id=%s AND UPPER(nombre)=UPPER(%s)
+                """,
+                [marca_id, tipo_id, nombre],
+                one=True,
+            )
+            if row:
+                serie_id = row["id"]
+            else:
+                raise
+        _catalog_invalidate(
+            _catalog_cache_key("series", marca_id, tipo_id),
+        )
+        return Response({"ok": True, "id": serie_id}, status=201)
+
+    def patch(self, request, serie_id: int):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        row = q("SELECT marca_id, tipo_id FROM marca_series WHERE id=%s", [serie_id], one=True)
+        if not row:
+            return Response(status=404)
+        marca_id = row["marca_id"]
+        tipo_id = row["tipo_id"]
+        data = request.data or {}
+        sets = []
+        params = []
+        if "name" in data or "nombre" in data:
+            nombre = _normalize_catalog_value(data.get("name") or data.get("nombre") or "")
+            if not nombre:
+                raise ValidationError({"name": "requerido"})
+            sets.append("nombre=%s")
+            params.append(nombre)
+        if "alias" in data:
+            alias = _normalize_catalog_value(data.get("alias") or "") or None
+            sets.append("alias=%s")
+            params.append(alias)
+        if "active" in data:
+            sets.append("activo=%s")
+            params.append(bool(data.get("active")))
+        if not sets:
+            return Response({"ok": True})
+        params.append(serie_id)
+        exec_void(f"UPDATE marca_series SET {', '.join(sets)} WHERE id=%s", params)
+        _catalog_invalidate(
+            _catalog_cache_key("series", marca_id, tipo_id),
+            _catalog_cache_key("variantes", marca_id, tipo_id, serie_id),
+        )
+        return Response({"ok": True})
+
+    def delete(self, request, serie_id: int):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        row = q("SELECT marca_id, tipo_id FROM marca_series WHERE id=%s", [serie_id], one=True)
+        if not row:
+            return Response(status=404)
+        marca_id = row["marca_id"]
+        tipo_id = row["tipo_id"]
+        exec_void("UPDATE marca_series SET activo=false WHERE id=%s", [serie_id])
+        _catalog_invalidate(
+            _catalog_cache_key("series", marca_id, tipo_id),
+            _catalog_cache_key("variantes", marca_id, tipo_id, serie_id),
+        )
+        return Response({"ok": True})
+
+
+class CatalogoVariantesView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_catalog_feature()
+        marca_id = _as_int(request.GET.get("marca_id"), "marca_id")
+        tipo_id = _as_int(request.GET.get("tipo_id"), "tipo_id")
+        serie_id = _as_int(request.GET.get("modelo_id") or request.GET.get("serie_id"), "modelo_id")
+        try:
+            enforce_catalog_rate_limit(request, "variantes", limit=240, window=60)
+        except RateLimitExceeded:
+            return Response({"detail": "demasiadas consultas"}, status=429)
+
+        def loader():
+            return q(
+                """
+                SELECT id, nombre, activo
+                FROM marca_series_variantes
+                WHERE marca_id=%s AND tipo_id=%s AND serie_id=%s
+                ORDER BY nombre
+                """,
+                [marca_id, tipo_id, serie_id],
+            )
+
+        rows = _catalog_get_cached("variantes", loader, 300, marca_id, tipo_id, serie_id)
+        data = [
+            {"id": None, "name": "Sin variante", "label": "SIN VARIANTE", "optional": True, "active": True}
+        ]
+        for row in rows or []:
+            data.append({
+                "id": row["id"],
+                "name": row["nombre"],
+                "label": _canon(row["nombre"]),
+                "optional": False,
+                "active": bool(row.get("activo")),
+            })
+        return Response(data)
+
+    def post(self, request):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        data = request.data or {}
+        marca_id = _as_int(data.get("marca_id"), "marca_id")
+        tipo_id = _as_int(data.get("tipo_id"), "tipo_id")
+        serie_id = _as_int(data.get("modelo_id") or data.get("serie_id"), "modelo_id")
+        nombre = _normalize_catalog_value(data.get("name") or data.get("nombre") or "")
+        if not nombre:
+            raise ValidationError({"name": "requerido"})
+        try:
+            exec_void(
+                """
+                INSERT INTO marca_series_variantes (marca_id, tipo_id, serie_id, nombre, activo)
+                VALUES (%s, %s, %s, %s, true)
+                """,
+                [marca_id, tipo_id, serie_id, nombre],
+            )
+            variante_id = last_insert_id()
+        except IntegrityError:
+            row = q(
+                """
+                SELECT id FROM marca_series_variantes
+                WHERE marca_id=%s AND tipo_id=%s AND serie_id=%s AND UPPER(nombre)=UPPER(%s)
+                """,
+                [marca_id, tipo_id, serie_id, nombre],
+                one=True,
+            )
+            if row:
+                variante_id = row["id"]
+            else:
+                raise
+        _catalog_invalidate(
+            _catalog_cache_key("variantes", marca_id, tipo_id, serie_id),
+        )
+        return Response({"ok": True, "id": variante_id}, status=201)
+
+    def patch(self, request, variante_id: int):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        row = q(
+            "SELECT marca_id, tipo_id, serie_id FROM marca_series_variantes WHERE id=%s",
+            [variante_id],
+            one=True,
+        )
+        if not row:
+            return Response(status=404)
+        marca_id = row["marca_id"]
+        tipo_id = row["tipo_id"]
+        serie_id = row["serie_id"]
+        data = request.data or {}
+        sets = []
+        params = []
+        if "name" in data or "nombre" in data:
+            nombre = _normalize_catalog_value(data.get("name") or data.get("nombre") or "")
+            if not nombre:
+                raise ValidationError({"name": "requerido"})
+            sets.append("nombre=%s")
+            params.append(nombre)
+        if "active" in data:
+            sets.append("activo=%s")
+            params.append(bool(data.get("active")))
+        if not sets:
+            return Response({"ok": True})
+        params.append(variante_id)
+        exec_void(f"UPDATE marca_series_variantes SET {', '.join(sets)} WHERE id=%s", params)
+        _catalog_invalidate(
+            _catalog_cache_key("variantes", marca_id, tipo_id, serie_id),
+        )
+        return Response({"ok": True})
+
+    def delete(self, request, variante_id: int):
+        _require_catalog_feature()
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        row = q(
+            "SELECT marca_id, tipo_id, serie_id FROM marca_series_variantes WHERE id=%s",
+            [variante_id],
+            one=True,
+        )
+        if not row:
+            return Response(status=404)
+        marca_id = row["marca_id"]
+        tipo_id = row["tipo_id"]
+        serie_id = row["serie_id"]
+        exec_void("UPDATE marca_series_variantes SET activo=false WHERE id=%s", [variante_id])
+        _catalog_invalidate(
+            _catalog_cache_key("variantes", marca_id, tipo_id, serie_id),
+        )
+        return Response({"ok": True})
+
+
+class CatalogoMarcaTreeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, marca_id: int):
+        _require_catalog_feature()
+        marca_id = int(marca_id)
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
+        tipos = q(
+            "SELECT id, nombre, activo FROM marca_tipos_equipo WHERE marca_id=%s ORDER BY nombre",
+            [marca_id],
+        ) or []
+        tree = []
+        for tipo in tipos:
+            tipo_id = tipo["id"]
+            series = q(
+                """
+                SELECT ms.id, ms.nombre, ms.activo
+                FROM marca_series ms
+                WHERE ms.marca_id=%s AND ms.tipo_id=%s
+                ORDER BY ms.nombre
+                """,
+                [marca_id, tipo_id],
+            ) or []
+            series_payload = []
+            for serie in series:
+                serie_id = serie["id"]
+                variantes = q(
+                    """
+                    SELECT id, nombre, activo
+                    FROM marca_series_variantes
+                    WHERE marca_id=%s AND tipo_id=%s AND serie_id=%s
+                    ORDER BY nombre
+                    """,
+                    [marca_id, tipo_id, serie_id],
+                ) or []
+                series_payload.append({
+                    "id": serie_id,
+                    "name": serie["nombre"],
+                    "active": bool(serie.get("activo")),
+                    "variants": [
+                        {"id": v["id"], "name": v["nombre"], "active": bool(v.get("activo"))}
+                        for v in variantes
+                    ],
+                })
+            tree.append({
+                "id": tipo_id,
+                "name": tipo["nombre"],
+                "active": bool(tipo.get("activo")),
+                "series": series_payload,
+            })
+        return Response(tree)
+
+
+class CatalogoComposeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        _require_catalog_feature()
+        data = request.data or {}
+        brand_id = _as_int(data.get("brand_id"), "brand_id")
+        type_id = _as_int(data.get("type_id"), "type_id")
+        series_id = _as_int(data.get("series_id") or data.get("modelo_id"), "series_id")
+        variant_id = data.get("variant_id")
+        if variant_id in (None, "", "null"):
+            variant_id = None
+        else:
+            variant_id = _as_int(variant_id, "variant_id", allow_null=True)
+
+        mapping = resolve_catalog_hierarchy(brand_id, type_id, series_id, variant_id)
+        logger_uiux.info(
+            "catalog_v2_compose brand=%s type=%s series=%s variant=%s", 
+            brand_id, type_id, series_id, variant_id or "-",
+        )
+        return Response({
+            "full_model_name": mapping["full_model_name"],
+            "type_model_name": mapping["type_model_label"],
+            "serie_variant_name": mapping["serie_variant_label"],
+            "brand": mapping["brand_label"],
+            "type": mapping["type_label"],
+            "series": mapping["series_label"],
+            "variant": mapping["variant_label"],
+        })
 
 
 class TiposEquipoView(APIView):
@@ -1622,25 +2450,7 @@ class CatalogoUbicacionesView(APIView):
 class CatalogoMotivosView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        # MySQL: detectar tabla externa 'equipos' vía information_schema
-        if connection.vendor == "mysql":
-            chk = q(
-                """
-                SELECT COUNT(*) AS n
-                FROM information_schema.tables
-                WHERE table_schema = DATABASE() AND table_name = 'equipos'
-                """,
-                one=True,
-            )
-            if chk and chk.get("n"):
-                rows = q(
-                    """
-                    SELECT "IdEquipos" AS id, "Equipo" AS nombre
-                    FROM equipos
-                    ORDER BY "Equipo"
-                    """
-                ) or []
-                return Response(rows)
+        # Postgres: leer las etiquetas del ENUM motivo_ingreso
         if connection.vendor == "postgresql":
             rows = q(
                 """
@@ -1652,7 +2462,7 @@ class CatalogoMotivosView(APIView):
                 """
             )
             return Response(rows)
-        # MySQL: derivar desde information_schema o fallback fijo
+        # MySQL: leer enumeración desde information_schema (columna ingresos.motivo)
         try:
             row = q(
                 """
@@ -1717,6 +2527,7 @@ class IngresoAccesoriosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe","admin","jefe_veedor","tecnico","recepcion"])
+        _set_audit_user(request)
         rows = q(
             """
               SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
@@ -1731,6 +2542,7 @@ class IngresoAccesoriosView(APIView):
 
     def post(self, request, ingreso_id: int):
         require_roles(request, ["jefe","admin","jefe_veedor","tecnico","recepcion"])
+        _set_audit_user(request)
         d = request.data or {}
         if connection.vendor == "mysql":
             exists = q(
@@ -1773,6 +2585,7 @@ class IngresoAccesorioDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, ingreso_id: int, item_id: int):
         require_roles(request, ["jefe","admin","jefe_veedor","tecnico","recepcion"])
+        _set_audit_user(request)
         _set_audit_user(request)
         exec_void(
             "DELETE FROM ingreso_accesorios WHERE ingreso_id=%s AND id=%s",
@@ -2066,6 +2879,7 @@ class DerivarIngresoView(APIView):
         # Auditoría y control de permisos
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
         _set_audit_user(request)
+        _set_audit_user(request)
 
         data = request.data or {}
         # Compat: aceptar proveedor_id (nuevo) o external_service_id (viejo nombre)
@@ -2099,6 +2913,7 @@ class DevolverDerivacionView(APIView):
     def post(self, request, ingreso_id: int, deriv_id: int):
         # Roles similares a consulta de derivaciones
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
         _set_audit_user(request)
 
         # Validar existencia y pertenencia
@@ -2151,13 +2966,17 @@ class DevolverDerivacionView(APIView):
                        c.razon_social,
                        d.numero_serie,
                        COALESCE(b.nombre,'') AS marca,
-                       COALESCE(m.nombre,'') AS modelo,
-                       COALESCE(m.tipo_equipo,'') AS tipo_equipo
+                       COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                       COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante
                   FROM ingresos t
                   JOIN devices d   ON d.id = t.device_id
                   JOIN customers c ON c.id = d.customer_id
                   LEFT JOIN marcas b ON b.id = d.marca_id
                   LEFT JOIN models m ON m.id = d.model_id
+                  LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
                   LEFT JOIN users  u ON u.id = t.asignado_a
                  WHERE t.id=%s
                 """,
@@ -2166,7 +2985,7 @@ class DevolverDerivacionView(APIView):
             )
             email = (info or {}).get("tech_email")
             if email:
-                subj = f"Aviso: equipo devuelto de externo â OS #{ingreso_id}"
+                subj = f"Aviso: equipo devuelto de externo â?? OS #{ingreso_id}"
                 txt = (
                     f"Hola {info.get('tech_nombre','')},\n\n"
                     f"El equipo derivado fue devuelto del servicio externo y se reencoló como 'ingresado'.\n\n"
@@ -2190,6 +3009,7 @@ class UsuariosView(APIView):
 
     def get(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         rows = q("""
             SELECT id, nombre, email, rol, activo, COALESCE(perm_ingresar,false) AS perm_ingresar
             FROM users
@@ -2200,6 +3020,7 @@ class UsuariosView(APIView):
     @transaction.atomic
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         data = request.data or {}
         nombre = (data.get("nombre") or "").strip()
         email = (data.get("email") or "").strip().lower()
@@ -2253,7 +3074,7 @@ class UsuariosView(APIView):
                     )
                     base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
                     url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-                    subj = "Bienvenido a SEPID â Configurá tu contraseña"
+                    subj = "Bienvenido a SEPID â?? Configurá tu contraseña"
                     txt  = (
                         f"Hola {user['nombre']},\n\n"
                         f"Te damos la bienvenida al sistema de reparaciones de SEPID. "
@@ -2281,6 +3102,7 @@ class UsuarioActivoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, uid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         activo = bool(request.data.get("activo"))
         q("UPDATE users SET activo = %(a)s WHERE id = %(id)s", {"a": activo, "id": uid})
         return Response({"ok": True, "activo": activo})
@@ -2310,7 +3132,7 @@ class UsuarioResetPassView(APIView):
         )
         base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
         url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-        subj = "SEPID â Enlace para establecer tu contraseña"
+        subj = "SEPID â?? Enlace para establecer tu contraseña"
         txt  = (
             f"Hola {user['nombre']},\n\n"
             f"Solicitaron un enlace para establecer o restablecer tu contraseña. "
@@ -2385,10 +3207,12 @@ class ClientesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor", "recepcion"])
+        _set_audit_user(request)
         # Compatibilidad: usar SELECT * para no romper si la DB aún no tiene columnas nuevas (telefono_2, email)
         return Response(q("SELECT * FROM customers ORDER BY razon_social"))
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         if not (d.get("razon_social") and d.get("cod_empresa")):
             raise ValidationError("razon_social y cod_empresa son requeridos")
@@ -2401,6 +3225,7 @@ class ClienteDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, cid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         # No permitir borrar si tiene referencias (devices/ingresos)
         refs = q(
             """
@@ -2428,9 +3253,11 @@ class MarcasView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
         return Response(q("SELECT id, nombre FROM marcas ORDER BY nombre"))
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         n = (request.data.get("nombre") or "").strip()
         if not n:
             raise ValidationError("nombre requerido")
@@ -2444,6 +3271,7 @@ class ModeloTecnicoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, bid, mid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         tecnico_id = request.data.get("tecnico_id")
         if tecnico_id:
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
@@ -2457,6 +3285,7 @@ class MarcaTecnicoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         tecnico_id = request.data.get("tecnico_id")
         if tecnico_id:
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
@@ -2470,6 +3299,7 @@ class MarcaAplicarTecnicoAModelosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         if connection.vendor == "postgresql":
             q(
                 """
@@ -2498,7 +3328,8 @@ class MarcaAplicarTecnicoAModelosView(APIView):
 class IngresoAsignarTecnicoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, ingreso_id):
-        require_roles(request, ["jefe", "admin","jefe_veedor"])  # o sumá "recepcion" si querés
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)  # o sumá "recepcion" si querés
         tecnico_id = request.data.get("tecnico_id")
         if tecnico_id is None:
             return Response({"detail": "tecnico_id requerido"}, status=400)
@@ -2506,6 +3337,7 @@ class IngresoAsignarTecnicoView(APIView):
                 [tecnico_id], one=True)
         if not ok:
             return Response({"detail": "Técnico inválido"}, status=400)
+        _set_audit_user(request)
         q("UPDATE ingresos SET asignado_a=%s WHERE id=%s", [tecnico_id, ingreso_id])
         return Response({"ok": True, "asignado_a": tecnico_id})
 
@@ -2514,17 +3346,42 @@ class MarcaDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
-        q("DELETE FROM marcas WHERE id = %(id)s", {"id": bid})
-        return Response({"ok": True})
+        _set_audit_user(request)
+        marca = q("SELECT id FROM marcas WHERE id=%s", [bid], one=True)
+        if not marca:
+            return Response({"detail": "Marca inexistente"}, status=404)
+
+        modelos = q("SELECT COUNT(*) AS n FROM models WHERE marca_id=%s", [bid], one=True) or {}
+        borrados = modelos.get("n") or 0
+
+        _set_audit_user(request)
+
+        with transaction.atomic():
+            if borrados:
+                exec_void("DELETE FROM models WHERE marca_id=%s", [bid])
+            try:
+                exec_void("DELETE FROM marcas WHERE id=%s", [bid])
+            except IntegrityError:
+                # fallback: por si existe otra FK inesperada
+                return Response(
+                    {"detail": "No se puede eliminar la marca porque tiene dependencias."},
+                    status=409,
+                )
+
+        return Response({"ok": True, "modelos_eliminados": borrados})
 
 class ModelosPorMarcaView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
         rows = q("""
           SELECT m.id, m.nombre, m.tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre,
-                 COALESCE(m.tipo_equipo,'') AS tipo_equipo
+                 COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante
           FROM models m
           LEFT JOIN users u ON u.id = m.tecnico_id
           WHERE m.marca_id=%s
@@ -2534,6 +3391,7 @@ class ModelosPorMarcaView(APIView):
 
     def post(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         n = (request.data.get("nombre") or "").strip()
         tipo_equipo = (request.data.get("tipo_equipo") or "").strip() or None
         tecnico_id = request.data.get("tecnico_id")
@@ -2577,14 +3435,17 @@ class ModeloDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, mid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         q("DELETE FROM models WHERE id = %(id)s", {"id": mid})
         return Response({"ok": True})
+
 
 class ProveedoresExternosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
         sql = (
             "SELECT id, nombre, contacto, telefono, email, direccion, notas "
             "FROM proveedores_externos ORDER BY nombre"
@@ -2593,6 +3454,7 @@ class ProveedoresExternosView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         data = request.data or {}
 
         nombre = (data.get("nombre") or "").strip()
@@ -2695,6 +3557,7 @@ class ProveedoresExternosView(APIView):
 
     def delete(self, request, pid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         q("DELETE FROM proveedores_externos WHERE id = %(id)s", {"id": pid})
         return Response({"ok": True})
 
@@ -2703,6 +3566,7 @@ class PendientesGeneralView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         tecnico_raw = (request.GET.get("tecnico_id") or "").strip()
 
         with connection.cursor() as cur:
@@ -2716,15 +3580,20 @@ class PendientesGeneralView(APIView):
                        c.razon_social,
                        d.numero_serie,
                        COALESCE(b.nombre,'') AS marca,
-                       COALESCE(m.nombre,'') AS modelo,
-                       COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                       t.fecha_ingreso,
+                       COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                       COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+                       COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                       t.fecha_creacion,
                        CASE WHEN ed.estado = 'devuelto' THEN true ELSE false END AS derivado_devuelto
                 FROM ingresos t
                 JOIN devices d   ON d.id = t.device_id
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 LEFT JOIN (
                   SELECT e.*, ROW_NUMBER() OVER (
@@ -2744,7 +3613,7 @@ class PendientesGeneralView(APIView):
                 ORDER BY
                   (CASE WHEN ed.estado = 'devuelto' THEN 1 ELSE 0 END) DESC,
                   (t.motivo = 'urgente control') DESC,
-                  t.fecha_ingreso ASC
+                  t.fecha_creacion ASC
             """
             cur.execute(sql, params)
             rows = _fetchall_dicts(cur)
@@ -2765,15 +3634,20 @@ class AprobadosParaRepararView(APIView):
                   c.razon_social,
                   d.numero_serie,
                   COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  t.fecha_ingreso,
+                  COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                  COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+                  COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                  t.fecha_creacion,
                   q.fecha_aprobado AS fecha_aprobacion
                 FROM ingresos t
                 JOIN devices d ON d.id=t.device_id
                 JOIN customers c ON c.id=d.customer_id
                 LEFT JOIN marcas b ON b.id=d.marca_id
                 LEFT JOIN models m ON m.id=d.model_id
+                LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
                 LEFT JOIN quotes q ON q.ingreso_id = t.id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE LOWER(loc.nombre) = LOWER(%s)
@@ -2783,7 +3657,7 @@ class AprobadosParaRepararView(APIView):
                         OR t.estado = 'reparar'
                       )
                   AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado')
-                ORDER BY COALESCE(q.fecha_aprobado, t.fecha_ingreso) ASC;
+                ORDER BY COALESCE(q.fecha_aprobado, t.fecha_creacion) ASC;
             """, ["taller"])
             data = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(data, many=True).data)
@@ -2798,15 +3672,20 @@ class AprobadosYReparadosView(APIView):
                      c.razon_social,
                      d.numero_serie,
                      COALESCE(b.nombre,'') AS marca,
-                     COALESCE(m.nombre,'') AS modelo,
-                     COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                     t.fecha_ingreso,
+                     COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                     COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+                     COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                     t.fecha_creacion,
                      ev.fecha_reparado
               FROM ingresos t
               JOIN devices d ON d.id=t.device_id
               JOIN customers c ON c.id=d.customer_id
               LEFT JOIN marcas b ON b.id=d.marca_id
               LEFT JOIN models m ON m.id=d.model_id
+              LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
               LEFT JOIN locations loc ON loc.id = t.ubicacion_id
               LEFT JOIN (
                 SELECT e.ingreso_id, e.ts AS fecha_reparado,
@@ -2816,7 +3695,7 @@ class AprobadosYReparadosView(APIView):
               ) ev ON ev.ingreso_id = t.id AND ev.rn = 1
               WHERE t.estado IN ('reparado')
                 AND LOWER(loc.nombre) = LOWER(%s)
-              ORDER BY COALESCE(ev.fecha_reparado, t.fecha_ingreso) DESC;
+              ORDER BY COALESCE(ev.fecha_reparado, t.fecha_creacion) DESC;
             """, ["taller"])
             rows = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(rows, many=True).data)
@@ -2831,12 +3710,17 @@ class LiberadosView(APIView):
                   t.id,
                   t.estado,
                   t.presupuesto_estado,
+                  t.resolucion,
                   c.razon_social,
                   d.numero_serie,
                   COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  t.fecha_ingreso,
+                  COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                  COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+                  COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                  t.fecha_creacion,
                   t.ubicacion_id,
                   COALESCE(l.nombre,'') AS ubicacion_nombre,
                   ev.fecha_listo
@@ -2854,7 +3738,7 @@ class LiberadosView(APIView):
                 ) ev ON ev.ingreso_id = t.id AND ev.rn = 1
                 WHERE t.estado = 'liberado'
                   AND LOWER(l.nombre) = LOWER(%s)
-                ORDER BY COALESCE(ev.fecha_listo, t.fecha_ingreso) DESC;
+                ORDER BY COALESCE(ev.fecha_listo, t.fecha_creacion) DESC;
             """, ["taller"])
             rows = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(rows, many=True).data)
@@ -2876,18 +3760,22 @@ class GeneralEquiposView(APIView):
         with connection.cursor() as cur:
             _set_audit_user(request)
             base = """
-              SELECT t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
+              SELECT t.id, t.estado, t.presupuesto_estado, COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso, t.fecha_creacion, t.ubicacion_id,
                      COALESCE(loc.nombre, '') AS ubicacion_nombre,
                      c.razon_social,
                      d.numero_serie,
                      COALESCE(b.nombre,'') AS marca,
-                     COALESCE(m.nombre,'') AS modelo,
-                     COALESCE(m.tipo_equipo,'') AS tipo_equipo
+                     COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                     COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante
               FROM ingresos t
               JOIN devices d ON d.id=t.device_id
               JOIN customers c ON c.id=d.customer_id
               LEFT JOIN marcas b ON b.id=d.marca_id
               LEFT JOIN models m ON m.id=d.model_id
+              LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
               LEFT JOIN locations loc ON loc.id = t.ubicacion_id
               WHERE 1=1
             """
@@ -2909,7 +3797,7 @@ class GeneralEquiposView(APIView):
                 base += " AND (LOWER(c.razon_social) LIKE LOWER(%s) OR LOWER(d.numero_serie) LIKE LOWER(%s) OR LOWER(b.nombre) LIKE LOWER(%s) OR LOWER(m.nombre) LIKE LOWER(%s))"
                 like = f"%{qtxt}%"
                 params += [like, like, like, like]
-            base += " ORDER BY t.fecha_ingreso DESC"
+            base += " ORDER BY t.fecha_creacion DESC"
             cur.execute(base, params)
             data = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(data, many=True).data)
@@ -2925,7 +3813,8 @@ class IngresoDetalleView(APIView):
               t.estado,
               t.presupuesto_estado,
               t.resolucion,
-              t.fecha_ingreso,
+              COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+              t.fecha_creacion,
               t.fecha_servicio,
               t.garantia_reparacion,
               t.faja_garantia,
@@ -2937,6 +3826,7 @@ class IngresoDetalleView(APIView):
               t.alquiler_remito,
               t.alquiler_fecha,
               t.informe_preliminar,
+              t.remito_ingreso,
               t.descripcion_problema,
               t.trabajos_realizados,
               t.accesorios,
@@ -2954,9 +3844,15 @@ class IngresoDetalleView(APIView):
               d.marca_id,
               COALESCE(b.nombre,'') AS marca,
               d.model_id,
-              COALESCE(m.nombre,'') AS modelo,
-              COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-              COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+              COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+              COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+              COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
               c.id AS customer_id,
               c.razon_social,
               c.cod_empresa,
@@ -2966,6 +3862,7 @@ class IngresoDetalleView(APIView):
             JOIN customers c ON c.id = d.customer_id
             LEFT JOIN marcas b ON b.id = d.marca_id
             LEFT JOIN models m ON m.id = d.model_id
+            LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
             LEFT JOIN locations l ON l.id = t.ubicacion_id
             LEFT JOIN users u ON u.id = t.asignado_a
             WHERE t.id = %s
@@ -3094,6 +3991,12 @@ class IngresoDetalleView(APIView):
                 [val, ingreso_id]
             )
 
+        if "remito_ingreso" in d:
+            if rol not in ROL_EDIT_BASICS:
+                raise PermissionDenied("No autorizado para editar remito de ingreso")
+            sets_no_estado.append("remito_ingreso = NULLIF(%s,'')")
+            params_no_estado.append((d.get("remito_ingreso") or "").strip())
+
         # Propietario (del ingreso)
         if any(k in d for k in ("propietario_nombre", "propietario_contacto", "propietario_doc")):
             if rol not in ROL_EDIT_BASICS:
@@ -3208,6 +4111,7 @@ class DerivacionesPorIngresoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id):
         require_roles(request, ["jefe", "admin","jefe_veedor", "tecnico", "recepcion"])
+        _set_audit_user(request)
         rows = q("""
           SELECT ed.id, ed.ingreso_id, ed.proveedor_id, pe.nombre AS proveedor,
                  ed.remit_deriv, ed.fecha_deriv, ed.fecha_entrega, ed.estado, ed.comentarios
@@ -3222,6 +4126,7 @@ class EquiposDerivadosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["jefe","admin","tecnico","recepcion"])
+        _set_audit_user(request)
         rows = q("""
           SELECT t.id,
                  t.estado,
@@ -3229,9 +4134,13 @@ class EquiposDerivadosView(APIView):
                  c.razon_social,
                  d.numero_serie,
                  COALESCE(b.nombre,'') AS marca,
-                 COALESCE(m.nombre,'') AS modelo,
-                 COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                 t.fecha_ingreso,
+                 COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                 COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
+                 COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                 t.fecha_creacion,
                  ed.fecha_deriv,
                  ed.fecha_entrega,
                  ed.estado      AS estado_derivacion,
@@ -3241,6 +4150,7 @@ class EquiposDerivadosView(APIView):
           JOIN customers c ON c.id=d.customer_id
           LEFT JOIN marcas b ON b.id=d.marca_id
           LEFT JOIN models m ON m.id=d.model_id
+          LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
           JOIN (
             SELECT e.*, ROW_NUMBER() OVER (
               PARTITION BY e.ingreso_id ORDER BY e.fecha_deriv DESC, e.id DESC
@@ -3263,6 +4173,7 @@ class CerrarReparacionView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id: int):
         require_roles(request, ["jefe","jefe_veedor","admin"])
+        _set_audit_user(request)
         r = (request.data or {}).get("resolucion")
         if r not in ("reparado","no_reparado","no_se_encontro_falla","presupuesto_rechazado"):
             return Response({"detail": "resolución inválida"}, status=400)
@@ -3280,6 +4191,7 @@ class RemitoSalidaPdfView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin", "recepcion","jefe_veedor"])
+        _set_audit_user(request)
         _set_audit_user(request)
 
         cur_row = q("SELECT resolucion, estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
@@ -3304,6 +4216,7 @@ class IngresoHistorialView(APIView):
     def get(self, request, ingreso_id: int):
         # Solo lectura para roles de supervisión/administración
         require_roles(request, ["jefe", "jefe_veedor", "admin"])
+        _set_audit_user(request)
         if connection.vendor == "postgresql":
             rows = q(
                 """
@@ -3360,6 +4273,7 @@ class BuscarAccesorioPorReferenciaView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["tecnico","jefe","jefe_veedor","admin","recepcion"])
+        _set_audit_user(request)
         ref = (request.GET.get("ref") or "").strip()
         if not ref:
             return Response([], status=200)
@@ -3371,12 +4285,16 @@ class BuscarAccesorioPorReferenciaView(APIView):
                   t.id,
                   t.estado,
                   t.presupuesto_estado,
-                  t.fecha_ingreso,
+                  COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                  t.fecha_creacion,
                   c.razon_social,
                   d.numero_serie,
                   COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  COALESCE(mhd.full_name, m.nombre, '') AS modelo,
+                  COALESCE(mhd.tipo_nombre, m.tipo_equipo, '') AS tipo_equipo,
+                     COALESCE(mhd.serie_nombre, '') AS modelo_serie,
+                     COALESCE(mhd.variante_nombre, '') AS modelo_variante,
+                     TRIM(CONCAT(COALESCE(mhd.serie_nombre, ''), CASE WHEN COALESCE(mhd.variante_nombre, '') <> '' THEN CONCAT(' ', mhd.variante_nombre) ELSE '' END)) AS modelo_serie_variante,
                   ia.referencia,
                   COALESCE(ca.nombre,'') AS accesorio_nombre
                 FROM ingreso_accesorios ia
@@ -3385,9 +4303,10 @@ class BuscarAccesorioPorReferenciaView(APIView):
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN vw_model_hierarchy_detail mhd ON mhd.model_id = m.id
                 LEFT JOIN catalogo_accesorios ca ON ca.id = ia.accesorio_id
                 WHERE (LOWER(ia.referencia) LIKE LOWER(%s))
-                ORDER BY t.fecha_ingreso DESC, t.id DESC;
+                ORDER BY t.fecha_creacion DESC, t.id DESC;
             """, [like])
             rows = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(rows, many=True).data)
