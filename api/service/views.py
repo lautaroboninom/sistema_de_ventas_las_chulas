@@ -178,20 +178,8 @@ def _fetchall_dicts(cur):
 MEDIA_VIEW_ROLES = {"jefe", "admin", "jefe_veedor", "recepcion", "tecnico"}
 MEDIA_MANAGE_ROLES = {"jefe", "admin", "jefe_veedor", "tecnico"}
 
+# Base SELECT for ingreso_media queries
 MEDIA_SELECT_BASE = """
-
-def _fetch_media_row(ingreso_id: int, media_id: int):
-    sql = MEDIA_SELECT_BASE + " WHERE im.ingreso_id=%s AND im.id=%s"
-    return q(sql, [ingreso_id, media_id], one=True)
-
-
-def _fetch_media_page(ingreso_id: int, limit: int, offset: int):
-    sql = (MEDIA_SELECT_BASE +
-           " WHERE im.ingreso_id=%s"
-           " ORDER BY im.created_at DESC, im.id DESC"
-           " LIMIT %s OFFSET %s")
-    return q(sql, [ingreso_id, limit, offset])
-
     SELECT
       im.id, im.ingreso_id, im.usuario_id,
       COALESCE(u.nombre, '') AS usuario_nombre,
@@ -201,6 +189,20 @@ def _fetch_media_page(ingreso_id: int, limit: int, offset: int):
     FROM ingreso_media im
     LEFT JOIN users u ON u.id = im.usuario_id
 """
+
+def _fetch_media_row(ingreso_id: int, media_id: int):
+    sql = MEDIA_SELECT_BASE + " WHERE im.ingreso_id=%s AND im.id=%s"
+    return q(sql, [ingreso_id, media_id], one=True)
+
+
+def _fetch_media_page(ingreso_id: int, limit: int, offset: int):
+    sql = (
+        MEDIA_SELECT_BASE
+        + " WHERE im.ingreso_id=%s"
+        + " ORDER BY im.created_at DESC, im.id DESC"
+        + " LIMIT %s OFFSET %s"
+    )
+    return q(sql, [ingreso_id, limit, offset])
 
 
 def _current_user_id(request):
@@ -1357,23 +1359,24 @@ class NuevoIngresoView(APIView):
         _set_audit_user(request)
         
         # Ingreso (usa DEFAULT 'ingresado')
+        equipo_variante = (request.data.get("equipo_variante") or "").strip() or None
         if connection.vendor == "postgresql":
             ingreso_id = exec_returning(
                 """
                 INSERT INTO ingresos (
                   device_id, motivo, ubicacion_id, recibido_por, asignado_a,
-                  informe_preliminar, accesorios,
+                  informe_preliminar, accesorios, equipo_variante,
                   propietario_nombre, propietario_contacto, propietario_doc,
                   garantia_reparacion
                 )
                 VALUES (%s,%s,%s,%s,%s,
-                        %s,%s,
+                        %s,%s,%s,
                         NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
                         %s)
                 RETURNING id
                 """,
                 [device_id, motivo, ubicacion_id, uid, tecnico_id,
-                 informe_preliminar, accesorios_text,
+                 informe_preliminar, accesorios_text, equipo_variante,
                  prop_nombre, prop_contacto, prop_doc,
                  garantia_rep_final]
             )
@@ -1382,17 +1385,17 @@ class NuevoIngresoView(APIView):
                 """
                 INSERT INTO ingresos (
                   device_id, motivo, ubicacion_id, recibido_por, asignado_a,
-                  informe_preliminar, accesorios,
+                  informe_preliminar, accesorios, equipo_variante,
                   propietario_nombre, propietario_contacto, propietario_doc,
                   garantia_reparacion
                 )
                 VALUES (%s,%s,%s,%s,%s,
-                        %s,%s,
+                        %s,%s,%s,
                         NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
                         %s)
                 """,
                 [device_id, motivo, ubicacion_id, uid, tecnico_id,
-                 informe_preliminar, accesorios_text,
+                 informe_preliminar, accesorios_text, equipo_variante,
                  prop_nombre, prop_contacto, prop_doc,
                  garantia_rep_final]
             )
@@ -1521,9 +1524,10 @@ class CatalogoModelosView(APIView):
 
         rows = q("""
             SELECT m.id, m.nombre,
-                   m.tecnico_id,
-                   COALESCE(u.nombre,'') AS tecnico_nombre,
-                   COALESCE(m.tipo_equipo,'') AS tipo_equipo
+                m.tecnico_id,
+                COALESCE(u.nombre,'') AS tecnico_nombre,
+                COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                COALESCE(m.variante,'') AS variante
             FROM models m
             LEFT JOIN users u ON u.id = m.tecnico_id
             WHERE m.marca_id=%s
@@ -1531,6 +1535,441 @@ class CatalogoModelosView(APIView):
         """, [marca_id])
         return Response(rows)
 
+
+class CatalogoTiposView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @staticmethod
+    def _canon(value: str) -> str:
+        if not value:
+            return ""
+        return " ".join(str(value).strip().split()).upper()
+
+    def get(self, request, bid: int):
+        try:
+            marca_id = int(bid)
+        except (TypeError, ValueError):
+            return Response({"detail": "parametros invalidos"}, status=400)
+
+        rows = q(
+                """
+                SELECT id, nombre, activo
+                FROM marca_tipos_equipo
+                WHERE marca_id=%s
+                ORDER BY nombre
+                """,
+                [marca_id],
+            ) or []
+
+        data = []
+        for row in rows:
+            data.append({
+                "id": row.get("id"),
+                "name": row.get("nombre"),
+                "label": self._canon(row.get("nombre")),
+                "active": bool(row.get("activo")),
+            })
+
+        return Response(data)
+
+
+class CatalogoModelosDeTipoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @staticmethod
+    def _canon(value: str) -> str:
+        if not value:
+            return ""
+        return " ".join(str(value).strip().split()).upper()
+
+    def get(self, request, bid: int, tid: int):
+        try:
+            marca_id = int(bid)
+            tipo_id = int(tid)
+        except (TypeError, ValueError):
+            return Response({"detail": "parametros invalidos"}, status=400)
+
+        rows = q(
+            """
+            SELECT id, nombre, alias, activo
+            FROM marca_series
+            WHERE marca_id=%s AND tipo_id=%s
+            ORDER BY nombre
+            """,
+            [marca_id, tipo_id],
+        ) or []
+
+        data = []
+        for row in rows:
+            data.append({
+                "id": row.get("id"),
+                "name": row.get("nombre"),
+                "label": self._canon(row.get("nombre")),
+                "alias": row.get("alias") or "",
+                "active": bool(row.get("activo")),
+            })
+
+        return Response(data)
+
+
+class CatalogoVariantesView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @staticmethod
+    def _canon(value: str) -> str:
+        if not value:
+            return ""
+        return " ".join(str(value).strip().split()).upper()
+
+    def get(self, request, bid: int, mid: int):
+        try:
+            marca_id = int(bid)
+            modelo_id = int(mid)
+        except (TypeError, ValueError):
+            return Response({"detail": "parametros invalidos"}, status=400)
+
+        modelo_row = q(
+            "SELECT tipo_id FROM marca_series WHERE id=%s AND marca_id=%s",
+            [modelo_id, marca_id],
+            one=True,
+        )
+        if not modelo_row:
+            return Response([])
+
+        tipo_id = modelo_row.get("tipo_id")
+        variantes = q(
+            """
+            SELECT id, nombre, activo
+            FROM marca_series_variantes
+            WHERE marca_id=%s AND tipo_id=%s AND serie_id=%s
+            ORDER BY nombre
+            """,
+            [marca_id, tipo_id, modelo_id],
+        ) or []
+
+        data = []
+        for row in variantes:
+            data.append({
+                "id": row.get("id"),
+                "name": row.get("nombre"),
+                "label": self._canon(row.get("nombre")),
+                "active": bool(row.get("activo")),
+            })
+
+        return Response(data)
+
+
+class CatalogoMarcasPorTipoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, tipo_nombre: str):
+        nombre = (tipo_nombre or "").strip()
+        if not nombre:
+            return Response([])
+        rows = q(
+            """
+            SELECT DISTINCT m.id, m.nombre
+            FROM marcas m
+            JOIN marca_tipos_equipo t ON t.marca_id = m.id
+            WHERE UPPER(TRIM(t.nombre)) = UPPER(TRIM(%s))
+            ORDER BY m.nombre
+            """,
+            [nombre],
+        ) or []
+        return Response(rows)
+
+class CatalogoTiposCreateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        d = request.data or {}
+        try:
+            marca_id = int(d.get("marca_id"))
+        except (TypeError, ValueError):
+            return Response({"detail": "marca_id requerido"}, status=400)
+        nombre = (d.get("name") or d.get("nombre") or "").strip()
+        if not nombre:
+            return Response({"detail": "name requerido"}, status=400)
+        active = d.get("active")
+        activo_val = bool(active) if active is not None else True
+
+        _set_audit_user(request)
+
+        if connection.vendor == "postgresql":
+            # No PK auto de MySQL; upsert manual
+            existing = q(
+                "SELECT id FROM marca_tipos_equipo WHERE marca_id=%s AND UPPER(nombre)=UPPER(%s)",
+                [marca_id, nombre], one=True,
+            )
+            if existing:
+                if active is not None:
+                    exec_void("UPDATE marca_tipos_equipo SET activo=%s WHERE id=%s", [activo_val, existing["id"]])
+                return Response({"ok": True, "id": existing["id"], "updated": False})
+            exec_void(
+                "INSERT INTO marca_tipos_equipo(marca_id, nombre, activo) VALUES (%s,%s,%s)",
+                [marca_id, nombre, activo_val],
+            )
+            new_id = last_insert_id()
+            return Response({"ok": True, "id": new_id, "created": True})
+        else:
+            exec_void(
+                """
+                INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                VALUES (%s,%s,%s)
+                ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), activo=VALUES(activo)
+                """,
+                [marca_id, nombre, int(activo_val)],
+            )
+            new_id = last_insert_id()
+            return Response({"ok": True, "id": new_id, "created": True})
+
+
+class CatalogoTipoDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, tipo_id: int):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        row = q("SELECT id, marca_id, nombre, activo FROM marca_tipos_equipo WHERE id=%s", [tipo_id], one=True)
+        if not row:
+            return Response({"detail": "tipo no encontrado"}, status=404)
+
+        d = request.data or {}
+        nombre = d.get("name") if "name" in d else d.get("nombre") if "nombre" in d else None
+        nombre = (nombre or "").strip() if nombre is not None else None
+        active = d.get("active") if "active" in d else None
+
+        sets = []
+        params = []
+        if nombre is not None and nombre != row.get("nombre"):
+            # Unicidad por marca
+            clash = q(
+                "SELECT id FROM marca_tipos_equipo WHERE marca_id=%s AND id<>%s AND UPPER(nombre)=UPPER(%s)",
+                [row["marca_id"], tipo_id, nombre], one=True,
+            )
+            if clash:
+                return Response({"detail": "ya existe un tipo con ese nombre"}, status=409)
+            sets.append("nombre=%s")
+            params.append(nombre)
+        if active is not None:
+            sets.append("activo=%s")
+            params.append(bool(active))
+
+        if not sets:
+            return Response({"ok": True})
+
+        params.append(tipo_id)
+        _set_audit_user(request)
+        exec_void(f"UPDATE marca_tipos_equipo SET {', '.join(sets)} WHERE id=%s", params)
+        return Response({"ok": True})
+
+    def delete(self, request, tipo_id: int):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        exec_void("DELETE FROM marca_tipos_equipo WHERE id=%s", [tipo_id])
+        return Response({"ok": True})
+
+
+class CatalogoModelosCreateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        d = request.data or {}
+        try:
+            marca_id = int(d.get("marca_id"))
+            tipo_id = int(d.get("tipo_id"))
+        except (TypeError, ValueError):
+            return Response({"detail": "marca_id y tipo_id requeridos"}, status=400)
+        nombre = (d.get("name") or d.get("nombre") or "").strip()
+        alias = d.get("alias")
+        alias = (alias or "").strip()
+        alias = alias if alias else None
+        active = d.get("active")
+        activo_val = bool(active) if active is not None else True
+
+        _set_audit_user(request)
+
+        if connection.vendor == "postgresql":
+            existing = q(
+                "SELECT id FROM marca_series WHERE marca_id=%s AND tipo_id=%s AND UPPER(nombre)=UPPER(%s)",
+                [marca_id, tipo_id, nombre], one=True,
+            )
+            if existing:
+                sets = []
+                params = []
+                if alias is not None:
+                    sets.append("alias=%s")
+                    params.append(alias)
+                if active is not None:
+                    sets.append("activo=%s")
+                    params.append(activo_val)
+                if sets:
+                    params.append(existing["id"])
+                    exec_void(f"UPDATE marca_series SET {', '.join(sets)} WHERE id=%s", params)
+                return Response({"ok": True, "id": existing["id"], "updated": False})
+            exec_void(
+                "INSERT INTO marca_series(marca_id, tipo_id, nombre, alias, activo) VALUES (%s,%s,%s,%s,%s)",
+                [marca_id, tipo_id, nombre, alias, activo_val],
+            )
+            new_id = last_insert_id()
+            return Response({"ok": True, "id": new_id, "created": True})
+        else:
+            exec_void(
+                """
+                INSERT INTO marca_series(marca_id, tipo_id, nombre, alias, activo)
+                VALUES (%s,%s,%s, NULLIF(%s,''), %s)
+                ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), alias=VALUES(alias), activo=VALUES(activo)
+                """,
+                [marca_id, tipo_id, nombre, alias or "", int(activo_val)],
+            )
+            new_id = last_insert_id()
+            return Response({"ok": True, "id": new_id, "created": True})
+
+
+class CatalogoModeloDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, serie_id: int):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        row = q("SELECT id, marca_id, tipo_id, nombre, alias, activo FROM marca_series WHERE id=%s", [serie_id], one=True)
+        if not row:
+            return Response({"detail": "serie no encontrada"}, status=404)
+        d = request.data or {}
+        nombre = d.get("name") if "name" in d else d.get("nombre") if "nombre" in d else None
+        nombre = (nombre or "").strip() if nombre is not None else None
+        alias = d.get("alias") if "alias" in d else None
+        alias = (alias or "").strip() if alias is not None else None
+        active = d.get("active") if "active" in d else None
+
+        sets = []
+        params = []
+        if nombre is not None and nombre != row.get("nombre"):
+            clash = q(
+                "SELECT id FROM marca_series WHERE marca_id=%s AND tipo_id=%s AND id<>%s AND UPPER(nombre)=UPPER(%s)",
+                [row["marca_id"], row["tipo_id"], serie_id, nombre], one=True,
+            )
+            if clash:
+                return Response({"detail": "ya existe una serie con ese nombre"}, status=409)
+            sets.append("nombre=%s")
+            params.append(nombre)
+        if alias is not None:
+            sets.append("alias=%s")
+            params.append(alias if alias else None)
+        if active is not None:
+            sets.append("activo=%s")
+            params.append(bool(active))
+
+        if not sets:
+            return Response({"ok": True})
+
+        params.append(serie_id)
+        _set_audit_user(request)
+        exec_void(f"UPDATE marca_series SET {', '.join(sets)} WHERE id=%s", params)
+        return Response({"ok": True})
+
+    def delete(self, request, serie_id: int):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        exec_void("DELETE FROM marca_series WHERE id=%s", [serie_id])
+        return Response({"ok": True})
+
+
+class CatalogoVariantesCreateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        d = request.data or {}
+        try:
+            marca_id = int(d.get("marca_id"))
+            tipo_id = int(d.get("tipo_id"))
+            serie_id = int(d.get("serie_id"))
+        except (TypeError, ValueError):
+            return Response({"detail": "marca_id, tipo_id y serie_id requeridos"}, status=400)
+        nombre = (d.get("name") or d.get("nombre") or "").strip()
+        if not nombre:
+            return Response({"detail": "name requerido"}, status=400)
+        active = d.get("active")
+        activo_val = bool(active) if active is not None else True
+
+        _set_audit_user(request)
+
+        if connection.vendor == "postgresql":
+            existing = q(
+                """
+                SELECT id FROM marca_series_variantes
+                WHERE marca_id=%s AND tipo_id=%s AND serie_id=%s AND UPPER(nombre)=UPPER(%s)
+                """,
+                [marca_id, tipo_id, serie_id, nombre], one=True,
+            )
+            if existing:
+                if active is not None:
+                    exec_void("UPDATE marca_series_variantes SET activo=%s WHERE id=%s", [activo_val, existing["id"]])
+                return Response({"ok": True, "id": existing["id"], "updated": False})
+            exec_void(
+                "INSERT INTO marca_series_variantes(marca_id, tipo_id, serie_id, nombre, activo) VALUES (%s,%s,%s,%s,%s)",
+                [marca_id, tipo_id, serie_id, nombre, activo_val],
+            )
+            new_id = last_insert_id()
+            return Response({"ok": True, "id": new_id, "created": True})
+        else:
+            exec_void(
+                """
+                INSERT INTO marca_series_variantes(marca_id, tipo_id, serie_id, nombre, activo)
+                VALUES (%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), activo=VALUES(activo)
+                """,
+                [marca_id, tipo_id, serie_id, nombre, int(activo_val)],
+            )
+            new_id = last_insert_id()
+            return Response({"ok": True, "id": new_id, "created": True})
+
+
+class CatalogoVarianteDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, variante_id: int):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        row = q(
+            "SELECT id, marca_id, tipo_id, serie_id, nombre, activo FROM marca_series_variantes WHERE id=%s",
+            [variante_id], one=True,
+        )
+        if not row:
+            return Response({"detail": "variante no encontrada"}, status=404)
+        d = request.data or {}
+        nombre = d.get("name") if "name" in d else d.get("nombre") if "nombre" in d else None
+        nombre = (nombre or "").strip() if nombre is not None else None
+        active = d.get("active") if "active" in d else None
+
+        sets = []
+        params = []
+        if nombre is not None and nombre != row.get("nombre"):
+            clash = q(
+                """
+                SELECT id FROM marca_series_variantes
+                WHERE marca_id=%s AND tipo_id=%s AND serie_id=%s AND id<>%s AND UPPER(nombre)=UPPER(%s)
+                """,
+                [row["marca_id"], row["tipo_id"], row["serie_id"], variante_id, nombre], one=True,
+            )
+            if clash:
+                return Response({"detail": "ya existe una variante con ese nombre"}, status=409)
+            sets.append("nombre=%s")
+            params.append(nombre)
+        if active is not None:
+            sets.append("activo=%s")
+            params.append(bool(active))
+
+        if not sets:
+            return Response({"ok": True})
+
+        params.append(variante_id)
+        _set_audit_user(request)
+        exec_void(f"UPDATE marca_series_variantes SET {', '.join(sets)} WHERE id=%s", params)
+        return Response({"ok": True})
+
+    def delete(self, request, variante_id: int):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        exec_void("DELETE FROM marca_series_variantes WHERE id=%s", [variante_id])
+        return Response({"ok": True})
 
 class TiposEquipoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -1560,14 +1999,27 @@ class TiposEquipoView(APIView):
             if chk and chk.get("n"):
                 rows = q(
                     """
-                    SELECT "IdEquipos" AS id, "Equipo" AS nombre
+                    SELECT IdEquipos AS id, Equipo AS nombre
                     FROM equipos
-                    ORDER BY "Equipo"
+                    ORDER BY Equipo
                     """
                 ) or []
                 return Response(rows)
 
         # Fallback: tipos desde models.tipo_equipo + catálogo extendido suministrado
+        internos = []
+        try:
+            internos = q(
+                """
+                SELECT DISTINCT UPPER(TRIM(nombre)) AS nombre
+                FROM marca_tipos_equipo
+                WHERE activo = TRUE
+                ORDER BY 1
+                """
+            ) or []
+        except Exception:
+            internos = []
+
         usados = q("""
             SELECT DISTINCT TRIM(m.tipo_equipo) AS nombre
             FROM models m
@@ -1580,6 +2032,8 @@ class TiposEquipoView(APIView):
         ]
         # Combinar usados + catálogo fijo
         nombres = sorted({ *(n for n in usados_set if n), *catalogo_fijo })
+        internos_set = { (r.get('nombre') or '').strip().upper() for r in (internos or []) }
+        nombres = sorted({ *internos_set, *(n for n in usados_set if n), *catalogo_fijo })
         rows = [{ "id": i+1, "nombre": n } for i, n in enumerate(nombres)]
         return Response(rows)
 
@@ -1611,6 +2065,22 @@ class ModeloTipoEquipoView(APIView):
              WHERE id=%s AND marca_id=%s
         """, [tipo_nombre, modelo_id, marca_id])
 
+        return Response({"ok": True})
+
+class ModeloVarianteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, marca_id: int, modelo_id: int):
+        d = request.data or {}
+        variante = (d.get("variante") or "").strip()
+        exec_void(
+            """
+            UPDATE models
+               SET variante = NULLIF(%s,'')
+             WHERE id=%s AND marca_id=%s
+            """,
+            [variante, modelo_id, marca_id],
+        )
         return Response({"ok": True})
 
 class CatalogoUbicacionesView(APIView):
@@ -2524,7 +2994,8 @@ class ModelosPorMarcaView(APIView):
         require_roles(request, ["jefe", "admin","jefe_veedor", "tecnico", "recepcion"])
         rows = q("""
           SELECT m.id, m.nombre, m.tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre,
-                 COALESCE(m.tipo_equipo,'') AS tipo_equipo
+                 COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                 COALESCE(m.variante,'') AS variante
           FROM models m
           LEFT JOIN users u ON u.id = m.tecnico_id
           WHERE m.marca_id=%s
@@ -2536,6 +3007,7 @@ class ModelosPorMarcaView(APIView):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
         n = (request.data.get("nombre") or "").strip()
         tipo_equipo = (request.data.get("tipo_equipo") or "").strip() or None
+        variante = (request.data.get("variante") or "").strip() or None
         tecnico_id = request.data.get("tecnico_id")
 
         if not n:
@@ -2552,22 +3024,24 @@ class ModelosPorMarcaView(APIView):
 
         if connection.vendor == "postgresql":
             q("""
-              INSERT INTO models(marca_id, nombre, tecnico_id, tipo_equipo)
-              VALUES (%(b)s, %(n)s, %(t)s, NULLIF(%(te)s,''))
+              INSERT INTO models(marca_id, nombre, tecnico_id, tipo_equipo, variante)
+              VALUES (%(b)s, %(n)s, %(t)s, NULLIF(%(te)s,''), NULLIF(%(va)s,''))
               ON CONFLICT (marca_id, nombre) DO UPDATE
                  SET tecnico_id = EXCLUDED.tecnico_id,
-                     tipo_equipo = COALESCE(EXCLUDED.tipo_equipo, models.tipo_equipo)
-            """, {"b": bid, "n": n, "t": tecnico_id, "te": tipo_equipo})
+                     tipo_equipo = COALESCE(EXCLUDED.tipo_equipo, models.tipo_equipo),
+                     variante = COALESCE(EXCLUDED.variante, models.variante)
+            """, {"b": bid, "n": n, "t": tecnico_id, "te": tipo_equipo, "va": variante})
         else:
             q(
                 """
-                INSERT INTO models(marca_id, nombre, tecnico_id, tipo_equipo)
-                VALUES (%s, %s, %s, NULLIF(%s,''))
+                INSERT INTO models(marca_id, nombre, tecnico_id, tipo_equipo, variante)
+                VALUES (%s, %s, %s, NULLIF(%s,''), NULLIF(%s,''))
                 ON DUPLICATE KEY UPDATE
                   tecnico_id = VALUES(tecnico_id),
-                  tipo_equipo = IFNULL(VALUES(tipo_equipo), tipo_equipo)
+                  tipo_equipo = IFNULL(VALUES(tipo_equipo), tipo_equipo),
+                  variante = IFNULL(VALUES(variante), variante)
                 """,
-                [bid, n, tecnico_id, tipo_equipo],
+                [bid, n, tecnico_id, tipo_equipo, variante],
             )
 
         return Response({"ok": True})
