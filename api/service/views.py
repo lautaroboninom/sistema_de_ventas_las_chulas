@@ -3414,6 +3414,7 @@ class IngresoDetalleView(APIView):
               t.descripcion_problema,
               t.trabajos_realizados,
               t.accesorios,
+              t.equipo_variante,
               t.ubicacion_id,
               COALESCE(l.nombre,'') AS ubicacion_nombre,
               t.asignado_a,
