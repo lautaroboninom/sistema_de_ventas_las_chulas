@@ -8,7 +8,7 @@ import { ingresoIdOf,
   norm,
   tipoEquipoOf,
   formatMoney,
-  resolveFechaCreacion,, modeloSerieVarianteOf } from "../lib/ui-helpers";
+  resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
 
 // ENDPOINT para "presupuestados" (ya emitidos/enviados)
 const ENDPOINT = "/api/ingresos/presupuestados/"; // <-- AJUSTAR si tu API usa otra ruta
@@ -55,7 +55,7 @@ export default function JefePresupuestos() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        modeloSerieVarianteOf(row),
+        catalogEquipmentLabel(row),
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
@@ -138,7 +138,7 @@ export default function JefePresupuestos() {
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Marca</th>
-                <th scope="col" className="p-2">Modelo</th>
+                <th scope="col" className="p-2">Equipo</th>
                 <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
@@ -169,7 +169,7 @@ export default function JefePresupuestos() {
                       {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
                     </td>
                     <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                    <td className="p-2">{modeloSerieVarianteOf(row) ?? "-"}</td>
+                    <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                     <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2">{row?.numero_serie ?? "-"}</td>
                     <td className="p-2">{row?.estado ?? "-"}</td>

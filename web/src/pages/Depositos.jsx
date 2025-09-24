@@ -20,7 +20,7 @@ export default function Depositos() {
     (async () => {
       setLoading(true); setErr("");
       try {
-        const data = await getGeneralEquipos({ ubicacion_id: ubicacionId });
+        const data = await getGeneralEquipos({ ubicacion_id: ubicacionId, solo_taller: false });
         setRows(data);
       } catch (e) {
         setErr(e.message || "Error cargando equipos");

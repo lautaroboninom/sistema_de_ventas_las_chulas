@@ -17,7 +17,8 @@ from rest_framework import permissions
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.exceptions import PermissionDenied, ValidationError, AuthenticationFailed
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_datetime, parse_date
+from django.utils import timezone
 from django.contrib.auth.hashers import make_password
 from .auth import issue_token, verify_hash, JWT_TTL_MIN as AUTH_JWT_TTL_MIN
 from .ip_utils import get_client_ip
@@ -39,6 +40,30 @@ LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
 LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
+
+# Pie legal para correos (solo emails, no en el sitio)
+EMAIL_LEGAL_FOOTER = getattr(settings, "EMAIL_LEGAL_FOOTER", (
+    "La información de este correo es confidencial y concierne únicamente a la persona a la que está dirigida. "
+    "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los términos que autoriza el art. 318 del CCyCN. "
+    "Si este mensaje no está dirigido a usted, por favor tenga presente que no tiene autorización para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que está dirigido, como así tampoco valerse del mismo. "
+    "Si recibe este correo por error, por favor, avise al remitente, luego de lo cual rogamos a usted destruya el mensaje original. "
+    "No se puede responsabilizar al remitente de ninguna forma por/o en relación con alguna consecuencia y/o daño que resulte del apropiado y completo envío y recepción del contenido de este correo."
+))
+
+def _email_append_footer_text(txt: str) -> str:
+    try:
+        base = (txt or "").rstrip()
+        return f"{base}\n\n{EMAIL_LEGAL_FOOTER}"
+    except Exception:
+        return txt
+
+def _email_append_footer_html(html: str) -> str:
+    try:
+        style = "font-size:10px;color:#6b7280;text-align:justify;line-height:1.3;margin-top:12px;"
+        footer = f"<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:12px 0;\"/><div style=\"{style}\">{EMAIL_LEGAL_FOOTER}</div>"
+        return (html or "") + footer
+    except Exception:
+        return html
 
 def _login_rate_key(email: str, ip: str) -> str:
     email = (email or "").strip().lower()
@@ -285,13 +310,27 @@ LOCATION_RENAMES = {
 
 
 def ensure_default_locations():
+    # Usar nombres canónicos corregidos (evita duplicados por encoding)
+    NAMES = [
+        "Taller",
+        "Estantería de Alquiler",
+        "Sarmiento",
+        "Depósito SEPID",
+        "Desguace",
+    ]
+    REMAPS = {
+        "estanteria alquileres": "Estantería de Alquiler",
+        "estanteria de alquiler": "Estantería de Alquiler",
+        "estantería de aluiler": "Estantería de Alquiler",
+        "estanteria de aluiler": "Estantería de Alquiler",
+    }
     with connection.cursor() as cur:
-        for alias, target in LOCATION_RENAMES.items():
+        for alias, target in REMAPS.items():
             cur.execute(
                 "UPDATE locations SET nombre=%s WHERE LOWER(nombre)=LOWER(%s)",
                 [target, alias],
             )
-        for name in DEFAULT_LOCATION_NAMES:
+        for name in NAMES:
             cur.execute(
                 """
                 INSERT INTO locations (nombre)
@@ -506,6 +545,17 @@ class ForgotPasswordView(APIView):
         if not user or not user.get("activo"):
             return ok_response
 
+        # Guardar un lock de enfriamiento en cache para evitar envíos duplicados
+        # causados por doble click o peticiones concurrentes muy cercanas.
+        try:
+            lock_key = f"pwreset:{user['id']}"
+            # cache.add solo setea si no existe; retorna False si ya existe
+            if not cache.add(lock_key, "1", COOLDOWN_MIN * 60):
+                return ok_response
+        except Exception:
+            # Si cache falla, continuamos y confiamos en el chequeo por DB más abajo
+            pass
+
         # Rate limit simple (vendor-aware)
         if connection.vendor == "mysql":
             recent = q(
@@ -552,6 +602,8 @@ class ForgotPasswordView(APIView):
           <p>Si no fuiste vos, ignorá este correo.</p>
         """
         try:
+            txt = _email_append_footer_text(txt)
+            html = _email_append_footer_html(html)
             send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [email], html_message=html, fail_silently=True)
         except Exception:
             pass  # en dev con backend de consola igual lo vas a ver
@@ -965,6 +1017,7 @@ class AprobarPresupuestoView(APIView):
                     "Aviso automático â no responder a este correo.",
                 ]
                 body = "\n".join(body_lines)
+                body = _email_append_footer_text(body)
                 send_mail(subject, body, getattr(settings, 'DEFAULT_FROM_EMAIL', None), [to_email], fail_silently=True)
         except Exception:
             pass
@@ -1177,6 +1230,7 @@ class GeneralPorClienteView(APIView):
             cur.execute("""
                 SELECT
                   t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
+                  q.fecha_emitido AS presupuesto_fecha_emision,
                   COALESCE(loc.nombre,'') AS ubicacion_nombre,
                   c.id AS customer_id, c.razon_social,
                   d.numero_serie,
@@ -1188,6 +1242,7 @@ class GeneralPorClienteView(APIView):
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN quotes q ON q.ingreso_id = t.id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE c.id = %s
                   AND LOWER(loc.nombre) = LOWER(%s)
@@ -1248,6 +1303,23 @@ class NuevoIngresoView(APIView):
         informe_preliminar = (data.get("informe_preliminar") or "").strip()
         accesorios_text = (data.get("accesorios") or "").strip()
         accesorios_items = data.get("accesorios_items") or []
+
+        # Opcionales: remito de ingreso y fecha de ingreso
+        remito_ingreso = (data.get("remito_ingreso") or "").strip()
+        fecha_ingreso_dt = None
+        _fi_raw = data.get("fecha_ingreso")
+        if _fi_raw is not None and str(_fi_raw).strip() != "":
+            _fi_str = str(_fi_raw).strip()
+            _dt = parse_datetime(_fi_str)
+            if not _dt:
+                _d = parse_date(_fi_str)
+                if _d:
+                    from datetime import datetime
+                    _dt = datetime(_d.year, _d.month, _d.day, 0, 0, 0)
+            if _dt:
+                if timezone.is_naive(_dt):
+                    _dt = timezone.make_aware(_dt, timezone.get_current_timezone())
+                fecha_ingreso_dt = _dt
 
         if not motivo:
             return Response({"detail": "motivo requerido"}, status=400)
@@ -1316,20 +1388,45 @@ class NuevoIngresoView(APIView):
         if numero_interno:
             exec_void("UPDATE devices SET n_de_control = NULLIF(%s,'') WHERE id=%s", [numero_interno, device_id])
 
-        # --- Garantía de reparación por N/S: último ingreso < 90 días ---
+        # --- Garantía de reparación por N/S o N° interno (MG): última fecha_entrega < 90 días ---
         from django.utils import timezone
         auto_gar_rep = False
+        last_out_candidates = []
+        # Por número de serie
         if numero_serie:
-            row_last = q("""
-              SELECT MAX(t.fecha_ingreso) AS last_in
-                FROM ingresos t
-                JOIN devices d ON d.id = t.device_id
-               WHERE d.numero_serie = %s
-            """, [numero_serie], one=True)
-            last_in = row_last and row_last.get("last_in")
-            if last_in:
-                delta = (timezone.now() - last_in).days
-                auto_gar_rep = delta <= 90
+            row_last_ns = q(
+                """
+                SELECT MAX(t.fecha_entrega) AS last_out
+                  FROM ingresos t
+                  JOIN devices d ON d.id = t.device_id
+                 WHERE d.numero_serie = %s
+                   AND t.fecha_entrega IS NOT NULL
+                """,
+                [numero_serie],
+                one=True,
+            )
+            last_out_ns = row_last_ns and row_last_ns.get("last_out")
+            if last_out_ns:
+                last_out_candidates.append(last_out_ns)
+        # Por número interno (MG)
+        if numero_interno:
+            row_last_mg = q(
+                """
+                SELECT MAX(t.fecha_entrega) AS last_out
+                  FROM ingresos t
+                  JOIN devices d ON d.id = t.device_id
+                 WHERE d.n_de_control = %s
+                   AND t.fecha_entrega IS NOT NULL
+                """,
+                [numero_interno],
+                one=True,
+            )
+            last_out_mg = row_last_mg and row_last_mg.get("last_out")
+            if last_out_mg:
+                last_out_candidates.append(last_out_mg)
+        if last_out_candidates:
+            last_out = max(last_out_candidates)
+            auto_gar_rep = (timezone.now() - last_out).days <= 90
         garantia_rep_payload = bool(data.get("garantia_reparacion"))
         garantia_rep_final = garantia_rep_payload or auto_gar_rep
 
@@ -1401,6 +1498,21 @@ class NuevoIngresoView(APIView):
             )
             ingreso_id = last_insert_id()
 
+        # Aplicar remito_ingreso y/o fecha_ingreso si fueron provistos
+        sets, params = [], []
+        if remito_ingreso:
+            sets.append("remito_ingreso = NULLIF(%s,'')")
+            params.append(remito_ingreso)
+        if fecha_ingreso_dt is not None:
+            sets.append("fecha_ingreso = %s")
+            params.append(fecha_ingreso_dt)
+        if sets:
+            params.append(ingreso_id)
+            exec_void(
+                f"UPDATE ingresos SET {', '.join(sets)} WHERE id=%s",
+                params,
+            )
+
         # Insertar accesorios normalizados si vienen
         for it in (accesorios_items or []):
             try:
@@ -1420,20 +1532,55 @@ class GarantiaReparacionCheckView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         ns = (request.GET.get("numero_serie") or "").strip()
-        if not ns:
+        mg = (request.GET.get("numero_interno") or request.GET.get("mg") or "").strip()
+        if mg and not mg.upper().startswith("MG"):
+            mg = "MG " + mg
+        if not ns and not mg:
             return Response({"within_90_days": False, "last_ingreso": None})
-        row = q("""
-          SELECT MAX(t.fecha_ingreso) AS last_in
-            FROM ingresos t
-            JOIN devices d ON d.id = t.device_id
-           WHERE d.numero_serie = %s
-        """, [ns], one=True)
-        last_in = row and row.get("last_in")
-        if not last_in:
+
+        last_out_candidates = []
+        # Buscar por número de serie
+        if ns:
+            row_ns = q(
+                """
+                SELECT MAX(t.fecha_entrega) AS last_out
+                  FROM ingresos t
+                  JOIN devices d ON d.id = t.device_id
+                 WHERE d.numero_serie = %s
+                   AND t.fecha_entrega IS NOT NULL
+                """,
+                [ns],
+                one=True,
+            )
+            last_ns = row_ns and row_ns.get("last_out")
+            if last_ns:
+                last_out_candidates.append(last_ns)
+
+        # Buscar por número interno (MG)
+        if mg:
+            row_mg = q(
+                """
+                SELECT MAX(t.fecha_entrega) AS last_out
+                  FROM ingresos t
+                  JOIN devices d ON d.id = t.device_id
+                 WHERE d.n_de_control = %s
+                   AND t.fecha_entrega IS NOT NULL
+                """,
+                [mg],
+                one=True,
+            )
+            last_mg = row_mg and row_mg.get("last_out")
+            if last_mg:
+                last_out_candidates.append(last_mg)
+
+        if not last_out_candidates:
             return Response({"within_90_days": False, "last_ingreso": None})
+
         from django.utils import timezone
-        within = (timezone.now() - last_in).days <= 90
-        return Response({"within_90_days": within, "last_ingreso": last_in})
+        last_out = max(last_out_candidates)
+        within = (timezone.now() - last_out).days <= 90
+        # Mantenemos la clave last_ingreso por compatibilidad (aunque es fecha_entrega)
+        return Response({"within_90_days": within, "last_ingreso": last_out})
 # ---------------------------------------
 # Catálogos
 class CatalogoMarcasView(APIView):
@@ -2020,20 +2167,12 @@ class TiposEquipoView(APIView):
         except Exception:
             internos = []
 
-        usados = q("""
-            SELECT DISTINCT TRIM(m.tipo_equipo) AS nombre
-            FROM models m
-            WHERE COALESCE(TRIM(m.tipo_equipo),'') <> ''
-        """) or []
-        usados_set = { (r.get('nombre') or '').strip().upper() for r in usados }
+        usados_set = set()
 
-        catalogo_fijo = [
-            "ACUMULADOR DE OXIGENO","ALARGUE DE SENSOR","ALARMA DE ESPIROMETRO","ALTO FLUJO","AMBIENTE OXIMETRO DE","ANALIZADOR DE OXIGENO","ARTROSCOPIO","ASPIRADOR","ASPIRADOR A BATERAS","BALANZA","BAÑO TERMOSTATICO","BATERIA PORTATIL","BATERY PACK","BBB","BLENDER DE OXIGENO","BOMBA DE ALIMENTACION","BOMBA DE ALIMENTACION","BOMBA DE ASPIRACION DE DRENAJE","BOMBA DE INFUSION","BOMBA SACA LECHE","BPAP","BPAP AUTO","BPAP AUTO C/HUMIDIF","BPAP C/AVAPS","BPAP C/BIFLEX","BPAP C/FREC.","BPAP C/HUMIDIFICADOR","CABEZALES DE BOMBA","CABLE DE CONEXIÓN 12V","CABLE PACIENTE","CABLE TRANSMISION DATOS","CALENTADOR HUMIDIFICADOR","CANISTER DE CAL SODADA","CAPNOGRAFO","CAPNOMETRO","CAPOTA DE INCUBADORA","CARDIODESFIBRILADOR","CARGADOR DE BATERIAS","CENTRAL DE MONITOREO","COLCHON DE AIRE","COLPOSCOPIO","COMPRESOR DE COLCHON ANTI ESCARAS","COMPRESOR DE CONCENTRADOR","COMPRESOR DE RESPIRADOR","COMPRESOR PARA BOTA","CONCENTRADOR DE OXIGENO","CONCENTRADOR PORTATIL DE OXIGENO","CONECTOR PLASTICO","CONTRA ANGULO","CONTROL DE MICROMOTOR","COUGH ASIST","CPAP","CPAP AUTO","CPAP AUTO C/HUMIDIF","CPAP C/CFLEX","CPAP C/HUMIDIF","CRANEOMOTRO","CUNA PEDIATRICA","DESFIBRILADOR","DETECTOR FETAL","ELECTROBISTURI","ELECTROCARDIOGRAFO","ELECTROCOAGULADOR","ELECTRODO PASIVO ELECTROVISTURI","ESPIROMETRO MA-1","ESTABILIZADOR DE TENSION","ESTUFA DE LABORATORIO","FERULA DE TORONTO","FLOWMETER","FRONTOLUZ","FUENTE DE ALIMENTACION","FUENTE DE FIBRA OPTICA","GENERADOR DE MARCAPASOS","GENERADOR DE OZONO","GRUPO CONTROL DE SERVOCUNA","GRUPO MOTOR DE INCUBADORA","HOLTER","IMPRESORA","INCUBADOR DE MONITORES BIOLOGICOS","INCUBADORA","INCUBADORA DE TRANSPORTE","LAMPARA DE ODONTOLOGIA","LARINGOSCOPIO","LASER INFRAROJO","LUMINOTERAPIA","LUMINOTERAPIA LED","MAGNETO","MANGUERA DE ALTA PRESION","MANOMETROS","MARCAPASO","MEDIDOR DE OXIGENO","MESA DE ANESTESIA","MOCHILA O2 425L","MODULO DE ENTRADA","MONITOR AUXILIAR","MONITOR CARDIACO","MONITOR DE APNEA","MONITOR DE PORTERO ELECTRICO","MONITOR DE PRESION NO INVASIVO","MONITOR DE SEG ELECTRICA","MONITOR FETAL","MONITOR LED","MONITOR MULTIPARAMETRICO","MONITOR PRE PARTO","MOTO NEBULIZADOR","MOTORES CON TURBINA","NEBULIZADOR","ONDA CORTA","OTOSCOPIO","OXICAPNOGRAFO","OXIMETRO DE PULSO","OXIMETRO DE PULSO C/CURVA","PACK DE BATERIA","PALETAS DE DESFIBRILADOR","PANEL DE SERVOCUNA","PARA RECARGAR","PEDAL DE ELECTROBISTURI","PIE PORTASUEROS","PIE RODANTE DE MONITOR","PIEZA DE MANO","PLACA INDIFERENTE DE ELECTROBISTURI","PLAQUETA DE OXIMETRO DE PULSO","POLIGRAFO","PORTA FUELLE DE RESPIRADOR","PROLONGADOR DE SENSOR","PUNTA DE ASPIRADOR ULTRASONICO","RECTOSCOPIO","REGULADOR DE MOCHILA","RELOJES","RESPIRADOR","SELLADORA DE BOLSAS","SENSOR DE GOTA","SENSOR DE OXIMETRO DE PULSO","SENSOR DE TEMPERATURA","SENSOR DE XFLUJO","SERVICIO DE GUARDIA","SERVOCUNA","SIERRA ORTOPEDICA","SOPORTE DE PALETAS DESFIBRILADOR","SWICH TPLINK","TAPA DE CALENTADOR","TAPA DE CONCENTRADOR","TAPA DE HUMIDIFICADOR","TAPA DE RESPIRADOR","TENSIOMETRO","TERMINALES DE SENSOR","TRANSFORMADOR","TUBO DE OXIGENO 1M","TUBO DE OXIGENO 6 M3","ULTRASONIDO","UPS","VALVULA AHORRADORA","VALVULA DE MESA DE ANESTESIA","VALVULA DE PEEP","VALVULA EXPIROMETRIA","VALVULA REDUCTORA DE PRESION","VENTILADOR","OTRO"
-        ]
+        catalogo_fijo = []
         # Combinar usados + catálogo fijo
-        nombres = sorted({ *(n for n in usados_set if n), *catalogo_fijo })
         internos_set = { (r.get('nombre') or '').strip().upper() for r in (internos or []) }
-        nombres = sorted({ *internos_set, *(n for n in usados_set if n), *catalogo_fijo })
+        nombres = sorted(internos_set)
         rows = [{ "id": i+1, "nombre": n } for i, n in enumerate(nombres)]
         return Response(rows)
 
@@ -2064,6 +2203,44 @@ class ModeloTipoEquipoView(APIView):
                SET tipo_equipo = NULLIF(%s,'')
              WHERE id=%s AND marca_id=%s
         """, [tipo_nombre, modelo_id, marca_id])
+
+        # Asegurar presencia del tipo en el catálogo por marca para evitar
+        # inconsistencias en el front (series/variantes esperan esta fila)
+        if tipo_nombre:
+            # Buscar coincidencia case/acentos-insensitive y normalizar el nombre exacto
+            row = q(
+                """
+                SELECT id, nombre
+                  FROM marca_tipos_equipo
+                 WHERE marca_id=%s AND UPPER(TRIM(nombre)) = UPPER(TRIM(%s))
+                 LIMIT 1
+                """,
+                [marca_id, tipo_nombre],
+                one=True,
+            )
+            if row:
+                # Si existe con diferencias de acentuación/espacios, actualizamos al texto elegido
+                if (row.get("nombre") or "").strip() != tipo_nombre:
+                    exec_void("UPDATE marca_tipos_equipo SET nombre=%s WHERE id=%s", [tipo_nombre, row["id"]])
+            else:
+                if connection.vendor == "postgresql":
+                    exec_void(
+                        """
+                        INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                        VALUES (%s,%s,TRUE)
+                        ON CONFLICT (marca_id, nombre) DO UPDATE SET activo=EXCLUDED.activo
+                        """,
+                        [marca_id, tipo_nombre],
+                    )
+                else:
+                    exec_void(
+                        """
+                        INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                        VALUES (%s,%s,TRUE)
+                        ON DUPLICATE KEY UPDATE activo=VALUES(activo)
+                        """,
+                        [marca_id, tipo_nombre],
+                    )
 
         return Response({"ok": True})
 
@@ -2646,6 +2823,7 @@ class DevolverDerivacionView(APIView):
                     f"Hoja de servicio: /ingresos/{ingreso_id}\n"
                 )
                 try:
+                    txt = _email_append_footer_text(txt)
                     send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [email], fail_silently=True)
                 except Exception:
                     pass
@@ -2738,6 +2916,8 @@ class UsuariosView(APIView):
                         <p>Si no esperabas este correo, ignoralo.</p>
                     """
                     try:
+                        txt = _email_append_footer_text(txt)
+                        html = _email_append_footer_html(html)
                         send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [user["email"]], html_message=html, fail_silently=True)
                     except Exception:
                         pass
@@ -2795,6 +2975,8 @@ class UsuarioResetPassView(APIView):
             <p>Si no fuiste vos, ignorá este correo.</p>
         """
         try:
+            txt = _email_append_footer_text(txt)
+            html = _email_append_footer_html(html)
             send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [user["email"]], html_message=html, fail_silently=True)
         except Exception:
             pass
@@ -2984,7 +3166,36 @@ class MarcaDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
-        q("DELETE FROM marcas WHERE id = %(id)s", {"id": bid})
+        # Pre-chequeo para dar un error amigable si tiene modelos asociados
+        try:
+            row = q("SELECT COUNT(*) AS cnt FROM models WHERE marca_id=%s", [bid], one=True)
+            if row and (row.get("cnt") or 0) > 0:
+                return Response({
+                    "detail": "No se puede eliminar la marca: tiene modelos asociados. Elimine o reasigne los modelos primero.",
+                    "models_count": int(row.get("cnt") or 0),
+                }, status=409)
+            # Intento de borrado (protección ante condiciones de carrera)
+            exec_void("DELETE FROM marcas WHERE id = %s", [bid])
+            return Response({"ok": True})
+        except IntegrityError:
+            # Fallback: restricciones de FK (p.ej. RESTRICT desde models)
+            return Response({
+                "detail": "No se puede eliminar la marca por restricciones de integridad (tiene referencias activas).",
+            }, status=409)
+
+    def patch(self, request, bid):
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        d = request.data or {}
+        nombre = (d.get("nombre") or d.get("name") or "").strip()
+        if not nombre:
+            return Response({"detail": "nombre requerido"}, status=400)
+        row = q("SELECT id FROM marcas WHERE id=%s", [bid], one=True)
+        if not row:
+            return Response({"detail": "marca no encontrada"}, status=404)
+        clash = q("SELECT id FROM marcas WHERE id<>%s AND LOWER(nombre)=LOWER(%s)", [bid, nombre], one=True)
+        if clash:
+            return Response({"detail": "ya existe una marca con ese nombre"}, status=409)
+        exec_void("UPDATE marcas SET nombre=%s WHERE id=%s", [nombre, bid])
         return Response({"ok": True})
 
 class ModelosPorMarcaView(APIView):
@@ -3044,6 +3255,27 @@ class ModelosPorMarcaView(APIView):
                 [bid, n, tecnico_id, tipo_equipo, variante],
             )
 
+        # Si se cargó tipo_equipo al crear/actualizar, asegurarlo en marca_tipos_equipo
+        if tipo_equipo:
+            if connection.vendor == "postgresql":
+                q(
+                    """
+                    INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                    VALUES (%s,%s,TRUE)
+                    ON CONFLICT (marca_id, nombre) DO UPDATE SET activo=EXCLUDED.activo
+                    """,
+                    [bid, tipo_equipo],
+                )
+            else:
+                q(
+                    """
+                    INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                    VALUES (%s,%s,TRUE)
+                    ON DUPLICATE KEY UPDATE activo=VALUES(activo)
+                    """,
+                    [bid, tipo_equipo],
+                )
+
         return Response({"ok": True})
 
 
@@ -3051,8 +3283,62 @@ class ModeloDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, mid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
-        q("DELETE FROM models WHERE id = %(id)s", {"id": mid})
+        try:
+            exec_void("DELETE FROM models WHERE id = %s", [mid])
+            return Response({"ok": True})
+        except IntegrityError:
+            return Response({
+                "detail": "No se puede eliminar el modelo por restricciones de integridad.",
+            }, status=409)
+
+    def patch(self, request, mid):
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        d = request.data or {}
+        nombre = (d.get("nombre") or d.get("name") or "").strip()
+        if not nombre:
+            return Response({"detail": "nombre requerido"}, status=400)
+        row = q("SELECT id, marca_id FROM models WHERE id=%s", [mid], one=True)
+        if not row:
+            return Response({"detail": "modelo no encontrado"}, status=404)
+        marca_id = row.get("marca_id")
+        clash = q(
+            "SELECT id FROM models WHERE marca_id=%s AND id<>%s AND LOWER(nombre)=LOWER(%s)",
+            [marca_id, mid, nombre], one=True,
+        )
+        if clash:
+            return Response({"detail": "ya existe un modelo con ese nombre para la marca"}, status=409)
+        exec_void("UPDATE models SET nombre=%s WHERE id=%s", [nombre, mid])
         return Response({"ok": True})
+
+
+class MarcaDeleteCascadeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def delete(self, request, bid):
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        try:
+            with transaction.atomic():
+                # Desvincular devices que referencian a modelos/marcas de esta marca
+                exec_void(
+                    """
+                    UPDATE devices
+                       SET model_id = NULL
+                     WHERE model_id IN (SELECT id FROM models WHERE marca_id = %s)
+                    """,
+                    [bid],
+                )
+                exec_void("UPDATE devices SET marca_id = NULL WHERE marca_id = %s", [bid])
+
+                # Borrar modelos de la marca
+                exec_void("DELETE FROM models WHERE marca_id = %s", [bid])
+
+                # Las tablas jerárquicas tienen ON DELETE CASCADE por marca/modelo
+                # Borrar marca
+                exec_void("DELETE FROM marcas WHERE id = %s", [bid])
+            return Response({"ok": True})
+        except IntegrityError:
+            return Response({
+                "detail": "No se pudo eliminar en cascada por restricciones de integridad.",
+            }, status=409)
 
 class ProveedoresExternosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -3350,10 +3636,11 @@ class GeneralEquiposView(APIView):
         with connection.cursor() as cur:
             _set_audit_user(request)
             base = """
-              SELECT t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
+              SELECT t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.fecha_entrega, t.ubicacion_id,
                      COALESCE(loc.nombre, '') AS ubicacion_nombre,
                      c.razon_social,
                      d.numero_serie,
+                     COALESCE(d.n_de_control,'') AS numero_interno,
                      COALESCE(b.nombre,'') AS marca,
                      COALESCE(m.nombre,'') AS modelo,
                      COALESCE(m.tipo_equipo,'') AS tipo_equipo
@@ -3380,9 +3667,9 @@ class GeneralEquiposView(APIView):
                 base += ' AND t.estado NOT IN (' + placeholders + ')' 
                 params.extend(excluir_estados)
             if qtxt:
-                base += " AND (LOWER(c.razon_social) LIKE LOWER(%s) OR LOWER(d.numero_serie) LIKE LOWER(%s) OR LOWER(b.nombre) LIKE LOWER(%s) OR LOWER(m.nombre) LIKE LOWER(%s))"
+                base += " AND (LOWER(c.razon_social) LIKE LOWER(%s) OR LOWER(d.numero_serie) LIKE LOWER(%s) OR LOWER(d.n_de_control) LIKE LOWER(%s) OR LOWER(b.nombre) LIKE LOWER(%s) OR LOWER(m.nombre) LIKE LOWER(%s))"
                 like = f"%{qtxt}%"
-                params += [like, like, like, like]
+                params += [like, like, like, like, like]
             base += " ORDER BY t.fecha_ingreso DESC"
             cur.execute(base, params)
             data = _fetchall_dicts(cur)
@@ -3403,6 +3690,7 @@ class IngresoDetalleView(APIView):
               t.fecha_servicio,
               t.garantia_reparacion,
               t.faja_garantia,
+              t.remito_ingreso,
               t.remito_salida,
               t.factura_numero,
               t.fecha_entrega,
@@ -3542,6 +3830,29 @@ class IngresoDetalleView(APIView):
                 params_no_estado.append(dt)
                 fecha_present = True
 
+        # --- Entrega (remito, factura, fecha) ---
+        if any(k in d for k in ("remito_salida", "factura_numero", "fecha_entrega")):
+            if _rol(request) not in {"jefe", "jefe_veedor", "admin", "recepcion"}:
+                raise PermissionDenied("No autorizado para editar datos de entrega")
+            if "remito_salida" in d:
+                sets_no_estado.append("remito_salida = NULLIF(%s,'')")
+                params_no_estado.append((d.get("remito_salida") or "").strip())
+            if "factura_numero" in d:
+                sets_no_estado.append("factura_numero = NULLIF(%s,'')")
+                params_no_estado.append((d.get("factura_numero") or "").strip())
+            if "fecha_entrega" in d:
+                val = d.get("fecha_entrega")
+                if val is None or (isinstance(val, str) and val.strip() == ""):
+                    sets_no_estado.append("fecha_entrega=NULL")
+                else:
+                    dt = parse_datetime(val)
+                    if not dt:
+                        raise ValidationError("fecha_entrega inválida")
+                    if timezone.is_naive(dt):
+                        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                    sets_no_estado.append("fecha_entrega=%s")
+                    params_no_estado.append(dt)
+
         # --- NUEVOS CAMPOS ---
         # Garantía de reparación
         if "garantia_reparacion" in d:
@@ -3624,6 +3935,13 @@ class IngresoDetalleView(APIView):
                 "UPDATE devices SET numero_serie = NULLIF(%s,'') WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
                 [ns, ingreso_id],
             )
+
+        # Remito de ingreso
+        if "remito_ingreso" in d:
+            if rol not in ROL_EDIT_BASICS:
+                raise PermissionDenied("No autorizado para editar remito de ingreso")
+            sets_no_estado.append("remito_ingreso = NULLIF(%s,'')")
+            params_no_estado.append((d.get("remito_ingreso") or "").strip())
 
         # Alquiler (propio del ingreso)
         if "alquilado" in d:
@@ -3874,4 +4192,95 @@ class BuscarAccesorioPorReferenciaView(APIView):
 
 
 
+
+
+class TiposEquipoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        rows = q(
+            """
+            SELECT DISTINCT TRIM(nombre) AS nombre
+            FROM marca_tipos_equipo
+            WHERE activo = TRUE
+            ORDER BY 1
+            """
+        ) or []
+        return Response([{ 'id': i+1, 'nombre': r.get('nombre') } for i, r in enumerate(rows)])
+
+    def post(self, request):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        d = request.data or {}
+        new_name = (d.get("nombre") or "").strip()
+        old_name = (d.get("rename_from") or "").strip()
+        if not new_name:
+            return Response({"detail": "nombre requerido"}, status=400)
+
+        _set_audit_user(request)
+
+        if old_name and old_name.lower() != new_name.lower():
+            if connection.vendor == "postgresql":
+                exec_void(
+                    """
+                    INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                    SELECT marca_id, %s, activo
+                    FROM marca_tipos_equipo
+                    WHERE UPPER(nombre)=UPPER(%s)
+                    ON CONFLICT (marca_id, nombre) DO UPDATE SET activo=EXCLUDED.activo
+                    """,
+                    [new_name, old_name],
+                )
+                exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(nombre)=UPPER(%s)", [old_name])
+            else:
+                exec_void(
+                    """
+                    INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                    SELECT marca_id, %s, activo
+                    FROM marca_tipos_equipo
+                    WHERE UPPER(nombre)=UPPER(%s)
+                    ON DUPLICATE KEY UPDATE activo=VALUES(activo)
+                    """,
+                    [new_name, old_name],
+                )
+                exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(nombre)=UPPER(%s)", [old_name])
+
+            exec_void(
+                "UPDATE models SET tipo_equipo=%s WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))",
+                [new_name, old_name],
+            )
+            return Response({"ok": True, "renamed": True})
+
+        row = q("SELECT id FROM marcas ORDER BY id LIMIT 1", one=True)
+        if not row:
+            return Response({"detail": "No hay marcas disponibles para registrar el tipo"}, status=400)
+        marca_id = row.get("id")
+        if connection.vendor == "postgresql":
+            exec_void(
+                """
+                INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                VALUES (%s,%s,TRUE)
+                ON CONFLICT (marca_id, nombre) DO UPDATE SET activo=EXCLUDED.activo
+                """,
+                [marca_id, new_name],
+            )
+        else:
+            exec_void(
+                """
+                INSERT INTO marca_tipos_equipo(marca_id, nombre, activo)
+                VALUES (%s,%s,TRUE)
+                ON DUPLICATE KEY UPDATE activo=VALUES(activo)
+                """,
+                [marca_id, new_name],
+            )
+        return Response({"ok": True, "created": True})
+
+    def delete(self, request):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        nombre = (request.GET.get("nombre") or "").strip()
+        if not nombre:
+            return Response({"detail": "nombre requerido"}, status=400)
+        _set_audit_user(request)
+        exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(TRIM(nombre))=UPPER(TRIM(%s))", [nombre])
+        exec_void("UPDATE models SET tipo_equipo=NULL WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))", [nombre])
+        return Response({"ok": True})
 

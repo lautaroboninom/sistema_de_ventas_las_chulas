@@ -105,6 +105,9 @@ export default function ServiceSheet() {
     factura_numero: "",
     fecha_entrega: "", // datetime-local string
   });
+  const canEditEntrega = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.RECEPCION]);
+  const [editEntrega, setEditEntrega] = useState(false);
+  const [savingEntrega, setSavingEntrega] = useState(false);
 
   // ubicaciones
   const [ubicaciones, setUbicaciones] = useState([]);
@@ -483,6 +486,12 @@ export default function ServiceSheet() {
         setTrabajos(ing?.trabajos_realizados ?? "");
         setResolucion(ing?.resolucion ?? "");
         setFechaServStr(toDatetimeLocalStr(ing?.fecha_servicio));
+        // inicializar campos de entrega
+        setEntrega({
+          remito_salida: ing?.remito_salida || "",
+          factura_numero: ing?.factura_numero || "",
+          fecha_entrega: toDatetimeLocalStr(ing?.fecha_entrega),
+        });
 
         // técnicos
         if (canAssignTecnico) {
@@ -901,20 +910,96 @@ export default function ServiceSheet() {
                 </div>
               </>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                <div>
-                  <div className="text-gray-600">Remito salida</div>
-                  <div className="font-medium">{data.remito_salida || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-gray-600">Factura</div>
-                  <div className="font-medium">{data.factura_numero || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-gray-600">Fecha entrega</div>
-                  <div className="font-medium">{data.fecha_entrega ? formatDateTimeHelper(data.fecha_entrega) : "-"}</div>
-                </div>
-              </div>
+              <>
+                {!editEntrega && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                    <div>
+                      <div className="text-gray-600">Remito salida</div>
+                      <div className="font-medium">{data.remito_salida || "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-600">Factura</div>
+                      <div className="font-medium">{data.factura_numero || "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-600">Fecha entrega</div>
+                      <div className="font-medium">{data.fecha_entrega ? formatDateTimeHelper(data.fecha_entrega) : "-"}</div>
+                    </div>
+                  </div>
+                )}
+                {canEditEntrega && !editEntrega && (
+                  <div className="mt-3">
+                    <button className="px-3 py-2 border rounded" type="button" onClick={() => setEditEntrega(true)}>
+                      Editar entrega
+                    </button>
+                  </div>
+                )}
+                {canEditEntrega && editEntrega && (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-sm">Remito salida</label>
+                        <input
+                          className="border rounded p-2 w-full"
+                          value={entrega.remito_salida}
+                          onChange={(e) => setEntrega({ ...entrega, remito_salida: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm">Factura</label>
+                        <input
+                          className="border rounded p-2 w-full"
+                          value={entrega.factura_numero}
+                          onChange={(e) => setEntrega({ ...entrega, factura_numero: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm">Fecha entrega</label>
+                        <input
+                          type="datetime-local"
+                          className="border rounded p-2 w-full"
+                          value={entrega.fecha_entrega}
+                          onChange={(e) => setEntrega({ ...entrega, fecha_entrega: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
+                        disabled={savingEntrega}
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            setSavingEntrega(true);
+                            const payload = {
+                              remito_salida: (entrega.remito_salida || "").trim(),
+                              factura_numero: (entrega.factura_numero || "").trim(),
+                              fecha_entrega: entrega.fecha_entrega || null,
+                            };
+                            await patchIngreso(id, payload);
+                            await refreshIngreso();
+                            setEditEntrega(false);
+                            setErr("");
+                          } catch (e) {
+                            setErr(e?.message || "No se pudo guardar entrega");
+                          } finally {
+                            setSavingEntrega(false);
+                          }
+                        }}
+                      >
+                        Guardar
+                      </button>
+                      <button className="px-3 py-2 border rounded" type="button" onClick={() => { setEditEntrega(false); setEntrega({
+                        remito_salida: data?.remito_salida || "",
+                        factura_numero: data?.factura_numero || "",
+                        fecha_entrega: toDatetimeLocalStr(data?.fecha_entrega),
+                      }); }}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
             )}
           </div>
 

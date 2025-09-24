@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, modeloSerieVarianteOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
 // Ajustá si tu backend usa otro endpoint
@@ -45,7 +45,7 @@ export default function PendientesGeneral() {
             formatOS(row),
             row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
             row?.marca ?? row?.equipo?.marca,
-            modeloSerieVarianteOf(row),
+            catalogEquipmentLabel(row),
             tipoEquipoOf(row),
             row?.estado,
             row?.numero_serie,
@@ -102,7 +102,7 @@ export default function PendientesGeneral() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, marca, modelo, serie…"
+          placeholder="Filtrar por OS, cliente, marca, equipo, serie…"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar pendientes"
         />
@@ -123,7 +123,7 @@ export default function PendientesGeneral() {
                 <th className="p-2">OS</th>
                 <th className="p-2">Cliente</th>
                 <th className="p-2">Marca</th>
-                <th className="p-2">Modelo</th>
+                <th className="p-2">Equipo</th>
                 <th className="p-2">Tipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
@@ -170,7 +170,7 @@ export default function PendientesGeneral() {
                       {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
                     </td>
                     <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                    <td className="p-2">{modeloSerieVarianteOf(row)}</td>
+                    <td className="p-2">{catalogEquipmentLabel(row)}</td>
                     <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2">
                       <StatusChip value={row?.estado} />

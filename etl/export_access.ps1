@@ -91,7 +91,7 @@ try {
   Write-Host "OK: Exportado -> $outFile"
 
   # Ingresos
-  $outFile = Join-Path $OutDir 'ingresos_access.csv'; $cols = @('id','device_id','estado','motivo','fecha_ingreso','informe_preliminar','accesorios','remito_ingreso','comentarios','propietario_nombre','propietario_contacto','presupuesto_estado')
+  $outFile = Join-Path $OutDir 'ingresos_access.csv'; $cols = @('id','device_id','estado','motivo','fecha_ingreso','fecha_creacion','informe_preliminar','accesorios','remito_ingreso','comentarios','propietario_nombre','propietario_contacto','presupuesto_estado')
   Write-CsvUtf8 $dtServ $outFile $cols { param($r)
     $estado = (([string]$r['Estado']).Trim().ToLower()); $flags = @{ 'entregado'=(To-Bool01 $r['Entregado']); 'derivado'=(To-Bool01 $r['Derivado']); 'reparado'=(To-Bool01 $r['Reparado']); 'reparar'=(To-Bool01 $r['Reparar']) }
     if ($flags['entregado'] -eq '1') { $estado = 'entregado' } elseif ($flags['derivado'] -eq '1') { $estado = 'derivado' } elseif ($flags['reparado'] -eq '1') { $estado = 'reparado' } elseif ($flags['reparar'] -eq '1') { $estado = 'reparar' } if (-not $estado) { $estado = 'ingresado' }
@@ -125,6 +125,46 @@ try {
   $cmd = $cn.CreateCommand(); $cmd.CommandText = "SELECT [Id] AS ingreso_id, [IdEmpleado] FROM [Servicio]"; $adp = New-Object System.Data.OleDb.OleDbDataAdapter($cmd); $dtIE = New-Object System.Data.DataTable; [void]$adp.Fill($dtIE)
   $outFile = Join-Path $OutDir 'ingresos_empleado_access.csv'; $cols = @('ingreso_id','id_empleado')
   Write-CsvUtf8 $dtIE $outFile $cols { param($r) @((To-Str $r['ingreso_id']),(To-Str $r['IdEmpleado'])) }
+  Write-Host "OK: Exportado -> $outFile"
+
+  # Fecha de entrega (histrica)
+  $outFile = Join-Path $OutDir 'ingresos_entrega_access.csv'; $cols = @('ingreso_id','fecha_entrega')
+  Write-CsvUtf8 $dtServ $outFile $cols { param($r) @((To-Str $r['Id']),(Fmt-DT $r['FechaEntrega'] 'yyyy-MM-dd HH:mm:ss')) }
+  Write-Host "OK: Exportado -> $outFile"
+
+  # Datos de alquiler (por ingreso)
+  $outFile = Join-Path $OutDir 'ingresos_alquiler_access.csv'; $cols = @('ingreso_id','alquilado_flag','recibe_alquiler','cargo_alquiler')
+  Write-CsvUtf8 $dtServ $outFile $cols { param($r) @((To-Str $r['Id']),(To-Bool01 (Get-Col $r 'Alquilado')),(To-Str (Get-Col $r 'RecibeAlquiler')),(To-Str (Get-Col $r 'CargoAlquiler'))) }
+  Write-Host "OK: Exportado -> $outFile"
+
+  # Estados numericos + flags (para mapeo ubicaciones/estado/resolucion)
+  $outFile = Join-Path $OutDir 'ingresos_estado_access.csv';
+  $cols = @('id','estado_num','entregado','alquilado','indic_presup','presupuestar','nu_presup','impresion_remito','impre_remito')
+  Write-CsvUtf8 $dtServ $outFile $cols { param($r)
+    @(
+      (To-Str $r['Id']),
+      (To-Str $r['Estado']),
+      (To-Bool01 $r['Entregado']),
+      (To-Bool01 $r['Alquilado']),
+      (To-Bool01 $r['IndicPresup']),
+      (To-Bool01 $r['Presupuestar']),
+      (To-Str  $r['NuPresup']),
+      (To-Bool01 (Get-Col $r 'ImpresionRemito')),
+      (To-Str (Get-Col $r 'ImpreRemito'))
+    )
+  }
+  Write-Host "OK: Exportado -> $outFile"
+
+  # Mapeo Servicio.IdEquipo -> (marca, modelo) -> models.tipo_equipo
+  $cmd = $cn.CreateCommand(); $cmd.CommandText = "SELECT [IdEquipos], [Equipo] FROM [Equipos]"; $adp = New-Object System.Data.OleDb.OleDbDataAdapter($cmd); $dtEq = New-Object System.Data.DataTable; [void]$adp.Fill($dtEq)
+  $eqMap = @{}; foreach($row in $dtEq.Rows){ $eqMap[[int]$row['IdEquipos']] = (To-Str $row['Equipo']) }
+  $cmd = $cn.CreateCommand(); $cmd.CommandText = "SELECT DISTINCT [Marca], [Modelo], [IdEquipo] FROM [Servicio] WHERE [Marca] IS NOT NULL AND [Modelo] IS NOT NULL AND [IdEquipo] IS NOT NULL"; $adp = New-Object System.Data.OleDb.OleDbDataAdapter($cmd); $dtMM = New-Object System.Data.DataTable; [void]$adp.Fill($dtMM)
+  $outFile = Join-Path $OutDir 'model_tipo_equipo_access.csv'; $cols = @('marca_nombre','modelo_nombre','tipo_equipo')
+  Write-CsvUtf8 $dtMM $outFile $cols { param($r)
+    $tipo = ''
+    try { $tipo = (To-Str ($eqMap[[int]([string]$r['IdEquipo'])])) } catch { $tipo = '' }
+    @((To-Str $r['Marca']),(To-Str $r['Modelo']),$tipo)
+  }
   Write-Host "OK: Exportado -> $outFile"
 
 } finally { if ($cn) { $cn.Close(); $cn.Dispose() } }

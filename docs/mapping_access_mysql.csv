@@ -50,6 +50,7 @@ Servicio,Propietario,string,devices,propietario,TEXT,trim,Owner tied to the devi
 Servicio,Propietario,string,ingresos,propietario_nombre,TEXT,trim,Snapshot on ingreso
 Servicio,TelefContacto,string,ingresos,propietario_contacto,TEXT,trim,
 Servicio,Fecha Ingreso,datetime,ingresos,fecha_ingreso,TIMESTAMP,direct,
+Servicio,Fecha Ingreso,datetime,ingresos,fecha_creacion,TIMESTAMP,direct (fallback),Nuevo campo para registrar la fecha real de alta
 Servicio,Motivo,int,ingresos,motivo,ENUM,via Motivo.Id lookup,Includes "devolución demo"
 Servicio,Informepreliminar,string,ingresos,informe_preliminar,TEXT,trim,
 Servicio,Accesorios,string,ingresos,accesorios,TEXT,trim,

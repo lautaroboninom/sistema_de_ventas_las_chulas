@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, modeloSerieVarianteOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, catalogEquipmentLabel } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 import { resolutionLabel } from "../lib/constants";
 
@@ -54,7 +54,7 @@ export default function AdminListos() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        modeloSerieVarianteOf(row),
+        catalogEquipmentLabel(row),
         tipoEquipoOf(row),
         row?.estado,
         row?.resolucion,
@@ -134,7 +134,7 @@ export default function AdminListos() {
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Marca</th>
-                <th scope="col" className="p-2">Modelo</th>
+                <th scope="col" className="p-2">Equipo</th>
                 <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Resolución</th>
                 <th scope="col" className="p-2">Serie</th>
@@ -157,7 +157,7 @@ export default function AdminListos() {
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                   <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                  <td className="p-2">{modeloSerieVarianteOf(row) ?? "-"}</td>
+                  <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">
                     <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolución" />

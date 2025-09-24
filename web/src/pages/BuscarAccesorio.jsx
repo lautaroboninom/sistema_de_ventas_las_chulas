@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { buscarAccesorioPorRef } from "../lib/api";
-import { formatDateTime as formatDateTimeHelper, formatOS as formatOSHelper } from "../lib/ui-helpers";
+import { formatDateTime as formatDateTimeHelper, formatOS as formatOSHelper, resolveFechaIngreso } from "../lib/ui-helpers";
 
 export default function BuscarAccesorio() {
   const [sp] = useSearchParams();
@@ -61,7 +61,7 @@ export default function BuscarAccesorio() {
                     <td className="p-2">{r?.razon_social || "-"}</td>
                     <td className="p-2">{equipo || "-"}</td>
                     <td className="p-2">{r?.numero_serie || "-"}</td>
-                    <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(r?.fecha_ingreso)}</td>
+                    <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(resolveFechaIngreso(r))}</td>
                   </tr>
                 );
               })}

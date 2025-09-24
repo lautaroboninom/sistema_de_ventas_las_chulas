@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { getAuthSession, postAuthLogout, postLogin, setToken } from "../lib/api";
+import { registerFeatures } from "@/lib/features";
 
 // Normalizador local para no generar dependencia circular
 function sanitizeUser(u) {
@@ -21,6 +22,7 @@ export function AuthProvider({ children }) {
       try {
         const data = await getAuthSession();
         if (active && data?.user) {
+          registerFeatures(data.features);
           setUser(sanitizeUser(data.user));
         }
       } catch (err) {
@@ -39,6 +41,7 @@ export function AuthProvider({ children }) {
   async function login(email, password) {
     const data = await postLogin(email, password); // { token, user }
     const cleanUser = sanitizeUser(data.user);
+    registerFeatures(data.features);
     setToken(data.token);
     setUser(cleanUser);
     setLoading(false);

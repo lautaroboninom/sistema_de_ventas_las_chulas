@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, modeloSerieVarianteOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
 export default function Tecnico() {
@@ -104,7 +104,7 @@ export default function Tecnico() {
                 <th className="p-2">OS</th>
                 <th className="p-2">Fecha Ingreso</th>
                 <th className="p-2">Marca</th>
-                <th className="p-2">Modelo</th>
+                <th className="p-2">Equipo</th>
                 <th className="p-2">Tipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
@@ -154,7 +154,7 @@ export default function Tecnico() {
                       {fechaIngreso ? formatDateTime(fechaIngreso) : "-"}
                     </td>
                     <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                    <td className="p-2">{modeloSerieVarianteOf(row) ?? "-"}</td>
+                    <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                     <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2">
                       <StatusChip value={row?.estado} />

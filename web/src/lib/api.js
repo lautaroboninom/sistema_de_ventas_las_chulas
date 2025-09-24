@@ -1,15 +1,15 @@
-  // web/src/lib/api.js
+﻿  // web/src/lib/api.js
 
   // === BASE del API robusto ===
-  // 1) Si está definida VITE_API_URL, la usamos.
-  // 2) Si no, caemos al host actual pero en puerto 8000 (útil en LAN).
+  // 1) Si estÃ¡ definida VITE_API_URL, la usamos.
+  // 2) Si no, caemos al host actual pero en puerto 8000 (Ãºtil en LAN).
   const API_FALLBACK = `${window.location.protocol}//${window.location.hostname}:8000`;
   const isDevVite = window.location.port === "5173";
   const BASE =
     import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ||
     (isDevVite
       ? `${window.location.protocol}//${window.location.hostname}:8000`
-      : ""); // producción: mismo origen + rutas /api/ relativas
+      : ""); // producciÃ³n: mismo origen + rutas /api/ relativas
 
   /* ===== Token en memoria (compatibilidad) ===== */
   let token = null;
@@ -64,7 +64,7 @@
   }
 
   /* API cruda para quien prefiera */
-  const api = {
+  export const api = {
     get: (p, opts) => http(p, { ...opts, method: "GET" }),
     post: (p, body, opts) => http(p, { ...opts, method: "POST", body }),
     patch: (p, body, opts) => http(p, { ...opts, method: "PATCH", body }),
@@ -88,14 +88,128 @@
   export const postUsuario = (payload) => api.post("/api/usuarios/", payload);
   export const patchUsuarioActivo = (id, activo) =>
     api.patch(`/api/usuarios/${id}/activar/`, { activo });
-  // Enviar enlace de restablecimiento/invitación por email
+  // Enviar enlace de restablecimiento/invitaciÃ³n por email
   export const patchUsuarioReset = (id) =>
     api.patch(`/api/usuarios/${id}/reset-pass/`, {});
   export const patchUsuarioRolePerm = (id, payload) =>
     api.patch(`/api/usuarios/${id}/roleperm/`, payload);
   export const deleteUsuario = (id) => api.del(`/api/usuarios/${id}/`);
 
-  /* =============== CATÁLOGOS =============== */
+  /* =============== CATÃLOGOS =============== */
+
+
+const catalogCache = {
+  marcas: null,
+  tipos: new Map(),
+  modelos: new Map(),
+  variantes: new Map(),
+};
+
+const catalogCacheKey = (...parts) => parts.filter(part => part !== undefined && part !== null).join(":");
+
+export const clearCatalogCache = () => {
+  catalogCache.marcas = null;
+  catalogCache.tipos.clear();
+  catalogCache.modelos.clear();
+  catalogCache.variantes.clear();
+};
+
+export async function getCatalogMarcas(force = false) {
+  if (!force && catalogCache.marcas) {
+    return catalogCache.marcas;
+  }
+  const data = await api.get("/api/catalogo/marcas/");
+  catalogCache.marcas = data;
+  return data;
+}
+
+export async function getCatalogTipos(marcaId, force = false) {
+  const key = String(marcaId ?? "");
+  if (!force && catalogCache.tipos.has(key)) {
+    return catalogCache.tipos.get(key);
+  }
+  if (marcaId == null || marcaId === "") {
+    catalogCache.tipos.set(key, []);
+    return [];
+  }
+  const data = await api.get(`/api/catalogo/marcas/${encodeURIComponent(marcaId)}/tipos/`);
+  catalogCache.tipos.set(key, data);
+  return data;
+}
+
+export async function getCatalogModelos(marcaId, tipoId, force = false) {
+  const key = catalogCacheKey(marcaId, tipoId);
+  if (!force && catalogCache.modelos.has(key)) {
+    return catalogCache.modelos.get(key);
+  }
+  if (!marcaId || !tipoId) {
+    catalogCache.modelos.set(key, []);
+    return [];
+  }
+  const data = await api.get(
+    `/api/catalogo/marcas/${encodeURIComponent(marcaId)}/tipos/${encodeURIComponent(tipoId)}/modelos/`
+  );
+  catalogCache.modelos.set(key, data);
+  return data;
+}
+
+export async function getCatalogVariantes(marcaId, tipoId, modeloId, force = false) {
+  const key = catalogCacheKey(marcaId, tipoId, modeloId);
+  if (!force && catalogCache.variantes.has(key)) {
+    return catalogCache.variantes.get(key);
+  }
+  if (!marcaId || !modeloId) {
+    catalogCache.variantes.set(key, []);
+    return [];
+  }
+  const data = await api.get(
+    `/api/catalogo/marcas/${encodeURIComponent(marcaId)}/modelos/${encodeURIComponent(modeloId)}/variantes/`
+  );
+  catalogCache.variantes.set(key, data);
+  return data;
+}
+
+// Marcas que soportan un tipo dado (por nombre)
+export async function getMarcasPorTipo(tipoNombre) {
+  const name = encodeURIComponent(tipoNombre || "");
+  if (!name) return [];
+  return api.get(`/api/catalogo/tipos/${name}/marcas/`);
+}
+
+// Tipos (ABM por marca)
+export const postCatalogTipo = (payload) =>
+  api.post("/api/catalogo/tipos-equipo/", payload);
+
+export const patchCatalogTipo = (tipoId, payload) =>
+  api.patch(`/api/catalogo/tipos-equipo/${tipoId}/`, payload);
+
+export const deleteCatalogTipo = (tipoId) =>
+  api.del(`/api/catalogo/tipos-equipo/${tipoId}/`);
+
+export const postCatalogModelo = (payload) =>
+  api.post("/api/catalogo/modelos/", payload);
+
+export const patchCatalogModelo = (modeloId, payload) =>
+  api.patch(`/api/catalogo/modelos/${modeloId}/`, payload);
+
+export const deleteCatalogModelo = (modeloId) =>
+  api.del(`/api/catalogo/modelos/${modeloId}/`);
+
+// Aliases de compat (antes se llamaban 'serie')
+export const postCatalogSerie = postCatalogModelo;
+export const patchCatalogSerie = patchCatalogModelo;
+export const deleteCatalogSerie = deleteCatalogModelo;
+
+export const postCatalogVariante = (payload) =>
+  api.post("/api/catalogo/variantes/", payload);
+
+export const patchCatalogVariante = (varianteId, payload) =>
+  api.patch(`/api/catalogo/variantes/${varianteId}/`, payload);
+
+export const deleteCatalogVariante = (varianteId) =>
+  api.del(`/api/catalogo/variantes/${varianteId}/`);
+
+
   export const getClientes = () => api.get("/api/catalogos/clientes/");
   export const postCliente = (payload) =>
     api.post("/api/catalogos/clientes/", payload);
@@ -107,9 +221,24 @@
     api.post("/api/catalogos/marcas/", { nombre });
   export const deleteMarca = (id) =>
     api.del(`/api/catalogos/marcas/${id}/`);
+  // Eliminación en cascada: borra la marca y TODOS sus modelos
+  export const deleteMarcaCascade = (id) =>
+    api.del(`/api/catalogos/marcas/${id}/eliminar-con-modelos/`);
+  export const patchMarca = (id, payload) =>
+    api.patch(`/api/catalogos/marcas/${id}/`, payload);
 
   export const getTiposEquipo = () =>
     api.get("/api/catalogos/tipos-equipo/");
+
+  // ABM Tipos de equipo (catálogo general)
+  export const getTiposEquipoAdmin = () =>
+    api.get("/api/catalogos/tipos-equipo-admin/");
+  export const postTipoEquipo = (nombre) =>
+    api.post("/api/catalogos/tipos-equipo-admin/", { nombre });
+  export const patchTipoEquipo = (id, payload) =>
+    api.patch(`/api/catalogos/tipos-equipo-admin/${id}/`, payload);
+  export const deleteTipoEquipo = (id) =>
+    api.del(`/api/catalogos/tipos-equipo-admin/${id}/`);
 
   export const patchModeloTipoEquipo = (marcaId, modeloId, payload) =>
     api.patch(`/api/catalogos/marcas/${marcaId}/modelos/${modeloId}/tipo-equipo/`, payload);
@@ -125,6 +254,8 @@ export const postModelo = (brandId, payloadOrNombre) => {
 };
   export const deleteModelo = (id) =>
     api.del(`/api/catalogos/modelos/${id}/`);
+  export const patchModelo = (id, payload) =>
+    api.patch(`/api/catalogos/modelos/${id}/`, payload);
 
   export const getUbicaciones = () => api.get("/api/catalogos/ubicaciones/");
   export const getMotivos = () => api.get("/api/catalogos/motivos/");
@@ -190,7 +321,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const deleteIngresoFoto = (ingresoId, mediaId) =>
     api.del(`/api/ingresos/${ingresoId}/fotos/${mediaId}/`);
 
-  // Búsqueda por referencia de accesorio
+  // BÃºsqueda por referencia de accesorio
   export const buscarAccesorioPorRef = (ref) =>
     api.get(`/api/accesorios/buscar/?ref=${encodeURIComponent(ref||"")}`);
   // Entregar (requiere remito; opcional factura y fecha)
@@ -209,9 +340,14 @@ export const postModelo = (brandId, payloadOrNombre) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/equipos/${qs ? `?${qs}` : ""}`);
   };
-  // Check garantía de reparación por N/S
-  export const checkGarantiaReparacion = (numero_serie) =>
-    api.get(`/api/equipos/garantia-reparacion/?numero_serie=${encodeURIComponent(numero_serie||"")}`);
+  // Check garantÃ­a de reparaciÃ³n por N/S
+  export const checkGarantiaReparacion = (numero_serie, numero_interno) => {
+    const params = new URLSearchParams();
+    if (numero_serie) params.set("numero_serie", numero_serie);
+    if (numero_interno) params.set("numero_interno", numero_interno);
+    const qs = params.toString();
+    return api.get(`/api/equipos/garantia-reparacion/${qs ? `?${qs}` : ""}`);
+  };
   export const getGeneralPorCliente = (customerId) =>
     api.get(`/api/clientes/${customerId}/general/`);
 
@@ -232,10 +368,17 @@ export const postModelo = (brandId, payloadOrNombre) => {
       { tecnico_id }
     );
 
+  // Variante simple por modelo (v1)
+  export const patchModeloVariante = (marcaId, modeloId, variante) =>
+    api.patch(
+      `/api/catalogos/marcas/${marcaId}/modelos/${modeloId}/variante/`,
+      { variante }
+    );
+
   export const patchMarcaTecnico = (marcaId, tecnico_id) =>
     api.patch(`/api/catalogos/marcas/${marcaId}/tecnico/`, { tecnico_id });
 
-  // Aplica el técnico de la marca a TODOS los modelos (sobrescribe)
+  // Aplica el tÃ©cnico de la marca a TODOS los modelos (sobrescribe)
   export const postMarcaAplicarTecnico = (marcaId) =>
     api.post(`/api/catalogos/marcas/${marcaId}/tecnico/aplicar-a-modelos/`);
 
@@ -286,7 +429,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const postQuoteAnular = (ingresoId) =>
     api.post(`/api/quotes/${ingresoId}/anular/`);
 
-  // Cerrar reparación (setea la resolución)
+  // Cerrar reparaciÃ³n (setea la resoluciÃ³n)
   export async function postCerrarReparacion(id, body) {
     // body = { resolucion: "reparado" | "no_reparado" | "no_se_encontro_falla" | "presupuesto_rechazado" }
     return api.post(`/api/ingresos/${id}/cerrar/`, body);
@@ -299,3 +442,4 @@ export const postModelo = (brandId, payloadOrNombre) => {
   // Historial de cambios por ingreso
   export const getIngresoHistorial = (ingresoId) =>
     api.get(`/api/ingresos/${ingresoId}/historial/`);
+

@@ -62,6 +62,8 @@ export default function NuevoIngreso() {
     motivo: "",
     informe_preliminar: "",
     garantia_reparacion: false,
+    remito_ingreso: "",
+    fecha_ingreso: "", // opcional: si viene vacía, se usará hoy() en el backend
   });
 
   // Accesorios
@@ -120,23 +122,24 @@ export default function NuevoIngreso() {
     }
   }
 
-  // Garantía de reparación (por N/S) — debounce 400ms
+  // Garantía de reparación (por N/S o N° interno MG) — debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
-    if (!ns) {
+    const mg = (form.equipo.numero_interno || "").trim();
+    if (!ns && !mg) {
       setForm((f) => ({ ...f, garantia_reparacion: false }));
       return;
     }
     const h = setTimeout(async () => {
       try {
-        const r = await checkGarantiaReparacion(ns);
+        const r = await checkGarantiaReparacion(ns, mg);
         setForm((f) => ({ ...f, garantia_reparacion: !!r.within_90_days }));
       } catch {
         /* noop */
       }
     }, 400);
     return () => clearTimeout(h);
-  }, [form.equipo.numero_serie]);
+  }, [form.equipo.numero_serie, form.equipo.numero_interno]);
 
   const tipoEquipoSel = useMemo(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
@@ -357,6 +360,8 @@ export default function NuevoIngreso() {
         equipo_variante: (varianteTxt || "").trim() || null,
         motivo: form.motivo,
         informe_preliminar: form.informe_preliminar,
+        remito_ingreso: (form.remito_ingreso || "").trim(),
+        ...(form.fecha_ingreso ? { fecha_ingreso: form.fecha_ingreso } : {}),
         accesorios_items: accItems.map((it) => ({
           accesorio_id: Number(it.accesorio_id),
           referencia: (it.referencia || "").trim(),
@@ -387,6 +392,8 @@ export default function NuevoIngreso() {
         motivo: "",
         informe_preliminar: "",
         garantia_reparacion: false,
+        remito_ingreso: "",
+        fecha_ingreso: "",
       });
       setAccItems([]);
       setPropietario({ nombre: "", contacto: "", doc: "" });
@@ -605,6 +612,23 @@ export default function NuevoIngreso() {
           <legend className="px-2 font-semibold">Ingreso</legend>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
+              <label className="text-sm">N° de remito</label>
+              <Input
+                value={form.remito_ingreso}
+                onChange={onChange("remito_ingreso")}
+                placeholder="Opcional"
+              />
+            </div>
+            <div>
+              <label className="text-sm">Fecha de ingreso</label>
+              <Input
+                type="date"
+                value={form.fecha_ingreso}
+                onChange={onChange("fecha_ingreso")}
+              />
+              <div className="text-xs text-gray-500 mt-1">Si se deja vacío, se usa la fecha de hoy.</div>
+            </div>
+            <div>
               <label className="text-sm">Motivo</label>
               <Select value={form.motivo} onChange={onChange("motivo")}>
                 <option value="">Seleccioná motivo</option>
@@ -733,4 +757,3 @@ export default function NuevoIngreso() {
     </div>
   );
 }
-

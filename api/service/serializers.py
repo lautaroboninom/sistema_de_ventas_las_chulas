@@ -57,10 +57,12 @@ class IngresoListItemSerializer(serializers.Serializer):
     fecha_ingreso = serializers.DateTimeField(required=False, allow_null=True)
     razon_social = serializers.CharField(allow_blank=True, required=False)
     numero_serie = serializers.CharField(allow_blank=True, required=False)
+    numero_interno = serializers.CharField(allow_blank=True, required=False)
     marca = serializers.CharField(allow_blank=True, required=False)
     modelo = serializers.CharField(allow_blank=True, required=False)
     tipo_equipo = serializers.CharField(allow_blank=True, required=False)
     fecha_servicio = serializers.DateTimeField(required=False, allow_null=True)
+    fecha_entrega = serializers.DateTimeField(required=False, allow_null=True)
     fecha_aprobacion = serializers.DateTimeField(required=False, allow_null=True)
     
     # Campos opcionales que algunas vistas ya traen
@@ -96,6 +98,7 @@ class IngresoDetailSerializer(serializers.Serializer):
     factura_numero = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     garantia_reparacion = serializers.BooleanField(required=False)
     faja_garantia = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    remito_ingreso = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     alquilado = serializers.BooleanField(required=False)
     alquiler_a = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     alquiler_remito = serializers.CharField(allow_null=True, allow_blank=True, required=False)

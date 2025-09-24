@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, modeloSerieVarianteOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
 
 
 // Ajustá si tu backend usa otra ruta (histórico completo)
@@ -49,7 +49,7 @@ export default function GeneralEquipos() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        modeloSerieVarianteOf(row),
+        catalogEquipmentLabel(row),
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
@@ -87,7 +87,7 @@ export default function GeneralEquipos() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, marca, modelo, estado, serie…"
+          placeholder="Filtrar por OS, cliente, marca, equipo, estado, serie…"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar histórico"
         />
@@ -115,14 +115,13 @@ export default function GeneralEquipos() {
               <tr className="text-left">
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
-                <th scope="col" className="p-2">Marca</th>
-                <th scope="col" className="p-2">Modelo</th>
+                <th scope="col" className="p-2">Equipo</th>
                 <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Ubicación</th>
                 <th scope="col" className="p-2">Fecha ingreso</th>
-                <th scope="col" className="p-2">Último cambio</th>
+                <th scope="col" className="p-2">Fecha entrega</th>
               </tr>
             </thead>
             <tbody>
@@ -141,21 +140,13 @@ export default function GeneralEquipos() {
                   <td className="p-2">
                     {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
                   </td>
-                  <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                  <td className="p-2">{modeloSerieVarianteOf(row) ?? "-"}</td>
+                  <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">{row?.estado ?? "-"}</td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
                   <td className="p-2">{row?.ubicacion_nombre ?? "-"}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
-                  <td className="p-2 whitespace-nowrap">
-                    {formatDateTime(
-                      row?.fecha_actualizacion ??
-                        row?.fecha_estado ??
-                        row?.fecha_reparado ??
-                        row?.fecha_aprobacion
-                    )}
-                  </td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_entrega)}</td>
                 </tr>
               ))}
             </tbody>

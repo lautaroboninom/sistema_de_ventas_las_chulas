@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { getClientes } from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, modeloSerieVarianteOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
 
 
 
@@ -66,7 +66,7 @@ export default function GeneralPorCliente() {
       const campos = [
         formatOS(row),
         row?.marca ?? row?.equipo?.marca,
-        modeloSerieVarianteOf(row),
+        catalogEquipmentLabel(row),
         tipoEquipoOf(row),
         row?.estado,
         row?.presupuesto_estado,
@@ -163,7 +163,7 @@ export default function GeneralPorCliente() {
                 <th scope="col" className="p-2">Presupuesto</th>
                 <th scope="col" className="p-2">Ubicación</th>
                 <th scope="col" className="p-2">Fecha ingreso</th>
-                <th scope="col" className="p-2">Último cambio</th>
+                <th scope="col" className="p-2">Fecha presupuestado</th>
               </tr>
             </thead>
             <tbody>
@@ -182,7 +182,7 @@ export default function GeneralPorCliente() {
                   <td className="p-2">
                     {(row?.marca ?? row?.equipo?.marca ?? "-") +
                       " " +
-                      (modeloSerieVarianteOf(row) ?? "")}
+                      (catalogEquipmentLabel(row) ?? "")}
                   </td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
@@ -191,12 +191,7 @@ export default function GeneralPorCliente() {
                   <td className="p-2">{row?.ubicacion_nombre ?? row?.ubicacion_id ?? "-"}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">
-                    {formatDateTime(
-                      row?.fecha_actualizacion ??
-                        row?.fecha_estado ??
-                        row?.fecha_reparado ??
-                        row?.fecha_aprobacion
-                    )}
+                    {formatDateTime(row?.presupuesto_fecha_emision || row?.presupuesto_fecha_envio)}
                   </td>
                 </tr>
               ))}

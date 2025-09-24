@@ -25,7 +25,7 @@ IGNORE 1 LINES
 -- Resumen por mes/cliente: Access(CostoTotal) vs MySQL(quotes.subtotal/total)
 SELECT
   c.razon_social                               AS cliente,
-  DATE_FORMAT(COALESCE(q.fecha_aprobado, q.fecha_emitido, i.fecha_ingreso), '%Y-%m') AS mes,
+  DATE_FORMAT(COALESCE(q.fecha_aprobado, q.fecha_emitido, COALESCE(i.fecha_ingreso, i.fecha_creacion)), '%Y-%m') AS mes,
   ROUND(SUM(COALESCE(CAST(NULLIF(v.costo_total,'') AS DECIMAL(12,2)), 0)), 2)         AS access_costo_total_sum,
   ROUND(SUM(q.subtotal), 2)                                                          AS mysql_subtotal_sum,
   ROUND(SUM(q.total), 2)                                                             AS mysql_total_sum,
@@ -43,7 +43,7 @@ ORDER BY mes DESC, cliente ASC;
 SELECT
   i.id AS ingreso_id,
   c.razon_social AS cliente,
-  DATE_FORMAT(COALESCE(q.fecha_aprobado, q.fecha_emitido, i.fecha_ingreso), '%Y-%m-%d') AS fecha_ref,
+  DATE_FORMAT(COALESCE(q.fecha_aprobado, q.fecha_emitido, COALESCE(i.fecha_ingreso, i.fecha_creacion)), '%Y-%m-%d') AS fecha_ref,
   CAST(NULLIF(v.costo_total,'') AS DECIMAL(12,2)) AS access_costo_total,
   q.subtotal AS mysql_subtotal,
   (q.subtotal - CAST(NULLIF(v.costo_total,'') AS DECIMAL(12,2))) AS diff_subtotal,

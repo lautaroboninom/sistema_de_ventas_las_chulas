@@ -65,7 +65,7 @@ SET @sql := IF(@cnt=0, 'CREATE INDEX idx_ingresos_ubicacion ON ingresos(ubicacio
 SET @cnt := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name='ingresos' AND index_name='idx_vw_general_cliente_estado');
 SET @sql := IF(@cnt>0, 'DROP INDEX idx_vw_general_cliente_estado ON ingresos', 'DO 0'); PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
 SET @cnt := (SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name='ingresos' AND index_name='idx_vw_general_cliente_estado');
-SET @sql := IF(@cnt=0, 'CREATE INDEX idx_vw_general_cliente_estado ON ingresos(estado, fecha_ingreso)', 'DO 0'); PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+SET @sql := IF(@cnt=0, 'CREATE INDEX idx_vw_general_cliente_estado ON ingresos(estado, fecha_creacion)', 'DO 0'); PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- quotes: (uq en ingreso_id ya creado)
 
