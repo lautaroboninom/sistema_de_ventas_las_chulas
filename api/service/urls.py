@@ -1,10 +1,10 @@
-﻿# service/urls.py
+# service/urls.py
 from django.urls import path, include
 from .views import (
     # salud / login
     ping, LoginView, LogoutView, SessionView, ForgotPasswordView, ResetPasswordView,
 
-    # flujo ingresos / tÃ©cnico
+    # flujo ingresos / tÃƒÆ’Ã‚Â©cnico
     MisPendientesView,
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     PendientesPresupuestoView, PresupuestadosView,
@@ -16,23 +16,33 @@ from .views import (
     AprobadosParaRepararView, AprobadosYReparadosView, LiberadosView,
     GeneralEquiposView, GeneralPorClienteView,
 
-    # ingresos nuevos + derivaciÃ³n
+    # ingresos nuevos + derivaciÃƒÆ’Ã‚Â³n
     NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView, DevolverDerivacionView,
     
 
-    # catÃ¡logos
+    # catÃƒÆ’Ã‚Â¡logos
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView, CatalogoMotivosView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
+    CatalogoMarcasView, CatalogoModelosView,
+    ModeloVarianteView,
+    # catÃƒÂ¡logo jerÃƒÂ¡rquico marca/tipo/modelo/variante
+    CatalogoTiposView, CatalogoModelosDeTipoView, CatalogoVariantesView, CatalogoMarcasPorTipoView,
+    # Tipos equipo general (ABM)
+    TiposEquipoView,  # tipos equipo (sugerencias + ABM)
+    
+    # ABM tipos-equipo (por marca)
+    CatalogoTiposCreateView, CatalogoTipoDetailView,
+    CatalogoModelosCreateView, CatalogoModeloDetailView, CatalogoVariantesCreateView, CatalogoVarianteDetailView,
 
-    # administraciÃ³n de usuarios
+    # administraciÃƒÆ’Ã‚Â³n de usuarios
     UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
     CatalogoRolesView, CerrarReparacionView,
 
     # clientes / marcas-modelos / proveedores externos
     ClientesView, ClienteDeleteView,
-    MarcaDeleteView, ModelosPorMarcaView, ModeloDeleteView,
-    ProveedoresExternosView, 
+    MarcaDeleteView, MarcaDeleteCascadeView, ModelosPorMarcaView, ModeloDeleteView,
+    ProveedoresExternosView,
 
     # detalle de ingreso
     IngresoDetalleView, IngresoAsignarTecnicoView, CatalogoTecnicosView,
@@ -54,7 +64,7 @@ urlpatterns = [
     path("auth/forgot/", ForgotPasswordView.as_view()),
     path("auth/reset/", ResetPasswordView.as_view()),
 
-    # tÃ©cnico / ingresos (acciones)
+    # tÃƒÆ’Ã‚Â©cnico / ingresos (acciones)
     path("tecnico/mis-pendientes/", MisPendientesView.as_view()),
     path("ingresos/<int:ingreso_id>/reparado/", MarcarReparadoView.as_view()),
     path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
@@ -73,7 +83,7 @@ urlpatterns = [
     path("ingresos/liberados/", LiberadosView.as_view()),
     path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
 
-    # ALIAS de compatibilidad con el front (si existÃ­an)
+    # ALIAS de compatibilidad con el front (si existÃƒÆ’Ã‚Â­an)
     path("ingresos/aprobados/", AprobadosParaRepararView.as_view()),
     path("ingresos/reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
@@ -85,13 +95,13 @@ urlpatterns = [
     # utilidades
     path("equipos/garantia-reparacion/", GarantiaReparacionCheckView.as_view()),
 
-    # ingresos nuevos / derivaciÃ³n
+    # ingresos nuevos / derivaciÃƒÆ’Ã‚Â³n
     path("ingresos/nuevo/", NuevoIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivar/", DerivarIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/", DerivacionesPorIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/<int:deriv_id>/devolver/", DevolverDerivacionView.as_view()),
 
-    # catÃ¡logos
+    # catÃƒÆ’Ã‚Â¡logos
     path("catalogos/marcas/", CatalogoMarcasView.as_view()),
     path("catalogos/modelos/", CatalogoModelosView.as_view()),                   # ?marca_id=#
     path("catalogos/ubicaciones/", CatalogoUbicacionesView.as_view()),
@@ -99,12 +109,22 @@ urlpatterns = [
     path("catalogos/accesorios/", CatalogoAccesoriosView.as_view()),
     path("catalogos/proveedores-externos/", ProveedoresExternosView.as_view()),
     path("catalogos/proveedores-externos/<int:pid>/", ProveedoresExternosView.as_view()),
+    # variante simple por modelo (v1)
+    path('catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/variante/', ModeloVarianteView.as_view()),
 
+    # catÃƒÂ¡logo jerÃƒÂ¡rquico (marca -> tipo -> modelo -> variante)
+    path("catalogo/marcas/", CatalogoMarcasView.as_view()),
+    path("catalogo/marcas/<int:bid>/tipos/", CatalogoTiposView.as_view()),
+    path("catalogo/marcas/<int:bid>/tipos/<int:tid>/modelos/", CatalogoModelosDeTipoView.as_view()),
+    path("catalogo/marcas/<int:bid>/modelos/<int:mid>/variantes/", CatalogoVariantesView.as_view()),
+    path("catalogo/tipos/<str:tipo_nombre>/marcas/", CatalogoMarcasPorTipoView.as_view()),
+    
 
-    # administraciÃ³n de clientes / marcas / modelos
+    # administraciÃƒÂ³n de clientes / marcas / modelos
     path("catalogos/clientes/", ClientesView.as_view()),                         # GET/POST
     path("catalogos/clientes/<int:cid>/", ClienteDeleteView.as_view()),          # DELETE
     path("catalogos/marcas/<int:bid>/", MarcaDeleteView.as_view()),              # DELETE
+    path("catalogos/marcas/<int:bid>/eliminar-con-modelos/", MarcaDeleteCascadeView.as_view()),  # DELETE (cascade)
     path("catalogos/marcas/<int:bid>/modelos/", ModelosPorMarcaView.as_view()), # GET/POST
     path("catalogos/modelos/<int:mid>/", ModeloDeleteView.as_view()),            # DELETE
 
@@ -132,7 +152,7 @@ urlpatterns = [
 
 
 
-    # (si usÃ¡s los endpoints para asignar tÃ©cnico y setear tÃ©cnico de marca/modelo)
+    # (si usÃƒÆ’Ã‚Â¡s los endpoints para asignar tÃƒÆ’Ã‚Â©cnico y setear tÃƒÆ’Ã‚Â©cnico de marca/modelo)
     path('catalogos/marcas/<int:bid>/tecnico/', MarcaTecnicoView.as_view()),
     path('catalogos/marcas/<int:bid>/tecnico/aplicar-a-modelos/', MarcaAplicarTecnicoAModelosView.as_view()),
     path('catalogos/marcas/<int:bid>/modelos/<int:mid>/tecnico/', ModeloTecnicoView.as_view()),
@@ -146,16 +166,26 @@ urlpatterns = [
     path("quotes/<int:ingreso_id>/pdf/", QuotePdfView.as_view()),
     path("quotes/<int:ingreso_id>/anular/", AnularPresupuestoView.as_view()),
 
-    # tÃ©cnico / ingresos (acciones)
+    # tÃƒÆ’Ã‚Â©cnico / ingresos (acciones)
 
 
-    path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # ðŸ‘ˆ nuevo
+    path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # ÃƒÂ°Ã…Â¸Ã¢â‚¬ËœÃ‹â€  nuevo
     path("ingresos/<int:ingreso_id>/cerrar/", CerrarReparacionView.as_view()),
 
-    # tipos de equipo (alias singular/plural por compat)
+    # tipos de equipo
+    # - listado general (sugerencias para asignaciÃƒÂ³n): plural "catalogos"
     path("catalogos/tipos-equipo/", TiposEquipoView.as_view()),
-    path("catalogo/tipos-equipo/", TiposEquipoView.as_view()),
-    # asignaciÃ³n de tipo de equipo al modelo (alias singular/plural por compat)
+
+    # - ABM catÃ¡logo general (no por marca)
+    # - ABM por marca (tabla marca_tipos_equipo)
+    path("catalogo/tipos-equipo/", CatalogoTiposCreateView.as_view()),
+    path("catalogo/tipos-equipo/<int:tipo_id>/", CatalogoTipoDetailView.as_view()),
+    # - ABM de series/modelos y variantes
+    path("catalogo/modelos/", CatalogoModelosCreateView.as_view()),
+    path("catalogo/modelos/<int:serie_id>/", CatalogoModeloDetailView.as_view()),
+    path("catalogo/variantes/", CatalogoVariantesCreateView.as_view()),
+    path("catalogo/variantes/<int:variante_id>/", CatalogoVarianteDetailView.as_view()),
+    # asignaciÃƒÆ’Ã‚Â³n de tipo de equipo al modelo (alias singular/plural por compat)
     path("catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
     path("catalogo/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
 
@@ -164,5 +194,8 @@ urlpatterns = [
     # historial de cambios por ingreso
     path("ingresos/<int:ingreso_id>/historial/", IngresoHistorialView.as_view()),
 ]
+
+
+
 
 

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
+import StatusChip from "../components/StatusChip.jsx";
 
 export default function Tecnico() {
   const [rows, setRows] = useState([]);
@@ -13,7 +14,7 @@ export default function Tecnico() {
   // helper: detectar motivo urgente control
   const isUrgente = (row) => (row?.motivo || "").toLowerCase() === "urgente control";
 
-  // ordena: devueltos de derivación primero, luego urgentes, luego por fecha_ingreso asc
+  // ordena: devueltos de derivación primero, luego urgentes, luego por fecha_creacion asc
   const sortPendientes = (arr) => {
     return [...arr].sort((a, b) => {
       const aDev = a?.derivado_devuelto ? 1 : 0;
@@ -24,9 +25,11 @@ export default function Tecnico() {
       const bu = isUrgente(b) ? 1 : 0;
       if (au !== bu) return bu - au;
 
-      // Fallback: por fecha_ingreso asc (más viejos primero)
-      const dtA = a?.fecha_ingreso ? new Date(a.fecha_ingreso) : new Date("9999-12-31");
-      const dtB = b?.fecha_ingreso ? new Date(b.fecha_ingreso) : new Date("9999-12-31");
+      // Fallback: por fecha_creacion asc (mas viejos primero)
+      const rawA = resolveFechaCreacion(a);
+      const rawB = resolveFechaCreacion(b);
+      const dtA = rawA ? new Date(rawA).getTime() : Number.POSITIVE_INFINITY;
+      const dtB = rawB ? new Date(rawB).getTime() : Number.POSITIVE_INFINITY;
       return dtA - dtB;
     });
   };
@@ -101,7 +104,7 @@ export default function Tecnico() {
                 <th className="p-2">OS</th>
                 <th className="p-2">Fecha Ingreso</th>
                 <th className="p-2">Marca</th>
-                <th className="p-2">Modelo</th>
+                <th className="p-2">Equipo</th>
                 <th className="p-2">Tipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
@@ -114,6 +117,7 @@ export default function Tecnico() {
               {rows.map((row) => {
                 const urgente = isUrgente(row);
                 const devuelto = !!row?.derivado_devuelto;
+                const fechaIngreso = resolveFechaIngreso(row);
                 const rowCls = [
                   "hover:bg-gray-50 cursor-pointer",
                   urgente && "text-red-600 font-semibold",
@@ -147,12 +151,14 @@ export default function Tecnico() {
                       )}
                     </td>
                     <td className="p-2 whitespace-nowrap">
-                      {row?.fecha_ingreso ? formatDateTime(row.fecha_ingreso) : "-"}
+                      {fechaIngreso ? formatDateTime(fechaIngreso) : "-"}
                     </td>
                     <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                    <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                    <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                     <td className="p-2">{tipoEquipoOf(row)}</td>
-                    <td className="p-2">{row?.estado ?? "-"}</td>
+                    <td className="p-2">
+                      <StatusChip value={row?.estado} />
+                    </td>
                     <td className="p-2">{row?.numero_serie ?? "-"}</td>
 
                     <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
@@ -160,6 +166,7 @@ export default function Tecnico() {
                         label="Diagnosticado"
                         checked={(() => {
                           const e = (row?.estado || "").toLowerCase();
+                          const p = (row?.presupuesto_estado || "").toLowerCase();
                           const diagChain = [
                             "diagnosticado",
                             "reparar",
@@ -168,7 +175,9 @@ export default function Tecnico() {
                             "entregado",
                             "alquilado",
                           ];
-                          return diagChain.includes(e);
+                          // Diagnosticado si el estado ya pasó por diagnóstico
+                          // o si el presupuesto ya fue emitido/aprobado/rechazado
+                          return diagChain.includes(e) || ["presupuestado","aprobado","rechazado"].includes(p);
                         })()}
                       />
                     </td>
@@ -178,7 +187,7 @@ export default function Tecnico() {
                         label="Presupuestado"
                         checked={(() => {
                           const p = (row?.presupuesto_estado || "").toLowerCase();
-                          return ["presupuestado", "aprobado"].includes(p);
+                          return ["presupuestado", "aprobado", "rechazado"].includes(p);
                         })()}
                       />
                     </td>

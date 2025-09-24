@@ -359,7 +359,7 @@ LOAD DATA LOCAL INFILE '${fp//\\/\\\\}' INTO TABLE staging_ingresos_access
 CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '\\' LINES TERMINATED BY '\n' IGNORE 1 LINES
 (id, device_id, estado, motivo, fecha_ingreso, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado);
 
-REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, ubicacion_id, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
+REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, fecha_creacion, ubicacion_id, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
 SELECT
   s.id,
   s.device_id,
@@ -371,6 +371,7 @@ SELECT
   END,
   s.motivo,
   CASE WHEN NULLIF(s.fecha_ingreso,'') <> '' THEN STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s') ELSE NULL END,
+  COALESCE(CASE WHEN NULLIF(s.fecha_ingreso,'') <> '' THEN STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s') ELSE NULL END, NOW()),
   CASE
     WHEN @loc_stock IS NOT NULL AND (TRIM(s.estado) IN ('6','06','006') OR LOWER(TRIM(s.estado)) = 'deposito') THEN @loc_stock
     ELSE NULL

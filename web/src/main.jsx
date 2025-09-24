@@ -18,6 +18,7 @@ import NuevoIngreso from "./pages/NuevoIngreso";
 import CatalogoClientes from "./pages/CatalogoClientes";
 import CatalogoMarcas from "./pages/CatalogoMarcas";
 import CatalogoProveedores from "./pages/CatalogoProveedores";
+import TiposEquipo from "./pages/TiposEquipo.jsx";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PendientesGeneral from "./pages/PendientesGeneral.jsx";
 import Aprobados from "./pages/Aprobados.jsx";
@@ -226,6 +227,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
             <CatalogoMarcas />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "catalogo/tipos-equipo",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+            <TiposEquipo />
           </ProtectedRoute>
         ),
       },

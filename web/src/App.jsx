@@ -3,6 +3,7 @@ import { Link, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 //import Sidebar from "web\src\components\Sidebar.jsx"; // ⬅️ nuevo
 import Sidebar from "./components/Sidebar.jsx";
+import Footer from "./components/Footer.jsx";
 
 
 export default function App() {
@@ -58,13 +59,7 @@ export default function App() {
         </div>
       </main>
 
-      <footer className="border-t bg-white">
-        <div className="max-w-7xl mx-auto px-4 py-3 text-sm text-gray-500 flex items-center justify-between">
-          <span>
-            &copy; {new Date().getFullYear()} Sepid S.A. Reparaciones. Todos los derechos reservados.
-          </span>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

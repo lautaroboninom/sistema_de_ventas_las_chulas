@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
+import Footer from "../components/Footer.jsx";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -49,52 +50,57 @@ export default function Login() {
   }
 
   return (
-    <div className="max-w-md mx-auto mt-16 card">
-      <div className="flex justify-center mb-4">
-        <img
-          src="/branding/logo-empresa.png"
-          alt="SEPID Reparaciones"
-          className="h-12 object-contain"
-          onError={(e) => {
-            e.currentTarget.onerror = null;
-            e.currentTarget.src = "/icons/logo-app-180.png";
-          }}
-        />
-      </div>
-      {!backendOk && (
-        <div className="mb-3 text-sm bg-yellow-100 text-yellow-800 p-2 rounded">
-          Backend no disponible.
-        </div>
-      )}
-      <div className="h1 mb-4">Ingresar</div>
-      <form className="space-y-3" onSubmit={onSubmit}>
-        <input
-          className="input"
-          type="email"
-          placeholder="...@sepid.com.ar"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          autoComplete="email"
-          required
-        />
-        <input
-          className="input"
-          type="password"
-          placeholder="Contrasena"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete="current-password"
-          required
-        />
-        {err && <div className="text-red-600 text-sm">{err}</div>}
-        <button className="btn w-full" type="submit" disabled={loading}>
-          {loading ? "Ingresando..." : "Entrar"}
-        </button>
+    <div className="min-h-screen flex flex-col">
+      <main className="flex-1">
+        <div className="max-w-md mx-auto mt-16 card">
+          <div className="flex justify-center mb-4">
+            <img
+              src="/branding/logo-app.png"
+              alt="SEPID Reparaciones"
+              className="h-12 object-contain"
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = "/icons/logo-app-180.png";
+              }}
+            />
+          </div>
+          {!backendOk && (
+            <div className="mb-3 text-sm bg-yellow-100 text-yellow-800 p-2 rounded">
+              Backend no disponible.
+            </div>
+          )}
+          <div className="h1 mb-4">Ingresar</div>
+          <form className="space-y-3" onSubmit={onSubmit}>
+            <input
+              className="input"
+              type="email"
+              placeholder="...@sepid.com.ar"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              required
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="Contrasena"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+            {err && <div className="text-red-600 text-sm">{err}</div>}
+            <button className="btn w-full" type="submit" disabled={loading}>
+              {loading ? "Ingresando..." : "Entrar"}
+            </button>
 
-        <Link to="/recuperar" className="text-sm text-blue-700 underline inline-block mt-1">
-          ¿Olvidaste tu contrasena?
-        </Link>
-      </form>
+            <Link to="/recuperar" className="text-sm text-blue-700 underline inline-block mt-1">
+              ¿Olvidaste tu contrasena?
+            </Link>
+          </form>
+        </div>
+      </main>
+      <Footer />
     </div>
   );
 }

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { getTecnicos } from "../lib/api";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel } from "../lib/ui-helpers";
+import StatusChip from "../components/StatusChip.jsx";
 
 
 export default function PendientesPorTecnico() {
@@ -49,7 +50,7 @@ export default function PendientesPorTecnico() {
           <option value="">-- Seleccionar técnico --</option>
           {tecnicos.map(t=> <option key={t.id} value={t.id}>{t.nombre}</option>)}
         </select>
-        <input className="border rounded p-2 w-full max-w-md" placeholder="Filtrar por OS, cliente, marca, modelo, serie…" value={filter} onChange={e=>setFilter(e.target.value)} />
+        <input className="border rounded p-2 w-full max-w-md" placeholder="Filtrar por OS, cliente, marca, equipo, serie…" value={filter} onChange={e=>setFilter(e.target.value)} />
       </div>
 
       {!tecnicoId ? <div className="text-sm text-gray-500">Elegí un técnico para ver sus pendientes.</div> :
@@ -59,7 +60,7 @@ export default function PendientesPorTecnico() {
           <table className="min-w-full text-sm">
             <thead><tr className="text-left">
               <th className="p-2">OS</th><th className="p-2">Cliente</th><th className="p-2">Marca</th>
-              <th className="p-2">Modelo</th><th className="p-2">Tipo</th><th className="p-2">Estado</th><th className="p-2">Serie</th><th className="p-2">Fecha</th>
+              <th className="p-2">Equipo</th><th className="p-2">Tipo</th><th className="p-2">Estado</th><th className="p-2">Serie</th><th className="p-2">Fecha</th>
             </tr></thead>
             <tbody>
               {filtered.map(row=>(
@@ -67,11 +68,11 @@ export default function PendientesPorTecnico() {
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{row.razon_social}</td>
                   <td className="p-2">{row.marca}</td>
-                  <td className="p-2">{row.modelo}</td>
+                  <td className="p-2">{catalogEquipmentLabel(row)}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
-                  <td className="p-2">{row.estado}</td>
+                  <td className="p-2"><StatusChip value={row.estado} /></td>
                   <td className="p-2">{row.numero_serie}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row.fecha_ingreso)}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                 </tr>
               ))}
             </tbody>

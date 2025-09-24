@@ -15,6 +15,32 @@ export const formatOS = (rowOrId, prefix = "OS ") => {
 export const formatDateTime = (s, locale = "es-AR") =>
   s ? new Date(s).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : "-";
 
+export const resolveFechaIngreso = (row) => row?.fecha_ingreso ?? row?.fecha_creacion ?? null;
+export const resolveFechaCreacion = (row) => row?.fecha_creacion ?? row?.fecha_ingreso ?? null;
+
+export const modeloSerieVarianteOf = (row, fallback = "-") => {
+  if (!row) return fallback;
+  const parts = [];
+  const serie = row?.modelo_serie_variante || row?.modelo_serie || row?.serie_nombre;
+  const variante = row?.modelo_variante || row?.variante_nombre;
+  if (serie && typeof serie === "string" && serie.trim()) {
+    parts.push(serie.trim());
+  }
+  if (variante && typeof variante === "string" && variante.trim()) {
+    if (!parts.length || parts[0].toLowerCase() !== variante.trim().toLowerCase()) {
+      parts.push(variante.trim());
+    }
+  }
+  if (!parts.length) {
+    const legacy = row?.modelo || row?.equipo?.modelo;
+    if (legacy && typeof legacy === "string" && legacy.trim()) {
+      return legacy.trim();
+    }
+    return fallback;
+  }
+  return parts.join(" ").trim();
+};
+
 export const tipoEquipoOf = (row, fallback = "-") => {
   if (!row) return fallback;
   const candidates = [
@@ -38,6 +64,14 @@ export const tipoEquipoOf = (row, fallback = "-") => {
   return fallback;
 };
 
+export const catalogEquipmentLabel = (row, fallback = "-") => {
+  if (!row) return fallback;
+  const marca = (row?.marca || row?.equipo?.marca || "").toString().trim();
+  const tipo = tipoEquipoOf(row, "").toString().trim();
+  const modelo = modeloSerieVarianteOf(row, "").toString().trim();
+  const parts = [marca, tipo, modelo].filter((part) => part);
+  return parts.length ? parts.join(" | ") : fallback;
+};
 export const norm = (v) => {
   const s = (v ?? "").toString().toLowerCase().trim();
   try {

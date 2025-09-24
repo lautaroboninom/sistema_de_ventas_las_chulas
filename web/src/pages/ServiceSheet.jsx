@@ -1,6 +1,6 @@
 // web/src/pages/ServiceSheet.jsx
 import { useEffect, useState, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import api, {
   // ingreso / catálogos
   getIngreso, getUbicaciones, patchIngreso,
@@ -15,12 +15,16 @@ import api, {
   // accesorios
   getAccesoriosCatalogo, postAccesorioIngreso, deleteAccesorioIngreso,
   getIngresoHistorial,
+  getGeneralEquipos,
 } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import {
   formatOS as formatOSHelper,
   formatDateTime as formatDateTimeHelper,
+  resolveFechaIngreso,
+  resolveFechaCreacion,
   toNum,
+  catalogEquipmentLabel,
 } from "../lib/ui-helpers";
 import { canActAsTech, canRelease, hasAnyRole, ROLES } from "../lib/authz";
 import { RESOLUCION, RESOLUCION_OPTIONS, resolutionLabel } from "../lib/constants";
@@ -60,9 +64,11 @@ const Tabs = ({ value, onChange, items, extraRight }) => (
 export default function ServiceSheet() {
   const { id } = useParams();
   const { user } = useAuth(); // para ocultar/mostrar botones según rol
+  const navigate = useNavigate();
   const actAsTech = canActAsTech(user);
   const release = canRelease(user);
   const canEditBasics = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]);
+  const canAssignTecnico = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]);
   const [editBasics, setEditBasics] = useState(false);
   const canSeeHistory = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO]);
   const [formBasics, setFormBasics] = useState(null); // valores en edición local
@@ -99,6 +105,9 @@ export default function ServiceSheet() {
     factura_numero: "",
     fecha_entrega: "", // datetime-local string
   });
+  const canEditEntrega = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.RECEPCION]);
+  const [editEntrega, setEditEntrega] = useState(false);
+  const [savingEntrega, setSavingEntrega] = useState(false);
 
   // ubicaciones
   const [ubicaciones, setUbicaciones] = useState([]);
@@ -152,6 +161,12 @@ export default function ServiceSheet() {
   const [hist, setHist] = useState([]);
   const [hLoading, setHLoading] = useState(false);
   const [hErr, setHErr] = useState("");
+
+  // ingresos relacionados por N/S
+  const [relatedOpen, setRelatedOpen] = useState(false);
+  const [relatedLoading, setRelatedLoading] = useState(false);
+  const [relatedErr, setRelatedErr] = useState("");
+  const [relatedRows, setRelatedRows] = useState([]);
 
   function money(n) {
     if (n == null) return "-";
@@ -284,6 +299,65 @@ export default function ServiceSheet() {
     })();
   }, [tab, id]);
 
+  useEffect(() => {
+    setRelatedOpen(false);
+    setRelatedRows([]);
+    setRelatedErr("");
+    setRelatedLoading(false);
+  }, [id]);
+
+  useEffect(() => {
+    if (!relatedOpen) return;
+    const serie = (data?.numero_serie || "").trim();
+    if (!serie) {
+      setRelatedErr("Este equipo no tiene número de serie registrado.");
+      setRelatedRows([]);
+      setRelatedLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setRelatedLoading(true);
+    setRelatedErr("");
+    (async () => {
+      try {
+        const rows = await getGeneralEquipos({ q: serie });
+        if (cancelled) return;
+        const safe = Array.isArray(rows) ? rows : [];
+        const normalized = serie.toLowerCase();
+        const toTs = (row) => {
+          const raw = resolveFechaCreacion(row);
+          if (!raw) return 0;
+          const ts = new Date(raw).getTime();
+          return Number.isNaN(ts) ? 0 : ts;
+        };
+        const filtered = safe
+          .filter((row) => String(row?.numero_serie || "").trim().toLowerCase() === normalized)
+          .sort((a, b) => toTs(b) - toTs(a));
+        setRelatedRows(filtered);
+      } catch (e) {
+        if (cancelled) return;
+        setRelatedErr(e?.message || "No se pudieron cargar los ingresos del equipo.");
+        setRelatedRows([]);
+      } finally {
+        if (!cancelled) {
+          setRelatedLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [relatedOpen, data?.numero_serie, id]);
+
+  useEffect(() => {
+    if (!relatedOpen) return;
+    const handler = (ev) => {
+      if (ev.key === "Escape") setRelatedOpen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [relatedOpen]);
+
   // Activar edición: inicializa formulario local con datos actuales
   function startEditBasics() {
     setFormBasics({
@@ -295,6 +369,7 @@ export default function ServiceSheet() {
       propietario_doc: data?.propietario_doc || "",
       numero_serie: data?.numero_serie || "",
       numero_interno: data?.numero_interno || "",
+      remito_ingreso: data?.remito_ingreso || "",
       garantia_reparacion: !!data?.garantia_reparacion,
     });
     setEditBasics(true);
@@ -312,6 +387,9 @@ export default function ServiceSheet() {
     if (cmp(formBasics.propietario_doc, data?.propietario_doc)) diff.propietario_doc = formBasics.propietario_doc;
     if (cmp(formBasics.numero_serie, data?.numero_serie)) diff.numero_serie = formBasics.numero_serie;
     if (cmp(formBasics.numero_interno, data?.numero_interno)) diff.numero_interno = formBasics.numero_interno;
+    const remitoNuevo = (formBasics.remito_ingreso || "").trim();
+    const remitoActual = (data?.remito_ingreso || "").trim();
+    if (remitoNuevo !== remitoActual) diff.remito_ingreso = remitoNuevo;
     if ((formBasics.garantia_reparacion ? 1 : 0) !== (data?.garantia_reparacion ? 1 : 0)) diff.garantia_reparacion = !!formBasics.garantia_reparacion;
     try {
       setSavingBasics(true);
@@ -408,9 +486,19 @@ export default function ServiceSheet() {
         setTrabajos(ing?.trabajos_realizados ?? "");
         setResolucion(ing?.resolucion ?? "");
         setFechaServStr(toDatetimeLocalStr(ing?.fecha_servicio));
+        // inicializar campos de entrega
+        setEntrega({
+          remito_salida: ing?.remito_salida || "",
+          factura_numero: ing?.factura_numero || "",
+          fecha_entrega: toDatetimeLocalStr(ing?.fecha_entrega),
+        });
 
         // técnicos
-        try { setTecnicos(await getTecnicos()); } catch (_) {}
+        if (canAssignTecnico) {
+          try { setTecnicos(await getTecnicos()); } catch (_) {}
+        } else {
+          setTecnicos([]);
+        }
 
         // derivaciones
         try { setDerivs(await getDerivacionesPorIngreso(id)); } catch (_) {}
@@ -418,7 +506,7 @@ export default function ServiceSheet() {
         setErr(e?.message || "Error cargando datos");
       }
     })();
-  }, [id]);
+  }, [id, canAssignTecnico]);
 
   // Ubicación
   const selectedIdNum = toNum(ubicacionId);
@@ -440,9 +528,9 @@ export default function ServiceSheet() {
   }
 
   // Técnico
-  const techDirty = (tecnicoId ?? null) !== (data?.asignado_a ?? null);
+  const techDirty = canAssignTecnico && (tecnicoId ?? null) !== (data?.asignado_a ?? null);
   async function saveTecnico() {
-    if (!techDirty || tecnicoId == null) return;
+    if (!canAssignTecnico || !techDirty || tecnicoId == null) return;
     try {
       setSavingTech(true);
       await patchIngresoTecnico(id, Number(tecnicoId));
@@ -484,29 +572,35 @@ export default function ServiceSheet() {
 
   if (!data) return <div className="p-4">Cargando...</div>;
   const isAprobado = data.presupuesto_estado === "aprobado";
+  const numeroSerie = (data?.numero_serie || "").trim();
 
   const userId = Number(user?.id || 0);
   const canManagePhotos = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) ||
     (user?.rol === ROLES.TECNICO && userId && data?.asignado_a === userId);
 
-
   return (
     <div className="max-w-6xl mx-auto p-4">
+      <button
+        type="button"
+        onClick={() => navigate(-1)}
+        className="mb-3 inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800"
+      >
+        Volver
+      </button>
       <h1 className="text-2xl font-bold mb-2">Hoja de servicio — {formatOSHelper(data, id)}</h1>
 
-
-      
       {err && <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-4">{err}</div>}
       {canSeeHistory && (
-      <div className="-mt-8 -mb-2 text-right">
-        <button
-          className={`px-3 py-2 rounded-t ${tab === 'historial' ? 'bg-white border border-b-0' : 'text-gray-600 hover:text-black'}`}
-          onClick={() => setTab('historial')}
-          type="button"
-        >
-          Historial
-        </button>
-      </div>)}
+        <div className="-mt-8 -mb-2 text-right">
+          <button
+            className={`px-3 py-2 rounded-t ${tab === 'historial' ? 'bg-white border border-b-0' : 'text-gray-600 hover:text-black'}`}
+            onClick={() => setTab('historial')}
+            type="button"
+          >
+            Historial
+          </button>
+        </div>
+      )}
 
       <Tabs
         value={tab}
@@ -605,8 +699,10 @@ export default function ServiceSheet() {
               <h2 className="font-semibold mt-4 mb-2">Equipo</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
               <Row label="Marca">{data.marca}</Row>
-              <Row label="Modelo">{data.modelo}</Row>
-              <Row label="Tipo de equipo">{data.tipo_equipo || "-"}</Row>
+              <Row label="Equipo">{catalogEquipmentLabel(data)}</Row>
+              <Row label="Tipo de equipo">{data.tipo_equipo_nombre || data.tipo_equipo || "-"}</Row>
+              <Row label="Modelo">{data.modelo || "-"}</Row>
+              <Row label="Variante">{data.equipo_variante || "-"}</Row>
               <Row label="N° serie">
                 {editBasics ? (
                   <input
@@ -615,7 +711,7 @@ export default function ServiceSheet() {
                     onChange={(e) => setFormBasics(s => ({ ...s, numero_serie: e.target.value }))}
                   />
                 ) : (
-                  data.numero_serie
+                  <span>{numeroSerie || "-"}</span>
                 )}
               </Row>
               <Row label="Garantía (fábrica)">{data.garantia ? "Sí" : "No"}</Row>
@@ -639,6 +735,17 @@ export default function ServiceSheet() {
                   />
                 ) : (
                   <span>{data.numero_interno || ""}</span>
+                )}
+              </Row>
+              <Row label={"N\u00B0 de remito"}>
+                {editBasics ? (
+                  <input
+                    className="border rounded p-1 w-60"
+                    value={formBasics?.remito_ingreso ?? ""}
+                    onChange={(e) => setFormBasics(s => ({ ...s, remito_ingreso: e.target.value }))}
+                  />
+                ) : (
+                  <span>{data.remito_ingreso || "-"}</span>
                 )}
               </Row>
 
@@ -669,7 +776,8 @@ export default function ServiceSheet() {
               <Row label="Estado">{data.estado}</Row>
               <Row label="Presupuesto">{data.presupuesto_estado === "presupuestado" ? "Presupuestado" : (data.presupuesto_estado || "-")}</Row>
               <Row label="Resolución">{data.resolucion ? resolutionLabel(data.resolucion) : "-"}</Row>
-              <Row label="Fecha ingreso">{formatDateTimeHelper(data.fecha_ingreso)}</Row>
+              <Row label="Fecha ingreso">{formatDateTimeHelper(resolveFechaIngreso(data))}</Row>
+              <Row label="Fecha creacion">{formatDateTimeHelper(resolveFechaCreacion(data))}</Row>
               <Row label="Fecha servicio">{data.fecha_servicio ? formatDateTimeHelper(data.fecha_servicio) : "-"}</Row>
               </div>
 
@@ -679,18 +787,31 @@ export default function ServiceSheet() {
                 <div>
                   <h2 className="font-semibold mb-2">Asignación</h2>
                   <div className="flex flex-col items-start gap-2">
-                    <select className="border rounded p-2" value={tecnicoId ?? ""} onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}>
-                      <option value="">-- Seleccionar técnico --</option>
-                      {tecnicos.map((t) => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
-                    </select>
-                    <button className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={saveTecnico} disabled={savingTech || !techDirty || tecnicoId == null} aria-busy={savingTech ? "true" : "false"} type="button">
-                      {savingTech ? "Guardando..." : "Guardar"}
-                    </button>
+                    {canAssignTecnico ? (
+                      <>
+                        <select className="border rounded p-2" value={tecnicoId ?? ""} onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}>
+                          <option value="">-- Seleccionar técnico --</option>
+                          {tecnicos.map((t) => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
+                        </select>
+                        <button
+                          className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
+                          onClick={saveTecnico}
+                          disabled={savingTech || !techDirty || tecnicoId == null}
+                          aria-busy={savingTech ? "true" : "false"}
+                          type="button"
+                        >
+                          {savingTech ? "Guardando..." : "Guardar"}
+                        </button>
+                      </>
+                    ) : (
+                      <div className="text-sm text-gray-500">No tenés permiso para reasignar técnicos.</div>
+                    )}
                     <div className="text-xs text-gray-500">Actual: <b>{data.asignado_a_nombre || "-"}</b></div>
                   </div>
                 </div>
                 <div>
                   <h2 className="font-semibold mb-2">Ubicación</h2>
+
                   <div className="flex flex-col items-start gap-2">
                     <select className="border rounded p-2" value={ubicacionId} onChange={(e) => setUbicacionId(e.target.value)} aria-label="Seleccionar ubicación">
                       <option value="" disabled>Selección la ubicación.</option>
@@ -702,6 +823,17 @@ export default function ServiceSheet() {
                   </div>
                   <div className="text-xs text-gray-500">La ubicación puede modificarse desde aquí.</div>
                 </div>
+                  {numeroSerie && (
+                    <div className="flex justify-end mb-2 w-full">
+                      <button
+                        type="button"
+                        onClick={() => setRelatedOpen(true)}
+                        className="text-xs px-2 py-1 rounded border border-blue-600 text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      >
+                        Ver ingresos del equipo
+                      </button>
+                    </div>
+                  )}
               </div>
             </div>
           </div>
@@ -778,20 +910,96 @@ export default function ServiceSheet() {
                 </div>
               </>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                <div>
-                  <div className="text-gray-600">Remito salida</div>
-                  <div className="font-medium">{data.remito_salida || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-gray-600">Factura</div>
-                  <div className="font-medium">{data.factura_numero || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-gray-600">Fecha entrega</div>
-                  <div className="font-medium">{data.fecha_entrega ? formatDateTimeHelper(data.fecha_entrega) : "-"}</div>
-                </div>
-              </div>
+              <>
+                {!editEntrega && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                    <div>
+                      <div className="text-gray-600">Remito salida</div>
+                      <div className="font-medium">{data.remito_salida || "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-600">Factura</div>
+                      <div className="font-medium">{data.factura_numero || "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-600">Fecha entrega</div>
+                      <div className="font-medium">{data.fecha_entrega ? formatDateTimeHelper(data.fecha_entrega) : "-"}</div>
+                    </div>
+                  </div>
+                )}
+                {canEditEntrega && !editEntrega && (
+                  <div className="mt-3">
+                    <button className="px-3 py-2 border rounded" type="button" onClick={() => setEditEntrega(true)}>
+                      Editar entrega
+                    </button>
+                  </div>
+                )}
+                {canEditEntrega && editEntrega && (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-sm">Remito salida</label>
+                        <input
+                          className="border rounded p-2 w-full"
+                          value={entrega.remito_salida}
+                          onChange={(e) => setEntrega({ ...entrega, remito_salida: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm">Factura</label>
+                        <input
+                          className="border rounded p-2 w-full"
+                          value={entrega.factura_numero}
+                          onChange={(e) => setEntrega({ ...entrega, factura_numero: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm">Fecha entrega</label>
+                        <input
+                          type="datetime-local"
+                          className="border rounded p-2 w-full"
+                          value={entrega.fecha_entrega}
+                          onChange={(e) => setEntrega({ ...entrega, fecha_entrega: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
+                        disabled={savingEntrega}
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            setSavingEntrega(true);
+                            const payload = {
+                              remito_salida: (entrega.remito_salida || "").trim(),
+                              factura_numero: (entrega.factura_numero || "").trim(),
+                              fecha_entrega: entrega.fecha_entrega || null,
+                            };
+                            await patchIngreso(id, payload);
+                            await refreshIngreso();
+                            setEditEntrega(false);
+                            setErr("");
+                          } catch (e) {
+                            setErr(e?.message || "No se pudo guardar entrega");
+                          } finally {
+                            setSavingEntrega(false);
+                          }
+                        }}
+                      >
+                        Guardar
+                      </button>
+                      <button className="px-3 py-2 border rounded" type="button" onClick={() => { setEditEntrega(false); setEntrega({
+                        remito_salida: data?.remito_salida || "",
+                        factura_numero: data?.factura_numero || "",
+                        fecha_entrega: toDatetimeLocalStr(data?.fecha_entrega),
+                      }); }}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
             )}
           </div>
 
@@ -1263,6 +1471,82 @@ export default function ServiceSheet() {
         </div>
       )}
 
+      {relatedOpen && (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setRelatedOpen(false)}
+        >
+          <div
+            className="bg-white rounded shadow-xl max-w-4xl w-full max-h-[80vh] overflow-y-auto p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-lg font-semibold">Ingresos del equipo</h2>
+                <div className="text-sm text-gray-600">Número de serie: <span className="font-semibold">{numeroSerie || "-"}</span></div>
+              </div>
+              <button
+                type="button"
+                className="text-sm text-gray-500 hover:text-gray-900"
+                onClick={() => setRelatedOpen(false)}
+                aria-label="Cerrar historial de ingresos"
+              >
+                Cerrar
+              </button>
+            </div>
+            {relatedLoading ? (
+              <div className="text-sm text-gray-500">Cargando ingresos relacionados...</div>
+            ) : relatedErr ? (
+              <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded">{relatedErr}</div>
+            ) : relatedRows.length === 0 ? (
+              <div className="text-sm text-gray-500">No se encontraron otros ingresos con este número de serie.</div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left">
+                        <th className="p-2">OS</th>
+                        <th className="p-2">Estado</th>
+                        <th className="p-2">Presupuesto</th>
+                        <th className="p-2">Fecha ingreso</th>
+                        <th className="p-2">Ubicación</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {relatedRows.map((r) => {
+                        const ingresoId = r?.id ?? r?.ingreso_id;
+                        const isCurrent = ingresoId === data.id;
+                        if (!ingresoId) return null;
+                        return (
+                          <tr
+                            key={ingresoId}
+                            className={`border-t hover:bg-gray-50 cursor-pointer ${isCurrent ? 'bg-blue-50' : ''}`}
+                            onClick={() => {
+                              setRelatedOpen(false);
+                              if (ingresoId) navigate(`/ingresos/${ingresoId}`);
+                            }}
+                          >
+                            <td className="p-2 underline">{formatOSHelper(r, ingresoId)}</td>
+                            <td className="p-2 capitalize">{r?.estado || '-'}</td>
+                            <td className="p-2 capitalize">{r?.presupuesto_estado || '-'}</td>
+                            <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(resolveFechaIngreso(r))}</td>
+                            <td className="p-2">{r?.ubicacion_nombre || '-'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="text-xs text-gray-500 mt-2">Mostrando {relatedRows.length} ingreso(s).</div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {showDiagToast && (
         <div className="fixed right-4 top-4 bg-emerald-600 text-white px-4 py-2 rounded shadow-lg" role="status" aria-live="polite">
           Diagnosticado
@@ -1359,6 +1643,7 @@ export default function ServiceSheet() {
     </div>
   );
 }
+
 
 
 

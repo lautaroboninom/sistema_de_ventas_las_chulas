@@ -227,9 +227,12 @@ def render_quote_pdf(ingreso_id: int):
     c.setFont("Helvetica", 9)
     c.drawCentredString(W/2, y-14*mm, EMPRESA_LINEA1)
 
+    # Título de OS a la derecha, debajo del encabezado de empresa
     c.setFont("Helvetica-Bold", 18)
-    c.drawRightString(W - ml, H - mt - 6, title)
+    y_title = y - 20*mm
+    c.drawRightString(W - ml, y_title, title)
 
+    # Separación suficiente para no superponer con encabezado/título
     y -= 22*mm
     c.setLineWidth(0.8)
     c.line(ml, y, W-ml, y)

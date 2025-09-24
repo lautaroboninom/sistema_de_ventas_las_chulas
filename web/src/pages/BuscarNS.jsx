@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getGeneralEquipos } from "../lib/api";
-import { formatDateTime as formatDateTimeHelper, formatOS as formatOSHelper, tipoEquipoOf } from "../lib/ui-helpers";
+import { formatDateTime as formatDateTimeHelper, formatOS as formatOSHelper, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion } from "../lib/ui-helpers";
 
 export default function BuscarNS() {
   const [sp] = useSearchParams();
@@ -17,25 +17,40 @@ export default function BuscarNS() {
       try {
         const data = await getGeneralEquipos(ns ? { q: ns } : {});
         const safe = Array.isArray(data) ? data : [];
-        // Filtrar por coincidencia exacta de N/S y ordenar por fecha de ingreso (desc)
-        const onlyNS = safe
-          .filter(r => String(r?.numero_serie || "").trim() === ns)
-          .sort((a,b)=> new Date(b?.fecha_ingreso||0) - new Date(a?.fecha_ingreso||0));
-        setRows(onlyNS);
+        // Filtrar por coincidencia exacta de N/S o MG y ordenar por fecha de creacion (desc)
+        const needle = String(ns || "").trim();
+        const compact = needle.replace(/\s+/g, "").toLowerCase();
+        const onlyMatches = safe
+          .filter(r => {
+            const serieCompact = String(r?.numero_serie || "").trim().replace(/\s+/g, "").toLowerCase();
+            const internoCompact = String(r?.numero_interno || "").trim().replace(/\s+/g, "").toLowerCase();
+            // Coincide por N/S exacto o por MG (acepta con o sin prefijo 'MG')
+            return (
+              serieCompact === compact ||
+              internoCompact === compact ||
+              internoCompact === ("mg" + compact.replace(/^mg/, ""))
+            );
+          })
+          .sort((a, b) => {
+            const tb = resolveFechaCreacion(b);
+            const ta = resolveFechaCreacion(a);
+            return (tb ? new Date(tb).getTime() : 0) - (ta ? new Date(ta).getTime() : 0);
+          });
+        setRows(onlyMatches);
       } catch (e) {
         setErr(e?.message || "Error cargando resultados");
       } finally { setLoading(false); }
     })();
   }, [ns]);
 
-  const titulo = ns ? `Resultados para N/S: ${ns}` : "Búsqueda por N/S";
+  const titulo = ns ? `Resultados para N/S o MG: ${ns}` : "Búsqueda por N/S o MG";
 
   return (
     <div className="max-w-5xl mx-auto p-4 space-y-4">
       <h1 className="text-2xl font-bold">{titulo}</h1>
       {err && <div className="bg-red-100 text-red-700 border border-red-300 p-2 rounded">{err}</div>}
       {loading ? "Cargando..." :
-        rows.length === 0 ? <div className="text-sm text-gray-500">No se encontraron ingresos con ese N° de serie.</div> :
+        rows.length === 0 ? <div className="text-sm text-gray-500">No se encontraron ingresos con ese N° de serie o MG.</div> :
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
@@ -61,7 +76,7 @@ export default function BuscarNS() {
                     <td className="p-2">{r?.marca || "-"}</td>
                     <td className="p-2">{r?.modelo || "-"}</td>
                     <td className="p-2">{tipoEquipoOf(r)}</td>
-                    <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(r?.fecha_ingreso)}</td>
+                    <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(resolveFechaIngreso(r))}</td>
                   </tr>
                 );
               })}
@@ -72,3 +87,4 @@ export default function BuscarNS() {
     </div>
   );
 }
+

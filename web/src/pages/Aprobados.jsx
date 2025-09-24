@@ -2,7 +2,8 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel } from "../lib/ui-helpers";
+import StatusChip from "../components/StatusChip.jsx";
 
 
 // Ajustá si tu backend usa otra ruta
@@ -43,7 +44,7 @@ export default function Aprobados() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        row?.modelo ?? row?.equipo?.modelo,
+        catalogEquipmentLabel(row),
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
@@ -80,7 +81,7 @@ export default function Aprobados() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, marca, modelo, serie…"
+          placeholder="Filtrar por OS, cliente, marca, equipo, serie…"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar aprobados"
         />
@@ -101,7 +102,7 @@ export default function Aprobados() {
                 <th className="p-2">OS</th>
                 <th className="p-2">Cliente</th>
                 <th className="p-2">Marca</th>
-                <th className="p-2">Modelo</th>
+                <th className="p-2">Equipo</th>
                 <th className="p-2">Tipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
@@ -124,11 +125,13 @@ export default function Aprobados() {
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                   <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                  <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                  <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
-                  <td className="p-2">{row?.estado ?? "-"}</td>
+                  <td className="p-2">
+                    <StatusChip value={row?.estado} />
+                  </td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_ingreso)}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_aprobacion ?? row?.presupuesto_fecha_aprobacion)}</td>
                 </tr>
               ))}

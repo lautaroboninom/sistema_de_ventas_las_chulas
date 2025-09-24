@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getGeneralEquipos } from "../lib/api";
-import { ingresoIdOf, formatOS, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, norm, tipoEquipoOf, catalogEquipmentLabel } from "../lib/ui-helpers";
 import { useAuth } from "../context/AuthContext";
 
 // Catálogo (DB):
@@ -67,7 +67,7 @@ export default function StockAlquiler() {
     if (!needle) return rows;
     return rows.filter(r => {
       if (!estadoValido(r)) return false;
-      const campos = [formatOS(r), r?.marca, r?.modelo, tipoEquipoOf(r), r?.numero_serie, r?.razon_social];
+      const campos = [formatOS(r), r?.marca, catalogEquipmentLabel(r), tipoEquipoOf(r), r?.numero_serie, r?.razon_social];
       return campos.some(c => norm(c).includes(needle));
     });
   }, [rows, filter]);
@@ -82,7 +82,7 @@ export default function StockAlquiler() {
           className="border rounded p-2 w-full max-w-md"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, marca, modelo, serie…"
+          placeholder="Filtrar por OS, marca, equipo, serie…"
         />
       </div>
 
@@ -96,7 +96,7 @@ export default function StockAlquiler() {
                 <tr className="text-left">
                   <th className="p-2">OS</th>
                   <th className="p-2">Marca</th>
-                  <th className="p-2">Modelo</th>
+                  <th className="p-2">Equipo</th>
                   <th className="p-2">Tipo</th>
                   <th className="p-2">Serie</th>
                 </tr>
@@ -110,7 +110,7 @@ export default function StockAlquiler() {
                   >
                     <td className="p-2 underline">{formatOS(row)}</td>
                     <td className="p-2">{row.marca}</td>
-                    <td className="p-2">{row.modelo}</td>
+                    <td className="p-2">{catalogEquipmentLabel(row)}</td>
                     <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2">{row.numero_serie}</td>
                   </tr>

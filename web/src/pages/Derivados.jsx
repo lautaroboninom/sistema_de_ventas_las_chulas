@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { postDerivacionDevuelto } from "../lib/api";
 import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf } from "../lib/ui-helpers";
+import { catalogEquipmentLabel } from "../lib/ui-helpers";
 
 export default function Derivados() {
   const [rows, setRows] = useState([]);
@@ -69,7 +70,7 @@ export default function Derivados() {
                 <th className="p-2">Cliente</th>
                 <th className="p-2">Proveedor</th>
                 <th className="p-2">Marca</th>
-                <th className="p-2">Modelo</th>
+                <th className="p-2">Equipo</th>
                 <th className="p-2">Tipo</th>
                 <th className="p-2">Serie</th>
                 <th className="p-2">Fecha derivación</th>
@@ -83,7 +84,7 @@ export default function Derivados() {
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? '-'}</td>
                   <td className="p-2">{row?.proveedor ?? '-'}</td>
                   <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? '-'}</td>
-                  <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? '-'}</td>
+                  <td className="p-2">{catalogEquipmentLabel(row)}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">{row?.numero_serie ?? '-'}</td>
                   <td className="p-2 whitespace-nowrap">{row?.fecha_deriv ? formatDateTime(row.fecha_deriv) : '-'}</td>

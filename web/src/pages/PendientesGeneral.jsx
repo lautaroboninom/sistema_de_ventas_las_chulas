@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
+import StatusChip from "../components/StatusChip.jsx";
 
 // Ajustá si tu backend usa otro endpoint
 const ENDPOINT = "/api/ingresos/pendientes/";
@@ -35,7 +36,7 @@ export default function PendientesGeneral() {
   // helper: detectar motivo urgente control
   const isUrgente = (row) => (row?.motivo || "").toLowerCase() === "urgente control";
 
-  // Aplico filtro y luego ordeno: devueltos primero, urgentes después, luego por fecha_ingreso asc
+  // Aplico filtro y luego ordeno: devueltos primero, urgentes despues, luego por fecha_creacion asc
   const filteredAndSorted = useMemo(() => {
     const needle = norm(filter);
     const base = needle
@@ -44,7 +45,7 @@ export default function PendientesGeneral() {
             formatOS(row),
             row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
             row?.marca ?? row?.equipo?.marca,
-            row?.modelo ?? row?.equipo?.modelo,
+            catalogEquipmentLabel(row),
             tipoEquipoOf(row),
             row?.estado,
             row?.numero_serie,
@@ -64,9 +65,11 @@ export default function PendientesGeneral() {
       const bu = isUrgente(b) ? 1 : 0;
       if (au !== bu) return bu - au;
 
-      // 3) Antigüedad: más viejos primero
-      const dtA = a?.fecha_ingreso ? new Date(a.fecha_ingreso) : new Date("9999-12-31");
-      const dtB = b?.fecha_ingreso ? new Date(b.fecha_ingreso) : new Date("9999-12-31");
+      // 3) Antiguedad: mas viejos primero
+      const rawA = resolveFechaCreacion(a);
+      const rawB = resolveFechaCreacion(b);
+      const dtA = rawA ? new Date(rawA).getTime() : Number.POSITIVE_INFINITY;
+      const dtB = rawB ? new Date(rawB).getTime() : Number.POSITIVE_INFINITY;
       return dtA - dtB;
     });
   }, [rows, filter]);
@@ -99,7 +102,7 @@ export default function PendientesGeneral() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, marca, modelo, serie…"
+          placeholder="Filtrar por OS, cliente, marca, equipo, serie…"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar pendientes"
         />
@@ -120,7 +123,7 @@ export default function PendientesGeneral() {
                 <th className="p-2">OS</th>
                 <th className="p-2">Cliente</th>
                 <th className="p-2">Marca</th>
-                <th className="p-2">Modelo</th>
+                <th className="p-2">Equipo</th>
                 <th className="p-2">Tipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
@@ -167,11 +170,13 @@ export default function PendientesGeneral() {
                       {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
                     </td>
                     <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                    <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                    <td className="p-2">{catalogEquipmentLabel(row)}</td>
                     <td className="p-2">{tipoEquipoOf(row)}</td>
-                    <td className="p-2">{row?.estado ?? "-"}</td>
+                    <td className="p-2">
+                      <StatusChip value={row?.estado} />
+                    </td>
                     <td className="p-2">{row?.numero_serie ?? "-"}</td>
-                    <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_ingreso)}</td>
+                    <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   </tr>
                 );
               })}
@@ -185,4 +190,5 @@ export default function PendientesGeneral() {
     </div>
   );
 }
+
 

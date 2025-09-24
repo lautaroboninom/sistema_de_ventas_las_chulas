@@ -1,34 +1,28 @@
-# Production overrides
-from .settings import *  # noqa
+﻿from .settings import *  # noqa
 import os
 
-# Force production safety
-DEBUG = False
+# Ajustes para despliegue LAN (sin HTTPS obligatorio)
+DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 
-# Hosts and origins
-ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "reparaciones.sepid.com.ar").split(",") if h.strip()]
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
 
-# If provided, use explicit prod origins; else default to https on the host
-_default_origin = "https://reparaciones.sepid.com.ar"
+_default_origin = "http://localhost:8000"
 CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", _default_origin).split(",") if o.strip()]
 CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
-# Security headers and HTTPS
-SECURE_SSL_REDIRECT = True
-SECURE_HSTS_SECONDS = 31536000
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
+SECURE_SSL_REDIRECT = False
+SECURE_HSTS_SECONDS = 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+SECURE_HSTS_PRELOAD = False
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
-CSRF_COOKIE_SECURE = True
-SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = False
+SESSION_COOKIE_SECURE = False
 SECURE_CONTENT_TYPE_NOSNIFF = True
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_PROXY_SSL_HEADER = None
 
-# Static/Media
 STATIC_ROOT = os.getenv("STATIC_ROOT", "/app/staticfiles")
 MEDIA_ROOT = os.getenv("MEDIA_ROOT", "/app/media")
 
-# Logging to stdout
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -46,4 +40,3 @@ LOGGING = {
         "django": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
-

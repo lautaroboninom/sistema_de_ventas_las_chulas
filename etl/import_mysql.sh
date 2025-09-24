@@ -402,15 +402,16 @@ CHARACTER SET utf8mb4
 FIELDS TERMINATED BY ',' ENCLOSED BY '"'
 ESCAPED BY '\\'
 LINES TERMINATED BY '\n' IGNORE 1 LINES
-(id, device_id, estado, motivo, fecha_ingreso, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado);
+(id, device_id, estado, motivo, fecha_ingreso, fecha_creacion, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado);
 
-REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
+REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, fecha_creacion, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
 SELECT
   s.id,
   s.device_id,
   s.estado,
   s.motivo,
   STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s'),
+  COALESCE(STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s'), NOW()),
   NULLIF(s.informe_preliminar,''),
   NULLIF(s.accesorios,''),
   NULLIF(s.remito_ingreso,''),

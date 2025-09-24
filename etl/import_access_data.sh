@@ -20,7 +20,7 @@ file_path() { cygpath -wa "$1" 2>/dev/null || realpath "$1"; }
 echo "Importando datos Access desde $IN_DIR"
 run_sql "SET NAMES utf8mb4"
 run_sql "SET sql_log_bin=0"
-run_sql "INSERT INTO locations (nombre) SELECT 'Estanteria alquileres' FROM (SELECT 1) AS _tmp WHERE NOT EXISTS (SELECT 1 FROM locations WHERE LOWER(nombre) = LOWER('Estanteria alquileres'))"
+run_sql "INSERT INTO locations (nombre) SELECT 'Estantería de Alquiler' FROM (SELECT 1) AS _tmp WHERE NOT EXISTS (SELECT 1 FROM locations WHERE LOWER(nombre) IN (LOWER('Estantería de Alquiler'), LOWER('Estanteria alquileres')))"
 
 # =============== customers.csv (REPLACE) ===============
 if [[ -f "$IN_DIR/customers.csv" ]]; then
@@ -359,7 +359,7 @@ LOAD DATA LOCAL INFILE '${fp//\\/\\\\}' INTO TABLE staging_ingresos_access
 CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '\\' LINES TERMINATED BY '\n' IGNORE 1 LINES
 (id, device_id, estado, motivo, fecha_ingreso, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado);
 
-REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, ubicacion_id, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
+REPLACE INTO ingresos (id, device_id, estado, motivo, fecha_ingreso, fecha_creacion, ubicacion_id, informe_preliminar, accesorios, remito_ingreso, comentarios, propietario_nombre, propietario_contacto, presupuesto_estado)
 SELECT
   s.id,
   s.device_id,
@@ -371,6 +371,7 @@ SELECT
   END,
   s.motivo,
   CASE WHEN NULLIF(s.fecha_ingreso,'') <> '' THEN STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s') ELSE NULL END,
+  COALESCE(CASE WHEN NULLIF(s.fecha_ingreso,'') <> '' THEN STR_TO_DATE(s.fecha_ingreso, '%Y-%m-%d %H:%i:%s') ELSE NULL END, NOW()),
   CASE
     WHEN @loc_stock IS NOT NULL AND (TRIM(s.estado) IN ('6','06','006') OR LOWER(TRIM(s.estado)) = 'deposito') THEN @loc_stock
     ELSE NULL
@@ -388,6 +389,219 @@ SET FOREIGN_KEY_CHECKS=1;
 SQL
 else
   echo "WARN: no existe $IN_DIR/ingresos_access.csv"
+fi
+
+# =============== ingresos_estado_access.csv -> actualizar ubicacion/estado/resolucion ===============
+if [[ -f "$IN_DIR/ingresos_estado_access.csv" ]]; then
+  echo "Aplicando mapeo de ubicaciones/estados desde ingresos_estado_access.csv"
+  fp=$(file_path "$IN_DIR/ingresos_estado_access.csv")
+  "${mysql_cli[@]}" --local-infile=1 <<SQL
+SET FOREIGN_KEY_CHECKS=0;
+-- Asegurar ubicaciones base
+INSERT INTO locations (nombre)
+SELECT 'Taller' FROM (SELECT 1) AS _t WHERE NOT EXISTS (SELECT 1 FROM locations WHERE LOWER(nombre)=LOWER('Taller'));
+INSERT INTO locations (nombre)
+SELECT 'Estantería de Alquiler' FROM (SELECT 1) AS _t WHERE NOT EXISTS (SELECT 1 FROM locations WHERE LOWER(nombre) IN (LOWER('Estantería de Alquiler'), LOWER('Estanteria alquileres')));
+INSERT INTO locations (nombre)
+SELECT 'Desguace' FROM (SELECT 1) AS _t WHERE NOT EXISTS (SELECT 1 FROM locations WHERE LOWER(nombre)=LOWER('Desguace'));
+
+DROP TEMPORARY TABLE IF EXISTS staging_ingresos_estado;
+CREATE TEMPORARY TABLE staging_ingresos_estado (
+  id INT,
+  estado_num INT,
+  entregado TEXT,
+  alquilado TEXT,
+  indic_presup TEXT,
+  presupuestar TEXT,
+  nu_presup TEXT,
+  impresion_remito TEXT,
+  impre_remito TEXT
+);
+LOAD DATA LOCAL INFILE '${fp//\\/\\\\}' INTO TABLE staging_ingresos_estado
+CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '\\' LINES TERMINATED BY '\n' IGNORE 1 LINES
+(id, estado_num, entregado, alquilado, indic_presup, presupuestar, nu_presup, impresion_remito, impre_remito);
+
+-- IDs de ubicacion
+SET @loc_taller := (SELECT id FROM locations WHERE LOWER(nombre)=LOWER('Taller') ORDER BY id ASC LIMIT 1);
+SET @loc_estant := (
+  SELECT id FROM locations 
+   WHERE LOWER(nombre) IN (LOWER('Estantería de Alquiler'), LOWER('Estanteria alquileres'))
+   ORDER BY (LOWER(nombre)=LOWER('Estantería de Alquiler')) DESC, id ASC LIMIT 1);
+SET @loc_desguace := (SELECT id FROM locations WHERE LOWER(nombre)=LOWER('Desguace') ORDER BY id ASC LIMIT 1);
+
+-- Ubicaciones segun estado_num
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.ubicacion_id = @loc_taller
+ WHERE s.estado_num IN (1,2,3,4,5,7,9,10);
+
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.ubicacion_id = @loc_estant
+ WHERE s.estado_num = 6;
+
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.ubicacion_id = @loc_desguace
+ WHERE s.estado_num = 8;
+
+-- Motivo para control urgente (10)
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.motivo = 'urgente control'
+ WHERE s.estado_num = 10;
+
+-- Estado con precedencia: mantener 'entregado' si ya lo está
+-- 1/5/10 -> ingresado (si no entregado)
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.estado = 'ingresado'
+ WHERE s.estado_num IN (1,5,10) AND t.estado <> 'entregado';
+
+-- 2 -> reparar (si no entregado)
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.estado = 'reparar'
+ WHERE s.estado_num = 2 AND t.estado <> 'entregado';
+
+-- 3 -> reparado (si no entregado)
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.estado = 'reparado'
+ WHERE s.estado_num = 3 AND t.estado <> 'entregado';
+
+-- 4,7,9 -> liberado
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.estado = 'liberado'
+ WHERE s.estado_num IN (4,7,9);
+
+-- 6 Deposito: si entregado o alquilado en Access -> marcar entregado y device.alquilado=1
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.estado = 'entregado'
+ WHERE s.estado_num = 6 AND (
+   LOWER(TRIM(COALESCE(s.entregado,''))) IN ('1','-1','t','true','y','yes','si','s��','s') OR
+   LOWER(TRIM(COALESCE(s.alquilado,''))) IN ('1','-1','t','true','y','yes','si','s��','s')
+ );
+
+UPDATE devices d
+JOIN ingresos t ON t.device_id = d.id
+JOIN staging_ingresos_estado s ON s.id = t.id
+   SET d.alquilado = 1
+ WHERE s.estado_num = 6 AND (
+   LOWER(TRIM(COALESCE(s.entregado,''))) IN ('1','-1','t','true','y','yes','si','s��','s') OR
+   LOWER(TRIM(COALESCE(s.alquilado,''))) IN ('1','-1','t','true','y','yes','si','s��','s')
+ );
+
+-- Resolucion segun reglas
+-- 3 + liberado (aprox: flag entregado) -> resolucion reparado y presupuesto presupuestado
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.resolucion = 'reparado', t.presupuesto_estado = 'presupuestado'
+ WHERE s.estado_num = 3 AND LOWER(TRIM(COALESCE(s.entregado,''))) IN ('1','-1','t','true','y','yes','si','s��','s');
+
+-- 4 -> no_reparado
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.resolucion = 'no_reparado'
+ WHERE s.estado_num = 4;
+
+-- 7 -> presupuesto_rechazado y presupuesto presupuestado
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.resolucion = 'presupuesto_rechazado', t.presupuesto_estado = 'presupuestado'
+ WHERE s.estado_num = 7;
+
+-- 9 -> no_se_encontro_falla
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.resolucion = 'no_se_encontro_falla'
+ WHERE s.estado_num = 9;
+
+-- 8 Depo Esquiu -> disposicion para repuesto
+UPDATE ingresos t JOIN staging_ingresos_estado s ON s.id=t.id
+   SET t.disposicion = 'para_repuesto'
+ WHERE s.estado_num = 8;
+
+DROP TEMPORARY TABLE staging_ingresos_estado;
+SET FOREIGN_KEY_CHECKS=1;
+SQL
+else
+  echo "WARN: no existe $IN_DIR/ingresos_estado_access.csv"
+fi
+
+# =============== model_tipo_equipo_access.csv -> actualizar models.tipo_equipo ===============
+if [[ -f "$IN_DIR/model_tipo_equipo_access.csv" ]]; then
+  echo "Actualizando models.tipo_equipo desde model_tipo_equipo_access.csv"
+  fp=$(file_path "$IN_DIR/model_tipo_equipo_access.csv")
+  "${mysql_cli[@]}" --local-infile=1 <<SQL
+DROP TEMPORARY TABLE IF EXISTS staging_model_tipo_equipo;
+CREATE TEMPORARY TABLE staging_model_tipo_equipo (
+  marca_nombre TEXT,
+  modelo_nombre TEXT,
+  tipo_equipo TEXT
+);
+LOAD DATA LOCAL INFILE '${fp//\\/\\\\}' INTO TABLE staging_model_tipo_equipo
+CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '\\' LINES TERMINATED BY '\n' IGNORE 1 LINES
+(marca_nombre, modelo_nombre, tipo_equipo);
+
+UPDATE models m
+JOIN marcas b ON b.id = m.marca_id
+JOIN staging_model_tipo_equipo s ON LOWER(s.marca_nombre) = LOWER(b.nombre) AND LOWER(s.modelo_nombre) = LOWER(m.nombre)
+   SET m.tipo_equipo = NULLIF(s.tipo_equipo,'')
+ WHERE NULLIF(s.tipo_equipo,'') IS NOT NULL AND NULLIF(s.tipo_equipo,'') <> '';
+
+DROP TEMPORARY TABLE staging_model_tipo_equipo;
+SQL
+else
+  echo "WARN: no existe $IN_DIR/model_tipo_equipo_access.csv"
+fi
+
+# =============== ingresos_entrega_access.csv -> actualizar ingresos.fecha_entrega ===============
+if [[ -f "$IN_DIR/ingresos_entrega_access.csv" ]]; then
+  echo "Actualizando ingresos.fecha_entrega desde ingresos_entrega_access.csv"
+  fp=$(file_path "$IN_DIR/ingresos_entrega_access.csv")
+  "${mysql_cli[@]}" --local-infile=1 <<SQL
+DROP TEMPORARY TABLE IF EXISTS staging_ingresos_entrega;
+CREATE TEMPORARY TABLE staging_ingresos_entrega (
+  ingreso_id INT,
+  fecha_entrega TEXT
+);
+LOAD DATA LOCAL INFILE '${fp//\\/\\\\}' INTO TABLE staging_ingresos_entrega
+CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '\\' LINES TERMINATED BY '\n' IGNORE 1 LINES
+(ingreso_id, fecha_entrega);
+
+UPDATE ingresos t
+JOIN staging_ingresos_entrega s ON s.ingreso_id = t.id
+   SET t.fecha_entrega = CASE WHEN NULLIF(s.fecha_entrega,'')<>'' THEN STR_TO_DATE(s.fecha_entrega, '%Y-%m-%d %H:%i:%s') ELSE NULL END
+ WHERE NULLIF(s.fecha_entrega,'')<>'';
+
+DROP TEMPORARY TABLE staging_ingresos_entrega;
+SQL
+else
+  echo "WARN: no existe $IN_DIR/ingresos_entrega_access.csv"
+fi
+
+# =============== ingresos_alquiler_access.csv -> marcar flags de alquiler (sin cambiar estado) ===============
+if [[ -f "$IN_DIR/ingresos_alquiler_access.csv" ]]; then
+  echo "Actualizando flags de alquiler (ingresos/devices) desde ingresos_alquiler_access.csv"
+  fp=$(file_path "$IN_DIR/ingresos_alquiler_access.csv")
+  "${mysql_cli[@]}" --local-infile=1 <<SQL
+DROP TEMPORARY TABLE IF EXISTS staging_ingresos_alquiler;
+CREATE TEMPORARY TABLE staging_ingresos_alquiler (
+  ingreso_id INT,
+  alquilado_flag TEXT,
+  recibe_alquiler TEXT,
+  cargo_alquiler TEXT
+);
+LOAD DATA LOCAL INFILE '${fp//\\/\\\\}' INTO TABLE staging_ingresos_alquiler
+CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '\\' LINES TERMINATED BY '\n' IGNORE 1 LINES
+(ingreso_id, alquilado_flag, recibe_alquiler, cargo_alquiler);
+
+-- Actualizar ingreso: set flag y datos, sin tocar estado
+UPDATE ingresos t
+JOIN staging_ingresos_alquiler s ON s.ingreso_id = t.id
+   SET t.alquiler_a = NULLIF(s.recibe_alquiler,''),
+       t.alquilado  = CASE WHEN LOWER(TRIM(COALESCE(s.alquilado_flag,''))) IN ('1','-1','t','true','y','yes','si','sí','s') OR NULLIF(s.recibe_alquiler,'')<>'' OR NULLIF(s.cargo_alquiler,'')<>'' THEN 1 ELSE t.alquilado END;
+
+-- Reflejar en devices
+UPDATE devices d
+JOIN ingresos t ON t.device_id = d.id
+JOIN staging_ingresos_alquiler s ON s.ingreso_id = t.id
+   SET d.alquilado = CASE WHEN LOWER(TRIM(COALESCE(s.alquilado_flag,''))) IN ('1','-1','t','true','y','yes','si','sí','s') OR NULLIF(s.recibe_alquiler,'')<>'' OR NULLIF(s.cargo_alquiler,'')<>'' THEN 1 ELSE d.alquilado END;
+
+DROP TEMPORARY TABLE staging_ingresos_alquiler;
+SQL
+else
+  echo "WARN: no existe $IN_DIR/ingresos_alquiler_access.csv"
 fi
 
 # =============== equipos_derivados_access.csv -> equipos_derivados ===============

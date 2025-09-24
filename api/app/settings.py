@@ -44,6 +44,16 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "1") == "1"
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@sepid.com.ar")
+EMAIL_LEGAL_FOOTER = os.getenv(
+    "EMAIL_LEGAL_FOOTER",
+    (
+        "La información de este correo es confidencial y concierne únicamente a la persona a la que está dirigida. "
+        "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los términos que autoriza el art. 318 del CCyCN. "
+        "Si este mensaje no está dirigido a usted, por favor tenga presente que no tiene autorización para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que está dirigido, como así tampoco valerse del mismo. "
+        "Si recibe este correo por error, por favor, avise al remitente, luego de lo cual rogamos a usted destruya el mensaje original. "
+        "No se puede responsabilizar al remitente de ninguna forma por/o en relación con alguna consecuencia y/o daño que resulte del apropiado y completo envío y recepción del contenido de este correo."
+    ),
+)
 
 # Zona horaria
 TIME_ZONE = os.getenv("TZ", "America/Argentina/Buenos_Aires")
