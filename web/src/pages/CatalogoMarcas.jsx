@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getMarcas, postMarca, deleteMarcaCascade,
   getModelos, postModelo, deleteModelo,
   getTecnicos, patchMarcaTecnico, postMarcaAplicarTecnico, patchModeloTecnico,
   getTiposEquipo, patchModeloTipoEquipo,
-  patchMarca, patchModelo, postModelMerge,
+  patchMarca, patchModelo, postModelMerge, postMarcaMerge,
   // Catálogo jerárquico (v2)
   getCatalogTipos as fetchCatalogTipos,
   getCatalogModelos as fetchCatalogModelos,
@@ -18,7 +18,7 @@ const Input  = (p) => <input  {...p} className="border rounded p-2 w-full" />;
 const Select = (p) => <select {...p} className="border rounded p-2 w-full" />;
 
 export default function CatalogoMarcas() {
-  // Canonicalizador general: minúsculas, sin acentos y con espacios colapsados
+  // Canonicalizador general: minÃºsculas, sin acentos y con espacios colapsados
   const canon   = (v) => norm(v).replace(/\s+/g, " ").trim();
   const typeKey = (v) => (v ?? "").toString().toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -43,7 +43,7 @@ export default function CatalogoMarcas() {
   const [marcaQuery, setMarcaQuery] = useState("");
   const listRef = useRef(null);
 
-  // Catálogo (v2) para variantes múltiples
+  // Catálogo (v2) para variantes mÃºltiples
   const [hierLoading, setHierLoading] = useState(false);
   const [catalogTipos, setCatalogTipos] = useState([]);
   const [catalogModelos, setCatalogModelos] = useState([]);
@@ -75,7 +75,7 @@ export default function CatalogoMarcas() {
         const needle = typeKey(tipoName);
         return tName === needle || tLabel === needle;
       });
-      if (!tipo) { updatePMV(md.id, { loading:false, error:`No se encontró el Tipo en catálogo para: ${tipoName}`, variantes:[], tipoId:null, serieId:null }); return; }
+      if (!tipo) { updatePMV(md.id, { loading:false, error:`No se encontrÃ³ el Tipo en catálogo para: ${tipoName}`, variantes:[], tipoId:null, serieId:null }); return; }
       const modelosCat = await fetchCatalogModelos(sel.id, tipo.id);
       const mdName = canon(md.nombre || "");
       let serie = modelosCat.find(m => canon(m.name||"") === mdName || (m.alias && canon(m.alias) === mdName));
@@ -173,7 +173,7 @@ export default function CatalogoMarcas() {
   const addMarca = async (e) => { e.preventDefault(); try { await postMarca(fm.nombre); setFm({ nombre: "" }); setMsg("Marca agregada"); loadMarcas(); } catch (e) { setErr(e.message); } };
   const delMarcaCascade = async (id) => {
     const typed = prompt(
-      "Esta acción eliminará la marca y TODOS sus modelos. Se desvincularán equipos relacionados.\nEscribe ELIMINAR para confirmar:",
+      "Esta acciÃ³n eliminará la marca y TODOS sus modelos. Se desvincularán equipos relacionados.\nEscribe ELIMINAR para confirmar:",
       ""
     );
     if (typed !== "ELIMINAR") return;
@@ -181,10 +181,10 @@ export default function CatalogoMarcas() {
     catch (e) { setErr(e?.message || "No se pudo eliminar en cascada"); }
   };
   const addModelo = async (e) => { e.preventDefault(); if (!sel) return; try { await postModelo(sel.id, { nombre: fmo.nombre, tipo_equipo: (fmo.tipo_equipo || "").trim() || undefined, tecnico_id: fmo.tecnico_id ? Number(fmo.tecnico_id) : undefined }); setFmo({ nombre: "", tipo_equipo: "", tecnico_id: "" }); setMsg("Modelo agregado"); loadModelos(sel.id); } catch (e) { setErr(e.message); } };
-  const delModelo = async (id) => { if (!confirm("¿Eliminar modelo?")) return; try { await deleteModelo(id); loadModelos(sel.id); } catch (e) { setErr(e.message); } };
+  const delModelo = async (id) => { if (!confirm("Â¿Eliminar modelo?")) return; try { await deleteModelo(id); loadModelos(sel.id); } catch (e) { setErr(e.message); } };
 
   // Técnicos / tipo de equipo
-  async function guardarTecnicoMarcaYApli(){ if(!sel) return; if(!marcaTecId ? !confirm("Vas a dejar la marca sin técnico. ¿Continuar?") : !confirm("Aplicar este técnico a TODOS los modelos de la marca (sobrescribe). ¿Continuar?")) return; try{ setLoading(true); setErr(""); setMsg(""); await patchMarcaTecnico(sel.id, marcaTecId ? Number(marcaTecId) : null); await postMarcaAplicarTecnico(sel.id, true); setMsg("Técnico de marca guardado y aplicado a todos los modelos."); setSel(prev => prev ? { ...prev, tecnico_id: (marcaTecId || null) ? Number(marcaTecId) : null } : prev); await loadModelos(sel.id);} catch(e){ setErr(e.message || "No se pudo asignar/aplicar el técnico de la marca"); } finally{ setLoading(false);} }
+  async function guardarTecnicoMarcaYApli(){ if(!sel) return; if(!marcaTecId ? !confirm("Vas a dejar la marca sin técnico. Â¿Continuar?") : !confirm("Aplicar este técnico a TODOS los modelos de la marca (sobrescribe). Â¿Continuar?")) return; try{ setLoading(true); setErr(""); setMsg(""); await patchMarcaTecnico(sel.id, marcaTecId ? Number(marcaTecId) : null); await postMarcaAplicarTecnico(sel.id, true); setMsg("Técnico de marca guardado y aplicado a todos los modelos."); setSel(prev => prev ? { ...prev, tecnico_id: (marcaTecId || null) ? Number(marcaTecId) : null } : prev); await loadModelos(sel.id);} catch(e){ setErr(e.message || "No se pudo asignar/aplicar el técnico de la marca"); } finally{ setLoading(false);} }
   async function guardarTecnicoModelo(modelId){ const tId = mdlTecSel[modelId] || null; try{ setLoading(true); setErr(""); setMsg(""); await patchModeloTecnico(sel.id, modelId, tId ? Number(tId) : null); setMsg("Técnico del modelo guardado."); setModelos(ms => ms.map(m => m.id === modelId ? { ...m, tecnico_id: tId ? Number(tId) : null } : m)); } catch(e){ setErr(e.message || "No se pudo guardar el técnico del modelo"); } finally{ setLoading(false);} }
   async function guardarTipoEquipo(modelId){ const tipoText=(mdlTipoSel[modelId]||"").trim(); try{ setLoading(true); setErr(""); setMsg(""); await patchModeloTipoEquipo(sel.id, modelId, { tipo_equipo: tipoText }); setMsg("Tipo de equipo del modelo guardado."); setModelos(ms => ms.map(m => m.id === modelId ? { ...m, tipo_equipo: tipoText } : m)); const updated = modelos.find(m=>m.id===modelId); if(updated){ await ensureModelCatalogVariants({ ...updated, tipo_equipo: tipoText }); } } catch(e){ setErr(e.message || "No se pudo guardar el tipo de equipo"); } finally{ setLoading(false);} }
 
@@ -212,7 +212,7 @@ export default function CatalogoMarcas() {
                 <div className="flex items-center justify-between">
                   <button className="text-left" onClick={() => { setSel(m); try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch { window.scrollTo(0,0);} if (listRef.current) { try { listRef.current.scrollTop = 0; } catch {} } }}>{m.nombre}</button>
                   <div className="flex gap-2">
-                    <button className="px-2 py-1 border rounded" onClick={async () => { const nuevo = prompt("Renombrar marca", m.nombre || ""); const nombre = (nuevo || "").trim(); if (!nombre || nombre === m.nombre) return; try { setErr(""); setMsg(""); await patchMarca(m.id, { nombre }); setMarcas(arr => arr.map(x => x.id === m.id ? { ...x, nombre } : x)); if (sel?.id === m.id) setSel(prev => prev ? { ...prev, nombre } : prev); setMsg("Marca renombrada"); } catch (e) { setErr(e.message || "No se pudo renombrar la marca"); } }}>Renombrar</button>
+                    <button className="px-2 py-1 border rounded" onClick={async () => { const nuevo = prompt("Renombrar marca", m.nombre || ""); const nombre = (nuevo || "").trim(); if (!nombre || nombre === m.nombre) return; try { setErr(""); setMsg(""); await patchMarca(m.id, { nombre }); setMarcas(arr => arr.map(x => x.id === m.id ? { ...x, nombre } : x)); if (sel?.id === m.id) setSel(prev => prev ? { ...prev, nombre } : prev); setMsg("Marca renombrada"); } catch (e) { const msg = e?.message || ""; if (msg.includes("409")) { try { const desired = canon(nombre); const dup = (marcas||[]).find(x => x.id !== m.id && canon(x.nombre||"") === desired); if (dup) { const ok = confirm(`Ya existe una marca con ese nombre (ID ${dup.id}). ¿Unificar?`); if (ok) { await postMarcaMerge(m.id, dup.id); await loadMarcas(); if (sel?.id === m.id) setSel(dup); setMsg("Marcas unificadas"); return; } } } catch {} } setErr(msg || "No se pudo renombrar la marca"); } }}>Renombrar</button>
                     <button className="px-2 py-1 border rounded text-red-700" title="Elimina la marca y TODOS sus modelos" onClick={() => delMarcaCascade(m.id)}>Eliminar TODO</button>
                   </div>
                 </div>
@@ -292,10 +292,10 @@ export default function CatalogoMarcas() {
       try {
         const ms = await getModelos(sel.id);
         const desired = canon(nombre);
-        const myTipo = typeKey(mdlTipoSel[md.id] ?? md.tipo_equipo || "");
+        const myTipo = typeKey(mdlTipoSel[md.id] ?? md.tipo_equipo ?? "");
         const dup = (ms||[]).find(x => x.id !== md.id && canon(x.nombre||"") === desired && typeKey(x.tipo_equipo||"") === myTipo);
         if (dup) {
-          const ok = confirm(`Ya existe un modelo con ese nombre y tipo de equipo (ID ${dup.id}). �Unificar?`);
+          const ok = confirm(`Ya existe un modelo con ese nombre y tipo de equipo (ID ${dup.id}). ¿Unificar?`);
           if (ok) {
             await postModelMerge(md.id, dup.id);
             await loadModelos(sel.id);
@@ -312,7 +312,7 @@ export default function CatalogoMarcas() {
                   </div>
                 </div>
 
-                {/* Panel de edición expandible */}
+                {/* Panel de ediciÃ³n expandible */}
                 {expandedModelId === md.id && (
                   <div className="mt-3 border rounded p-3 grid grid-cols-1 md:grid-cols-12 gap-3 items-end bg-gray-50">
                     <div className="md:col-span-4">
@@ -343,7 +343,7 @@ export default function CatalogoMarcas() {
                               <div className="flex gap-2">
                                 <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => { const nuevo = prompt("Renombrar variante", v.name); const nombre = (nuevo || "").trim(); if (!nombre || nombre === v.name) return; (async () => { try { updatePMV(md.id, { loading:true }); await patchCatalogVariante(v.id, { name: nombre }); const vs = await fetchCatalogVariantes(sel.id, perModelVariants[md.id]?.tipoId, perModelVariants[md.id]?.serieId, true); updatePMV(md.id, { loading:false, variantes: vs }); setMsg("Variante renombrada"); } catch (e) { updatePMV(md.id, { loading:false }); setErr(e?.message || "No se pudo renombrar la variante"); } })(); }}>Renombrar</button>
                                 <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => { (async () => { try { updatePMV(md.id, { loading:true }); await patchCatalogVariante(v.id, { active: !v.active }); const vs = await fetchCatalogVariantes(sel.id, perModelVariants[md.id]?.tipoId, perModelVariants[md.id]?.serieId, true); updatePMV(md.id, { loading:false, variantes: vs }); setMsg("Variante actualizada"); } catch (e) { updatePMV(md.id, { loading:false }); setErr(e?.message || "No se pudo actualizar la variante"); } })(); }}>{v.active ? "Desactivar" : "Activar"}</button>
-                                <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => { if (!confirm('¿Eliminar variante?')) return; (async () => { try { updatePMV(md.id, { loading:true }); await deleteCatalogVariante(v.id); const vs = await fetchCatalogVariantes(sel.id, perModelVariants[md.id]?.tipoId, perModelVariants[md.id]?.serieId, true); updatePMV(md.id, { loading:false, variantes: vs }); setMsg("Variante eliminada"); } catch (e) { updatePMV(md.id, { loading:false }); setErr(e?.message || "No se pudo eliminar la variante"); } })(); }}>Eliminar</button>
+                                <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => { if (!confirm('Â¿Eliminar variante?')) return; (async () => { try { updatePMV(md.id, { loading:true }); await deleteCatalogVariante(v.id); const vs = await fetchCatalogVariantes(sel.id, perModelVariants[md.id]?.tipoId, perModelVariants[md.id]?.serieId, true); updatePMV(md.id, { loading:false, variantes: vs }); setMsg("Variante eliminada"); } catch (e) { updatePMV(md.id, { loading:false }); setErr(e?.message || "No se pudo eliminar la variante"); } })(); }}>Eliminar</button>
                               </div>
                             )}
                           </li>
@@ -377,6 +377,9 @@ export default function CatalogoMarcas() {
     </div>
   );
 }
+
+
+
 
 
 

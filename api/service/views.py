@@ -1,4 +1,4 @@
-# service/views.py
+﻿# service/views.py
 from django.db import connection, transaction, IntegrityError
 import os
 import secrets, hashlib, datetime as dt
@@ -35,7 +35,7 @@ from .media_utils import (process_upload, save_processed_image, delete_media_pat
 logger = logging.getLogger(__name__)
 
 TOKEN_TTL_MIN = 30       # vence en 30 minutos
-COOLDOWN_MIN  = 1       # máx 1 mail cada 1 minutos por usuario
+COOLDOWN_MIN  = 1       # mÃ¡x 1 mail cada 1 minutos por usuario
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
@@ -43,11 +43,11 @@ LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 
 # Pie legal para correos (solo emails, no en el sitio)
 EMAIL_LEGAL_FOOTER = getattr(settings, "EMAIL_LEGAL_FOOTER", (
-    "La información de este correo es confidencial y concierne únicamente a la persona a la que está dirigida. "
-    "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los términos que autoriza el art. 318 del CCyCN. "
-    "Si este mensaje no está dirigido a usted, por favor tenga presente que no tiene autorización para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que está dirigido, como así tampoco valerse del mismo. "
+    "La informaciÃ³n de este correo es confidencial y concierne Ãºnicamente a la persona a la que estÃ¡ dirigida. "
+    "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los tÃ©rminos que autoriza el art. 318 del CCyCN. "
+    "Si este mensaje no estÃ¡ dirigido a usted, por favor tenga presente que no tiene autorizaciÃ³n para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que estÃ¡ dirigido, como asÃ­ tampoco valerse del mismo. "
     "Si recibe este correo por error, por favor, avise al remitente, luego de lo cual rogamos a usted destruya el mensaje original. "
-    "No se puede responsabilizar al remitente de ninguna forma por/o en relación con alguna consecuencia y/o daño que resulte del apropiado y completo envío y recepción del contenido de este correo."
+    "No se puede responsabilizar al remitente de ninguna forma por/o en relaciÃ³n con alguna consecuencia y/o daÃ±o que resulte del apropiado y completo envÃ­o y recepciÃ³n del contenido de este correo."
 ))
 
 def _email_append_footer_text(txt: str) -> str:
@@ -109,11 +109,11 @@ def _validate_password_strength(password: str) -> None:
         raise ValidationError('La contrasena debe combinar mayusculas, minusculas, numeros o simbolos.')
 
 ROLE_CHOICES = [
-    ("tecnico", "Técnico"),
-    ("admin", "Administración"),
+    ("tecnico", "TÃ©cnico"),
+    ("admin", "AdministraciÃ³n"),
     ("jefe", "Jefe"),
     ("jefe_veedor", "Jefe veedor"),
-    ("recepcion", "Recepción"),
+    ("recepcion", "RecepciÃ³n"),
 ]
 ROLE_KEYS = [r for r, _ in ROLE_CHOICES]
 TWO = Decimal("0.01")
@@ -134,12 +134,12 @@ def _set_audit_user(request):
         uid = str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", ""))
         role = getattr(request, "user_role", "")
         with connection.cursor() as cur:
-            # SET (no LOCAL) para compatibilidad fuera de transacciones explícitas
+            # SET (no LOCAL) para compatibilidad fuera de transacciones explÃ­citas
             cur.execute("SET app.user_id = %s;", [uid])
             cur.execute("SET app.user_role = %s;", [role])
 # ---------------------------------------
 # Utilidades DB
-_SUSPECT_UTF8 = ("Ã", "Â", "¤", "¢", "\ufffd")
+_SUSPECT_UTF8 = ("Ãƒ", "Ã‚", "Â¤", "Â¢", "\ufffd")
 
 
 def _fix_text_value(val):
@@ -188,7 +188,7 @@ def exec_returning(sql, params=None):
         return row[0] if row else None
 
 def last_insert_id():
-    """Devuelve el último ID autoincremental según el motor actual."""
+    """Devuelve el Ãºltimo ID autoincremental segÃºn el motor actual."""
     if connection.vendor == "postgresql":
         row = q("SELECT LASTVAL() AS id", one=True)
     else:
@@ -298,31 +298,31 @@ def _frontend_url(request, path: str) -> str:
 
 DEFAULT_LOCATION_NAMES = [
     "Taller",
-    "Estantería de Alquiler",
+    "EstanterÃ­a de Alquiler",
     "Sarmiento",
-    "Depósito SEPID",
+    "DepÃ³sito SEPID",
     "Desguace",
 ]
 
 LOCATION_RENAMES = {
-    "estanteria alquileres": "Estantería de Alquiler",
+    "estanteria alquileres": "EstanterÃ­a de Alquiler",
 }
 
 
 def ensure_default_locations():
-    # Usar nombres canónicos corregidos (evita duplicados por encoding)
+    # Usar nombres canÃ³nicos corregidos (evita duplicados por encoding)
     NAMES = [
         "Taller",
-        "Estantería de Alquiler",
+        "EstanterÃ­a de Alquiler",
         "Sarmiento",
-        "Depósito SEPID",
+        "DepÃ³sito SEPID",
         "Desguace",
     ]
     REMAPS = {
-        "estanteria alquileres": "Estantería de Alquiler",
-        "estanteria de alquiler": "Estantería de Alquiler",
-        "estantería de aluiler": "Estantería de Alquiler",
-        "estanteria de aluiler": "Estantería de Alquiler",
+        "estanteria alquileres": "EstanterÃ­a de Alquiler",
+        "estanteria de alquiler": "EstanterÃ­a de Alquiler",
+        "estanterÃ­a de aluiler": "EstanterÃ­a de Alquiler",
+        "estanteria de aluiler": "EstanterÃ­a de Alquiler",
     }
     with connection.cursor() as cur:
         for alias, target in REMAPS.items():
@@ -352,7 +352,7 @@ def _rol(request):
 def require_roles(request, roles):
     r = _rol(request)
     expanded = set(roles)
-    # Si el endpoint acepta "jefe", también aceptar "jefe_veedor"
+    # Si el endpoint acepta "jefe", tambiÃ©n aceptar "jefe_veedor"
     if "jefe" in expanded:
         expanded.add("jefe_veedor")
     if r not in expanded:
@@ -382,7 +382,7 @@ def _ensure_quote(ingreso_id: int):
             )
             return new_id
         except Exception:
-            # Si ya existe por condición de carrera, recuperar id existente
+            # Si ya existe por condiciÃ³n de carrera, recuperar id existente
             row2 = q("SELECT id FROM quotes WHERE ingreso_id=%s", [ingreso_id], one=True)
             if row2:
                 return row2["id"]
@@ -454,7 +454,7 @@ def _load_quote_payload(ingreso_id: int):
         "estado": head["estado"],
         "moneda": head["moneda"],
         "items": items,
-        # total de repuestos se calcula directamente por ítems tipo 'repuesto'
+        # total de repuestos se calcula directamente por Ã­tems tipo 'repuesto'
         "tot_repuestos": tot_rep,
         "mano_obra": mano_obra,
         "subtotal": subtotal_calc,
@@ -484,7 +484,7 @@ class LoginView(APIView):
         rate_key = _login_rate_key(email, ip)
 
         if not email or not password:
-            raise AuthenticationFailed("Email y contraseña requeridos.")
+            raise AuthenticationFailed("Email y contraseÃ±a requeridos.")
 
         if _is_login_locked(rate_key):
             raise AuthenticationFailed(f"Demasiados intentos. Espera {LOGIN_LOCKOUT_MINUTES} minutos e intentalo de nuevo.")
@@ -493,14 +493,14 @@ class LoginView(APIView):
             user = User.objects.get(email=email, activo=True)
         except User.DoesNotExist:
             _register_login_failure(rate_key)
-            raise AuthenticationFailed("Usuario o contraseña inválidos.")
+            raise AuthenticationFailed("Usuario o contraseÃ±a invÃ¡lidos.")
 
         if not user.hash_pw:
-            raise AuthenticationFailed("El usuario aun no tiene contraseña. Usa 'Olvide mi contraseña' para inicializarla.")
+            raise AuthenticationFailed("El usuario aun no tiene contraseÃ±a. Usa 'Olvide mi contraseÃ±a' para inicializarla.")
 
         if not verify_hash(password, user.hash_pw):
             _register_login_failure(rate_key)
-            raise AuthenticationFailed("Usuario o contraseña inválidos.")
+            raise AuthenticationFailed("Usuario o contraseÃ±a invÃ¡lidos.")
 
         token = issue_token(user)
         _reset_login_failure(rate_key)
@@ -535,7 +535,7 @@ class ForgotPasswordView(APIView):
         ua = request.META.get("HTTP_USER_AGENT", "")
         ip = request.META.get("REMOTE_ADDR", "")
 
-        # Siempre devolvemos 200 para evitar enumeración de usuarios
+        # Siempre devolvemos 200 para evitar enumeraciÃ³n de usuarios
         ok_response = Response({"ok": True})
 
         if not email:
@@ -545,7 +545,7 @@ class ForgotPasswordView(APIView):
         if not user or not user.get("activo"):
             return ok_response
 
-        # Guardar un lock de enfriamiento en cache para evitar envíos duplicados
+        # Guardar un lock de enfriamiento en cache para evitar envÃ­os duplicados
         # causados por doble click o peticiones concurrentes muy cercanas.
         try:
             lock_key = f"pwreset:{user['id']}"
@@ -553,7 +553,7 @@ class ForgotPasswordView(APIView):
             if not cache.add(lock_key, "1", COOLDOWN_MIN * 60):
                 return ok_response
         except Exception:
-            # Si cache falla, continuamos y confiamos en el chequeo por DB más abajo
+            # Si cache falla, continuamos y confiamos en el chequeo por DB mÃ¡s abajo
             pass
 
         # Rate limit simple (vendor-aware)
@@ -593,13 +593,13 @@ class ForgotPasswordView(APIView):
         """, [user["id"], token_hash, exp, ip, ua])
 
         url = f'{getattr(settings,"FRONTEND_ORIGIN","http://localhost:5173")}/restablecer?t={token}'
-        subj = "Recuperación de contraseña"
-        txt  = f"Hola {user['nombre']},\n\nUsá este enlace para restablecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\nSi no fuiste vos, ignorá este correo."
+        subj = "RecuperaciÃ³n de contraseÃ±a"
+        txt  = f"Hola {user['nombre']},\n\nUsÃ¡ este enlace para restablecer tu contraseÃ±a (vÃ¡lido {TOKEN_TTL_MIN} minutos):\n{url}\n\nSi no fuiste vos, ignorÃ¡ este correo."
         html = f"""
           <p>Hola {user['nombre']},</p>
-          <p>Usá este enlace para restablecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):</p>
+          <p>UsÃ¡ este enlace para restablecer tu contraseÃ±a (vÃ¡lido {TOKEN_TTL_MIN} minutos):</p>
           <p><a href="{url}">{url}</a></p>
-          <p>Si no fuiste vos, ignorá este correo.</p>
+          <p>Si no fuiste vos, ignorÃ¡ este correo.</p>
         """
         try:
             txt = _email_append_footer_text(txt)
@@ -630,7 +630,7 @@ class ResetPasswordView(APIView):
         """, [token_hash], one=True)
 
         if not row:
-            return Response({"detail": "Token inválido o vencido"}, status=400)
+            return Response({"detail": "Token invÃ¡lido o vencido"}, status=400)
 
         # Actualizar password
         hashed = make_password(password)
@@ -642,7 +642,7 @@ class ResetPasswordView(APIView):
         return Response({"ok": True})
 
 # ---------------------------------------
-# Vistas de técnico / ingresos
+# Vistas de tÃ©cnico / ingresos
 class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request):
@@ -732,7 +732,7 @@ class QuoteDetailView(APIView):
 
 
 class QuoteItemsView(APIView):
-    """POST crea ítem (repuesto / mano_obra / servicio)"""
+    """POST crea Ã­tem (repuesto / mano_obra / servicio)"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
@@ -740,7 +740,7 @@ class QuoteItemsView(APIView):
         d = request.data or {}
         tipo = (d.get("tipo") or "").strip()
         if tipo not in ("repuesto", "mano_obra", "servicio"):
-            raise ValidationError("tipo inválido")
+            raise ValidationError("tipo invÃ¡lido")
         desc = (d.get("descripcion") or "").strip()
         if not desc:
             raise ValidationError("descripcion requerida")
@@ -749,7 +749,7 @@ class QuoteItemsView(APIView):
             qty    = money(d.get("qty"))
             precio = money(d.get("precio_u"))
         except (TypeError, ValueError):
-            raise ValidationError("qty y precio_u deben ser numéricos")
+            raise ValidationError("qty y precio_u deben ser numÃ©ricos")
         if qty < 0 or precio < 0:
             raise ValidationError("qty y precio_u no pueden ser negativos")
         repuesto_id = d.get("repuesto_id")
@@ -766,7 +766,7 @@ class QuoteItemsView(APIView):
 
 
 class QuoteItemDetailView(APIView):
-    """PATCH/DELETE de un ítem puntual"""
+    """PATCH/DELETE de un Ã­tem puntual"""
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, ingreso_id: int, item_id: int):
@@ -776,7 +776,7 @@ class QuoteItemDetailView(APIView):
         if "tipo" in d:
             t = (d.get("tipo") or "").strip()
             if t not in ("repuesto", "mano_obra", "servicio"):
-                raise ValidationError("tipo inválido")
+                raise ValidationError("tipo invÃ¡lido")
             sets.append("tipo=%s"); params.append(t)
         if "descripcion" in d:
             sets.append("descripcion=%s"); params.append((d.get("descripcion") or "").strip())
@@ -784,14 +784,14 @@ class QuoteItemDetailView(APIView):
             try:
                 qv = float(d.get("qty"))
             except (TypeError, ValueError):
-                raise ValidationError("qty debe ser numérico")     
+                raise ValidationError("qty debe ser numÃ©rico")     
             if qv < 0: raise ValidationError("qty no puede ser negativo")  
             sets.append("qty=%s"); params.append(qv)
         if "precio_u" in d:
             try:
                 pv = float(d.get("precio_u"))
             except (TypeError, ValueError):
-                raise ValidationError("precio_u debe ser numérico")
+                raise ValidationError("precio_u debe ser numÃ©rico")
             if pv < 0: raise ValidationError("precio_u no puede ser negativo")
             sets.append("precio_u=%s"); params.append(pv)
         if "repuesto_id" in d:
@@ -826,7 +826,7 @@ class QuoteItemDetailView(APIView):
 class QuoteResumenView(APIView):
     """
     PATCH { mano_obra: number }
-    Upsertea un único renglón 'mano_obra' (qty=1) y recalcula totales.
+    Upsertea un Ãºnico renglÃ³n 'mano_obra' (qty=1) y recalcula totales.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -838,13 +838,13 @@ class QuoteResumenView(APIView):
         try:
             mo = float(mo)
         except (TypeError, ValueError):
-            raise ValidationError("mano_obra debe ser numérico")
+            raise ValidationError("mano_obra debe ser numÃ©rico")
         if mo < 0:
             raise ValidationError("mano_obra no puede ser negativo")
 
         qid = _ensure_quote(ingreso_id)
         _set_audit_user(request)
-        # ¿ya hay mano_obra? -> upsert (mantengo uno solo)
+        # Â¿ya hay mano_obra? -> upsert (mantengo uno solo)
         row = q("SELECT id FROM quote_items WHERE quote_id=%s AND tipo='mano_obra' ORDER BY id LIMIT 1", [qid], one=True)
         if row:
             exec_void("UPDATE quote_items SET qty=1, precio_u=%s, descripcion='Mano de obra' WHERE id=%s", [mo, row["id"]])
@@ -878,7 +878,7 @@ class EmitirPresupuestoView(APIView):
         # Ingreso: usar el nombre viejo 'presupuestado'
         exec_void("UPDATE ingresos SET presupuesto_estado='presupuestado' WHERE id=%s", [ingreso_id])
 
-        # PDF (generar y guardar copia en disco si está configurado)
+        # PDF (generar y guardar copia en disco si estÃ¡ configurado)
         fname, pdf = render_quote_pdf(ingreso_id)
         try:
             save_dir = getattr(settings, "QUOTES_SAVE_DIR", None)
@@ -920,7 +920,7 @@ class QuotePdfView(APIView):
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
 
-        fname, pdf = render_quote_pdf(ingreso_id)   # <- ahora sí, 2 valores
+        fname, pdf = render_quote_pdf(ingreso_id)   # <- ahora sÃ­, 2 valores
         if not pdf:
             raise ValidationError("Ingreso no encontrado o sin presupuesto")
 
@@ -946,7 +946,7 @@ class AprobarPresupuestoView(APIView):
            WHERE id=%s
         """, [qid])
 
-        # Reflejar en ingreso según regla
+        # Reflejar en ingreso segÃºn regla
         exec_void("""
           UPDATE ingresos
              SET presupuesto_estado='aprobado',
@@ -977,7 +977,7 @@ class AprobarPresupuestoView(APIView):
                 [ingreso_id, ingreso_id],
             )
 
-        # Enviar aviso por mail al técnico asignado (con detalles del equipo)
+        # Enviar aviso por mail al tÃ©cnico asignado (con detalles del equipo)
         try:
             row = q("""
                 SELECT
@@ -1010,11 +1010,11 @@ class AprobarPresupuestoView(APIView):
                     f"- Cliente: {row.get('cliente') or '-'}",
                     f"- Marca/Modelo: {row.get('marca') or '-'} / {row.get('modelo') or '-'}",
                     f"- Tipo: {row.get('tipo_equipo') or '-'}",
-                    f"- N° de serie: {row.get('numero_serie') or '-'}",
+                    f"- NÂ° de serie: {row.get('numero_serie') or '-'}",
                     "",
                     f"Abrir hoja de servicio: {link}",
                     "",
-                    "Aviso automático â no responder a este correo.",
+                    "Aviso automÃ¡tico Ã¢Â€Â” no responder a este correo.",
                 ]
                 body = "\n".join(body_lines)
                 body = _email_append_footer_text(body)
@@ -1042,7 +1042,7 @@ class ComenzarReparacionView(APIView):
     def post(self, request, ingreso_id: int):
         require_roles(request, ["tecnico","jefe","jefe_veedor"])
         _set_audit_user(request)
-        # Si ya está en reparar, OK; si venía de estados previos válidos, permitir; si no, 409
+        # Si ya estÃ¡ en reparar, OK; si venÃ­a de estados previos vÃ¡lidos, permitir; si no, 409
         row = q("SELECT estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
@@ -1065,7 +1065,7 @@ class AnularPresupuestoView(APIView):
         if not row:
             raise ValidationError("Ingreso no encontrado")
         if (row.get("presupuesto_estado") or "").strip() != "presupuestado":
-            raise ValidationError("Solo se puede anular cuando el presupuesto está 'presupuestado'.")
+            raise ValidationError("Solo se puede anular cuando el presupuesto estÃ¡ 'presupuestado'.")
 
         qid = _ensure_quote(ingreso_id)
 
@@ -1206,10 +1206,10 @@ class EntregarIngresoView(APIView):
         # IMPORTANTE: mismo transaction + mismo cursor para SET LOCAL + UPDATE
         with transaction.atomic():
             with connection.cursor() as cur:
-                # Seteamos GUC para RLS en esta transacción
+                # Seteamos GUC para RLS en esta transacciÃ³n
                 
 
-                # Hacemos el UPDATE en el MISMO cursor/conexión
+                # Hacemos el UPDATE en el MISMO cursor/conexiÃ³n
                 cur.execute("""
                     UPDATE ingresos
                        SET estado='entregado',
@@ -1286,7 +1286,7 @@ class NuevoIngresoView(APIView):
         if numero_interno and not numero_interno.upper().startswith("MG"):
             numero_interno = "MG " + numero_interno
 
-        # Ubicación: si no viene, buscar 'Taller'
+        # UbicaciÃ³n: si no viene, buscar 'Taller'
         ubicacion_id = data.get("ubicacion_id")
         if not ubicacion_id:
             t = q(
@@ -1295,7 +1295,7 @@ class NuevoIngresoView(APIView):
             )
             if not t:
                 return Response(
-                    {"detail": "No se encontró la ubicación 'Taller' en el catálogo. Creala en 'locations'."},
+                    {"detail": "No se encontrÃ³ la ubicaciÃ³n 'Taller' en el catÃ¡logo. Creala en 'locations'."},
                     status=400
                 )
             ubicacion_id = t["id"]
@@ -1342,9 +1342,9 @@ class NuevoIngresoView(APIView):
             return Response({"detail": "Cliente inexistente"}, status=400)
 
         if cliente.get("cod_empresa") and c["cod_empresa"] != cliente["cod_empresa"]:
-            return Response({"detail": "El código no corresponde a la razón social seleccionada."}, status=400)
+            return Response({"detail": "El cÃ³digo no corresponde a la razÃ³n social seleccionada."}, status=400)
         if cliente.get("razon_social") and c["razon_social"].lower() != cliente["razon_social"].lower():
-            return Response({"detail": "La razón social no corresponde al código seleccionado."}, status=400)
+            return Response({"detail": "La razÃ³n social no corresponde al cÃ³digo seleccionado."}, status=400)
 
         customer_id = c["id"]
 
@@ -1388,11 +1388,11 @@ class NuevoIngresoView(APIView):
         if numero_interno:
             exec_void("UPDATE devices SET n_de_control = NULLIF(%s,'') WHERE id=%s", [numero_interno, device_id])
 
-        # --- Garantía de reparación por N/S o N° interno (MG): última fecha_entrega < 90 días ---
+        # --- GarantÃ­a de reparaciÃ³n por N/S o NÂ° interno (MG): Ãºltima fecha_entrega < 90 dÃ­as ---
         from django.utils import timezone
         auto_gar_rep = False
         last_out_candidates = []
-        # Por número de serie
+        # Por nÃºmero de serie
         if numero_serie:
             row_last_ns = q(
                 """
@@ -1408,7 +1408,7 @@ class NuevoIngresoView(APIView):
             last_out_ns = row_last_ns and row_last_ns.get("last_out")
             if last_out_ns:
                 last_out_candidates.append(last_out_ns)
-        # Por número interno (MG)
+        # Por nÃºmero interno (MG)
         if numero_interno:
             row_last_mg = q(
                 """
@@ -1430,24 +1430,24 @@ class NuevoIngresoView(APIView):
         garantia_rep_payload = bool(data.get("garantia_reparacion"))
         garantia_rep_final = garantia_rep_payload or auto_gar_rep
 
-        # ---- Técnico asignado ----
+        # ---- TÃ©cnico asignado ----
         # 1) viene en payload -> ok; 2) default por modelo -> ok
         tecnico_id = data.get("tecnico_id")
         if not tecnico_id:
             tdef = q("SELECT tecnico_id FROM models WHERE id=%s", [equipo["modelo_id"]], one=True)
             tecnico_id = tdef["tecnico_id"] if tdef else None
 
-        # â 3) fallback por marca si el modelo no tiene
+        # Ã¢ÂœÂ… 3) fallback por marca si el modelo no tiene
         if not tecnico_id:
             tmarca = q("SELECT tecnico_id FROM marcas WHERE id=%s", [equipo["marca_id"]], one=True)
             tecnico_id = (tmarca or {}).get("tecnico_id")
 
-        # Validación
+        # ValidaciÃ³n
         if tecnico_id:
             tech = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
          [tecnico_id], one=True)
             if not tech:
-                return Response({"detail": "Técnico inválido o inactivo"}, status=400)
+                return Response({"detail": "TÃ©cnico invÃ¡lido o inactivo"}, status=400)
 
         # Usuario
         uid = getattr(request.user, "id", None) or getattr(request, "user_id", None)
@@ -1539,7 +1539,7 @@ class GarantiaReparacionCheckView(APIView):
             return Response({"within_90_days": False, "last_ingreso": None})
 
         last_out_candidates = []
-        # Buscar por número de serie
+        # Buscar por nÃºmero de serie
         if ns:
             row_ns = q(
                 """
@@ -1556,7 +1556,7 @@ class GarantiaReparacionCheckView(APIView):
             if last_ns:
                 last_out_candidates.append(last_ns)
 
-        # Buscar por número interno (MG)
+        # Buscar por nÃºmero interno (MG)
         if mg:
             row_mg = q(
                 """
@@ -1582,7 +1582,7 @@ class GarantiaReparacionCheckView(APIView):
         # Mantenemos la clave last_ingreso por compatibilidad (aunque es fecha_entrega)
         return Response({"within_90_days": within, "last_ingreso": last_out})
 # ---------------------------------------
-# Catálogos
+# CatÃ¡logos
 class CatalogoMarcasView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1610,7 +1610,7 @@ class CatalogoMarcasView(APIView):
             try:
                 tecnico_id = int(tecnico_raw)
             except (TypeError, ValueError):
-                raise ValidationError("tecnico_id inválido")
+                raise ValidationError("tecnico_id invÃ¡lido")
 
         existing = q(
             "SELECT id FROM marcas WHERE LOWER(nombre)=LOWER(%s)",
@@ -2153,7 +2153,7 @@ class TiposEquipoView(APIView):
                 ) or []
                 return Response(rows)
 
-        # Fallback: tipos desde models.tipo_equipo + catálogo extendido suministrado
+        # Fallback: tipos desde models.tipo_equipo + catÃ¡logo extendido suministrado
         internos = []
         try:
             internos = q(
@@ -2170,7 +2170,7 @@ class TiposEquipoView(APIView):
         usados_set = set()
 
         catalogo_fijo = []
-        # Combinar usados + catálogo fijo
+        # Combinar usados + catÃ¡logo fijo
         internos_set = { (r.get('nombre') or '').strip().upper() for r in (internos or []) }
         nombres = sorted(internos_set)
         rows = [{ "id": i+1, "nombre": n } for i, n in enumerate(nombres)]
@@ -2204,7 +2204,7 @@ class ModeloTipoEquipoView(APIView):
              WHERE id=%s AND marca_id=%s
         """, [tipo_nombre, modelo_id, marca_id])
 
-        # Asegurar presencia del tipo en el catálogo por marca para evitar
+        # Asegurar presencia del tipo en el catÃ¡logo por marca para evitar
         # inconsistencias en el front (series/variantes esperan esta fila)
         if tipo_nombre:
             # Buscar coincidencia case/acentos-insensitive y normalizar el nombre exacto
@@ -2219,7 +2219,7 @@ class ModeloTipoEquipoView(APIView):
                 one=True,
             )
             if row:
-                # Si existe con diferencias de acentuación/espacios, actualizamos al texto elegido
+                # Si existe con diferencias de acentuaciÃ³n/espacios, actualizamos al texto elegido
                 if (row.get("nombre") or "").strip() != tipo_nombre:
                     exec_void("UPDATE marca_tipos_equipo SET nombre=%s WHERE id=%s", [tipo_nombre, row["id"]])
             else:
@@ -2269,7 +2269,7 @@ class CatalogoUbicacionesView(APIView):
 class CatalogoMotivosView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        # MySQL: detectar tabla externa 'equipos' vía information_schema
+        # MySQL: detectar tabla externa 'equipos' vÃ­a information_schema
         if connection.vendor == "mysql":
             chk = q(
                 """
@@ -2313,7 +2313,7 @@ class CatalogoMotivosView(APIView):
             )
             valores = []
             if row and row.get("ct", "").lower().startswith("enum("):
-                ct = row["ct"][5:-1]  # dentro de los paréntesis
+                ct = row["ct"][5:-1]  # dentro de los parÃ©ntesis
                 partes = [p.strip() for p in ct.split(",")]
                 for p in partes:
                     v = p.strip().strip("'")
@@ -2322,27 +2322,27 @@ class CatalogoMotivosView(APIView):
             if not valores:
                 valores = [
                     "urgente control",
-                    "reparación",
+                    "reparaciÃ³n",
                     "service preventivo",
                     "baja alquiler",
-                    "reparación alquiler",
+                    "reparaciÃ³n alquiler",
                     "otros",
                 ]
-            # ordenar con 'urgente control' primero y resto alfabético
+            # ordenar con 'urgente control' primero y resto alfabÃ©tico
             valores = sorted(set(valores), key=lambda x: (x != "urgente control", x))
             return Response([{"value": v, "label": v} for v in valores])
         except Exception:
             valores = [
                 "urgente control",
-                "reparación",
+                "reparaciÃ³n",
                 "service preventivo",
                 "baja alquiler",
-                "reparación alquiler",
+                "reparaciÃ³n alquiler",
                 "otros",
             ]
             return Response([{"value": v, "label": v} for v in valores])
 
-# Accesorios: catálogo y por ingreso
+# Accesorios: catÃ¡logo y por ingreso
 class CatalogoAccesoriosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
@@ -2389,14 +2389,14 @@ class IngresoAccesoriosView(APIView):
                 one=True,
             )
             if not exists or not exists.get("n"):
-                raise ValidationError("Catálogo de accesorios no disponible en este entorno")
+                raise ValidationError("CatÃ¡logo de accesorios no disponible en este entorno")
         try:
             acc_id = int(d.get("accesorio_id"))
         except (TypeError, ValueError):
             return Response({"detail": "accesorio_id requerido"}, status=400)
         acc = q("SELECT id FROM catalogo_accesorios WHERE id=%s AND activo", [acc_id], one=True)
         if not acc:
-            return Response({"detail": "accesorio inválido"}, status=400)
+            return Response({"detail": "accesorio invÃ¡lido"}, status=400)
         ref = (d.get("referencia") or "").strip() or None
         desc = (d.get("descripcion") or "").strip() or None
         _set_audit_user(request)
@@ -2704,13 +2704,13 @@ class IngresoMediaThumbnailView(APIView):
         return response
 
 
-# Derivación a servicio externo
+# DerivaciÃ³n a servicio externo
 class DerivarIngresoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
     def post(self, request, ingreso_id: int):
-        # Auditoría y control de permisos
+        # AuditorÃ­a y control de permisos
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
         _set_audit_user(request)
 
@@ -2726,7 +2726,7 @@ class DerivarIngresoView(APIView):
 
         prov = q("SELECT id FROM proveedores_externos WHERE id=%s", [proveedor_id], one=True)
         if not prov:
-            return Response({"detail": "Proveedor externo inválido"}, status=400)
+            return Response({"detail": "Proveedor externo invÃ¡lido"}, status=400)
 
         # Insertar en el nuevo log
         exec_void(""" 
@@ -2755,12 +2755,12 @@ class DevolverDerivacionView(APIView):
             one=True,
         )
         if not row:
-            return Response({"detail": "Derivación no encontrada"}, status=404)
+            return Response({"detail": "DerivaciÃ³n no encontrada"}, status=404)
 
         data = request.data or {}
         fecha = data.get("fecha_entrega") or None
 
-        # Marcar fecha de devolución y estado
+        # Marcar fecha de devoluciÃ³n y estado
         exec_void(
             """
             UPDATE equipos_derivados
@@ -2771,13 +2771,13 @@ class DevolverDerivacionView(APIView):
             [fecha, deriv_id],
         )
 
-        # También reencolar el ingreso como 'ingresado' (solo si cambia)
+        # TambiÃ©n reencolar el ingreso como 'ingresado' (solo si cambia)
         exec_void("UPDATE ingresos SET estado='ingresado' WHERE id=%s AND estado <> 'ingresado'", [ingreso_id])
-        # Actualizar comentario del último evento de estado para dejar trazabilidad clara
+        # Actualizar comentario del Ãºltimo evento de estado para dejar trazabilidad clara
         try:
             exec_void(
                 """
-                UPDATE ingreso_events SET comentario='Devolución de externo'
+                UPDATE ingreso_events SET comentario='DevoluciÃ³n de externo'
                 WHERE id = (
                   SELECT id FROM ingreso_events
                    WHERE ingreso_id=%s AND a_estado='ingresado'
@@ -2790,7 +2790,7 @@ class DevolverDerivacionView(APIView):
         except Exception:
             pass
 
-        # Enviar aviso al técnico asignado (si tiene email)
+        # Enviar aviso al tÃ©cnico asignado (si tiene email)
         try:
             info = q(
                 """
@@ -2813,13 +2813,13 @@ class DevolverDerivacionView(APIView):
             )
             email = (info or {}).get("tech_email")
             if email:
-                subj = f"Aviso: equipo devuelto de externo â OS #{ingreso_id}"
+                subj = f"Aviso: equipo devuelto de externo Ã¢Â€Â” OS #{ingreso_id}"
                 txt = (
                     f"Hola {info.get('tech_nombre','')},\n\n"
-                    f"El equipo derivado fue devuelto del servicio externo y se reencoló como 'ingresado'.\n\n"
+                    f"El equipo derivado fue devuelto del servicio externo y se reencolÃ³ como 'ingresado'.\n\n"
                     f"Cliente: {info.get('razon_social','')}\n"
                     f"Equipo: {info.get('marca','')} {info.get('modelo','')}\n"
-                    f"Número de serie: {info.get('numero_serie','')}\n\n"
+                    f"NÃºmero de serie: {info.get('numero_serie','')}\n\n"
                     f"Hoja de servicio: /ingresos/{ingreso_id}\n"
                 )
                 try:
@@ -2860,7 +2860,7 @@ class UsuariosView(APIView):
         if not nombre or not email:
             raise ValidationError("Nombre y email son requeridos")
         if rol not in ROLE_KEYS:
-            raise ValidationError("Rol inválido")
+            raise ValidationError("Rol invÃ¡lido")
 
         existed = q("SELECT id FROM users WHERE email=%s", [email], one=True)
         if connection.vendor == "postgresql":
@@ -2881,12 +2881,12 @@ class UsuariosView(APIView):
                 [nombre, email, rol],
             )
 
-        # Enviar invitación de bienvenida si es nuevo
+        # Enviar invitaciÃ³n de bienvenida si es nuevo
         if not existed:
             try:
                 user = q("SELECT id, nombre, email FROM users WHERE email=%s", [email], one=True)
                 if user:
-                    # Generar token y enviar correo de bienvenida con link para setear contraseña
+                    # Generar token y enviar correo de bienvenida con link para setear contraseÃ±a
                     token = secrets.token_urlsafe(32)
                     token_hash = hashlib.sha256(token.encode()).hexdigest()
                     exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
@@ -2901,17 +2901,17 @@ class UsuariosView(APIView):
                     )
                     base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
                     url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-                    subj = "Bienvenido a SEPID â Configurá tu contraseña"
+                    subj = "Bienvenido a SEPID Ã¢Â€Â” ConfigurÃ¡ tu contraseÃ±a"
                     txt  = (
                         f"Hola {user['nombre']},\n\n"
                         f"Te damos la bienvenida al sistema de reparaciones de SEPID. "
-                        f"Usá este enlace para establecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+                        f"UsÃ¡ este enlace para establecer tu contraseÃ±a (vÃ¡lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
                         f"Si no esperabas este correo, ignoralo."
                     )
                     html = f"""
                         <p>Hola {user['nombre']},</p>
                         <p>Bienvenido al sistema de reparaciones de <strong>SEPID</strong>.</p>
-                        <p>Usá este enlace para establecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):</p>
+                        <p>UsÃ¡ este enlace para establecer tu contraseÃ±a (vÃ¡lido {TOKEN_TTL_MIN} minutos):</p>
                         <p><a href="{url}">{url}</a></p>
                         <p>Si no esperabas este correo, ignoralo.</p>
                     """
@@ -2938,14 +2938,14 @@ class UsuarioActivoView(APIView):
 class UsuarioResetPassView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, uid):
-        # Nuevo comportamiento más seguro: envía un enlace por email para que el usuario
-        # establezca (o reestablezca) su contraseña. No se permite fijarla directamente.
+        # Nuevo comportamiento mÃ¡s seguro: envÃ­a un enlace por email para que el usuario
+        # establezca (o reestablezca) su contraseÃ±a. No se permite fijarla directamente.
         require_jefe(request)
         user = q("SELECT id, email, nombre, activo FROM users WHERE id=%s", [uid], one=True)
         if not user or not user.get("activo"):
             return Response({"detail": "Usuario inexistente o inactivo"}, status=404)
 
-        # Generar token válido y enviarlo por mail
+        # Generar token vÃ¡lido y enviarlo por mail
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
@@ -2960,19 +2960,19 @@ class UsuarioResetPassView(APIView):
         )
         base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
         url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-        subj = "SEPID â Enlace para establecer tu contraseña"
+        subj = "SEPID Ã¢Â€Â” Enlace para establecer tu contraseÃ±a"
         txt  = (
             f"Hola {user['nombre']},\n\n"
-            f"Solicitaron un enlace para establecer o restablecer tu contraseña. "
-            f"Usá este enlace (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
-            f"Si no fuiste vos, ignorá este correo."
+            f"Solicitaron un enlace para establecer o restablecer tu contraseÃ±a. "
+            f"UsÃ¡ este enlace (vÃ¡lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+            f"Si no fuiste vos, ignorÃ¡ este correo."
         )
         html = f"""
             <p>Hola {user['nombre']},</p>
-            <p>Solicitaron un enlace para establecer o restablecer tu contraseña.</p>
-            <p>Usá este enlace (válido {TOKEN_TTL_MIN} minutos):</p>
+            <p>Solicitaron un enlace para establecer o restablecer tu contraseÃ±a.</p>
+            <p>UsÃ¡ este enlace (vÃ¡lido {TOKEN_TTL_MIN} minutos):</p>
             <p><a href="{url}">{url}</a></p>
-            <p>Si no fuiste vos, ignorá este correo.</p>
+            <p>Si no fuiste vos, ignorÃ¡ este correo.</p>
         """
         try:
             txt = _email_append_footer_text(txt)
@@ -2994,7 +2994,7 @@ class UsuarioRolePermView(APIView):
         if rol is not None:
             r = (rol or "").strip().lower()
             if r not in ROLE_KEYS:
-                raise ValidationError("Rol inválido")
+                raise ValidationError("Rol invÃ¡lido")
             sets.append("rol = %(rol)s")
             params["rol"] = r
         if perm_ing is not None:
@@ -3023,10 +3023,10 @@ class UsuarioDeleteView(APIView):
                 # Borrar el usuario
                 exec_void("DELETE FROM users WHERE id = %s", [uid])
         except IntegrityError:
-            # Aún queda alguna referencia (otra FK en otra tabla)
+            # AÃºn queda alguna referencia (otra FK en otra tabla)
             return Response(
-                {"detail": "No se pudo eliminar: el usuario está referenciado por otros registros. "
-                           "Reasigná/desasigná esas referencias o desactivá el usuario."},
+                {"detail": "No se pudo eliminar: el usuario estÃ¡ referenciado por otros registros. "
+                           "ReasignÃ¡/desasignÃ¡ esas referencias o desactivÃ¡ el usuario."},
                 status=409,
             )
         return Response({"ok": True})
@@ -3037,7 +3037,7 @@ class ClientesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor", "recepcion"])
-        # Compatibilidad: usar SELECT * para no romper si la DB aún no tiene columnas nuevas (telefono_2, email)
+        # Compatibilidad: usar SELECT * para no romper si la DB aÃºn no tiene columnas nuevas (telefono_2, email)
         return Response(q("SELECT * FROM customers ORDER BY razon_social"))
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
@@ -3101,7 +3101,7 @@ class ModeloTecnicoView(APIView):
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
 
-            if not ok: raise ValidationError("Técnico inválido")
+            if not ok: raise ValidationError("TÃ©cnico invÃ¡lido")
         q("UPDATE models SET tecnico_id=%s WHERE id=%s AND marca_id=%s", [tecnico_id, mid, bid])
         return Response({"ok": True, "tecnico_id": tecnico_id})
 
@@ -3114,7 +3114,7 @@ class MarcaTecnicoView(APIView):
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
 
-            if not ok: raise ValidationError("Técnico inválido")
+            if not ok: raise ValidationError("TÃ©cnico invÃ¡lido")
         q("UPDATE marcas SET tecnico_id=%s WHERE id=%s", [tecnico_id, bid])
         return Response({"ok": True, "tecnico_id": tecnico_id})
 
@@ -3150,14 +3150,14 @@ class MarcaAplicarTecnicoAModelosView(APIView):
 class IngresoAsignarTecnicoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, ingreso_id):
-        require_roles(request, ["jefe", "admin","jefe_veedor"])  # o sumá "recepcion" si querés
+        require_roles(request, ["jefe", "admin","jefe_veedor"])  # o sumÃ¡ "recepcion" si querÃ©s
         tecnico_id = request.data.get("tecnico_id")
         if tecnico_id is None:
             return Response({"detail": "tecnico_id requerido"}, status=400)
         ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
         if not ok:
-            return Response({"detail": "Técnico inválido"}, status=400)
+            return Response({"detail": "TÃ©cnico invÃ¡lido"}, status=400)
         q("UPDATE ingresos SET asignado_a=%s WHERE id=%s", [tecnico_id, ingreso_id])
         return Response({"ok": True, "asignado_a": tecnico_id})
 
@@ -3174,7 +3174,7 @@ class MarcaDeleteView(APIView):
                     "detail": "No se puede eliminar la marca: tiene modelos asociados. Elimine o reasigne los modelos primero.",
                     "models_count": int(row.get("cnt") or 0),
                 }, status=409)
-            # Intento de borrado (protección ante condiciones de carrera)
+            # Intento de borrado (protecciÃ³n ante condiciones de carrera)
             exec_void("DELETE FROM marcas WHERE id = %s", [bid])
             return Response({"ok": True})
         except IntegrityError:
@@ -3231,7 +3231,7 @@ class ModelosPorMarcaView(APIView):
                 one=True,
             )
             if not ok:
-                raise ValidationError("Técnico inválido")
+                raise ValidationError("TÃ©cnico invÃ¡lido")
 
         if connection.vendor == "postgresql":
             q("""
@@ -3255,7 +3255,7 @@ class ModelosPorMarcaView(APIView):
                 [bid, n, tecnico_id, tipo_equipo, variante],
             )
 
-        # Si se cargó tipo_equipo al crear/actualizar, asegurarlo en marca_tipos_equipo
+        # Si se cargÃ³ tipo_equipo al crear/actualizar, asegurarlo en marca_tipos_equipo
         if tipo_equipo:
             if connection.vendor == "postgresql":
                 q(
@@ -3332,20 +3332,63 @@ class ModelMergeView(APIView):
         if src["marca_id"] != dst["marca_id"]:
             return Response({"detail": "Solo se puede unificar dentro de la misma marca"}, status=409)
 
-        # Reglas: unificar solo si ambos tienen mismo tipo_equipo no vacío
+        # Reglas: unificar solo si ambos tienen mismo tipo_equipo no vacÃ­o
         tipo_a = (src.get("tipo") or "").strip()
         tipo_b = (dst.get("tipo") or "").strip()
         if not tipo_a or not tipo_b or tipo_a.lower() != tipo_b.lower():
-            return Response({"detail": "No se puede unificar: los tipos de equipo no coinciden o están vacíos"}, status=409)
+            return Response({"detail": "No se puede unificar: los tipos de equipo no coinciden o estÃ¡n vacÃ­os"}, status=409)
 
         with transaction.atomic():
             # mover devices al target
             exec_void("UPDATE devices SET model_id=%s WHERE model_id=%s", [target_id, source_id])
-            # eliminar modelo source (cascadeará en model_hierarchy si corresponde)
+            # eliminar modelo source (cascadearÃ¡ en model_hierarchy si corresponde)
             exec_void("DELETE FROM models WHERE id=%s", [source_id])
 
         moved = q("SELECT COUNT(*) AS cnt FROM devices WHERE model_id=%s", [target_id], one=True)
         return Response({"ok": True, "devices_now_point_to": target_id, "moved_count": moved.get("cnt") if moved else None})
+
+
+class MarcaMergeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        d = request.data or {}
+        try:
+            source_id = int(d.get("source_id"))
+            target_id = int(d.get("target_id"))
+        except Exception:
+            return Response({"detail": "source_id y target_id requeridos"}, status=400)
+        if source_id == target_id:
+            return Response({"detail": "source y target no pueden ser iguales"}, status=400)
+
+        a = q("SELECT id, nombre FROM marcas WHERE id=%s", [source_id], one=True)
+        b = q("SELECT id, nombre FROM marcas WHERE id=%s", [target_id], one=True)
+        if not a or not b:
+            return Response({"detail": "marca source/target inexistente"}, status=404)
+
+        with transaction.atomic():
+            # Para cada modelo de la marca source, si existe un homÃ³nimo en target, unificar devices y borrar; si no, mover el modelo a target.
+            modelos = q("SELECT id, nombre, COALESCE(TRIM(tipo_equipo),'' ) AS tipo FROM models WHERE marca_id=%s", [source_id]) or []
+            for mm in modelos:
+                dup = q(
+                    "SELECT id FROM models WHERE marca_id=%s AND LOWER(TRIM(nombre))=LOWER(TRIM(%s)) AND LOWER(COALESCE(TRIM(tipo_equipo),''))=LOWER(COALESCE(TRIM(%s),'')) LIMIT 1",
+                    [target_id, mm.get("nombre"), mm.get("tipo")],
+                    one=True,
+                )
+                if dup:
+                    exec_void("UPDATE devices SET model_id=%s WHERE model_id=%s", [dup.get("id"), mm.get("id")])
+                    exec_void("DELETE FROM models WHERE id=%s", [mm.get("id")])
+                else:
+                    exec_void("UPDATE models SET marca_id=%s WHERE id=%s", [target_id, mm.get("id")])
+
+            # Mover devices con marca_id directo
+            exec_void("UPDATE devices SET marca_id=%s WHERE marca_id=%s", [target_id, source_id])
+
+            # Borrar marca source (cascada en tablas jerÃ¡rquicas si aplica)
+            exec_void("DELETE FROM marcas WHERE id=%s", [source_id])
+
+        return Response({"ok": True, "target_id": target_id})
 
 
 class MarcaDeleteCascadeView(APIView):
@@ -3368,7 +3411,7 @@ class MarcaDeleteCascadeView(APIView):
                 # Borrar modelos de la marca
                 exec_void("DELETE FROM models WHERE marca_id = %s", [bid])
 
-                # Las tablas jerárquicas tienen ON DELETE CASCADE por marca/modelo
+                # Las tablas jerÃ¡rquicas tienen ON DELETE CASCADE por marca/modelo
                 # Borrar marca
                 exec_void("DELETE FROM marcas WHERE id = %s", [bid])
             return Response({"ok": True})
@@ -3787,17 +3830,17 @@ class IngresoDetalleView(APIView):
         # Roles con acceso
         ROL_EDIT_DIAG = {"tecnico", "jefe", "jefe_veedor", "admin"}
         ROL_EDIT_UBIC = {"tecnico", "jefe", "jefe_veedor", "admin", "recepcion"}
-        ROL_EDIT_BASICS = {"jefe", "jefe_veedor"}  # edición de datos de cliente/equipo
+        ROL_EDIT_BASICS = {"jefe", "jefe_veedor"}  # ediciÃ³n de datos de cliente/equipo
 
         rol = _rol(request)
         d = request.data or {}
 
-        # Setear variables de auditoría en la sesión DB (para triggers audit.*)
+        # Setear variables de auditorÃ­a en la sesiÃ³n DB (para triggers audit.*)
         _set_audit_user(request)
         if connection.vendor == "postgresql":
             exec_void("SET LOCAL app.ingreso_id = %s", [ingreso_id])
 
-        # Estado y asignación actuales
+        # Estado y asignaciÃ³n actuales
         row_est = q("SELECT estado, asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row_est:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
@@ -3806,30 +3849,30 @@ class IngresoDetalleView(APIView):
 
         sets_no_estado, params_no_estado = [], []
 
-        # --- Ubicación ---
+        # --- UbicaciÃ³n ---
         if "ubicacion_id" in d:
             if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado para modificar ubicación")
+                raise PermissionDenied("No autorizado para modificar ubicaciÃ³n")
             ubicacion_id = d.get("ubicacion_id")
             if not ubicacion_id:
                 raise ValidationError("ubicacion_id requerido")
             u = q("SELECT id FROM locations WHERE id=%s", [ubicacion_id], one=True)
             if not u:
-                raise ValidationError("Ubicación inexistente")
+                raise ValidationError("UbicaciÃ³n inexistente")
             sets_no_estado.append("ubicacion_id=%s")
             params_no_estado.append(ubicacion_id)
 
-        # --- Diagnóstico (texto y señales asociadas) ---
-        # diag_present será verdadero si el técnico cargó al menos uno de:
-        #   - descripción del problema (no vacía)
-        #   - trabajos realizados (no vacío)
-        #   - fecha de servicio (válida y no vacía)
+        # --- DiagnÃ³stico (texto y seÃ±ales asociadas) ---
+        # diag_present serÃ¡ verdadero si el tÃ©cnico cargÃ³ al menos uno de:
+        #   - descripciÃ³n del problema (no vacÃ­a)
+        #   - trabajos realizados (no vacÃ­o)
+        #   - fecha de servicio (vÃ¡lida y no vacÃ­a)
         desc_present = False
         trab_present = False
         fecha_present = False
         if "descripcion_problema" in d:
             if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado para modificar diagnóstico")
+                raise PermissionDenied("No autorizado para modificar diagnÃ³stico")
             desc = (d.get("descripcion_problema") or "").strip()
             desc_present = bool(desc)
             sets_no_estado.append("descripcion_problema=%s")
@@ -3860,7 +3903,7 @@ class IngresoDetalleView(APIView):
             else:
                 dt = parse_datetime(val)
                 if not dt:
-                    raise ValidationError("fecha_servicio inválida")
+                    raise ValidationError("fecha_servicio invÃ¡lida")
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
                 sets_no_estado.append("fecha_servicio=%s")
@@ -3884,28 +3927,28 @@ class IngresoDetalleView(APIView):
                 else:
                     dt = parse_datetime(val)
                     if not dt:
-                        raise ValidationError("fecha_entrega inválida")
+                        raise ValidationError("fecha_entrega invÃ¡lida")
                     if timezone.is_naive(dt):
                         dt = timezone.make_aware(dt, timezone.get_current_timezone())
                     sets_no_estado.append("fecha_entrega=%s")
                     params_no_estado.append(dt)
 
         # --- NUEVOS CAMPOS ---
-        # Garantía de reparación
+        # GarantÃ­a de reparaciÃ³n
         if "garantia_reparacion" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("garantia_reparacion=%s")
             params_no_estado.append(bool(d.get("garantia_reparacion")))
 
-        # Faja de garantía
+        # Faja de garantÃ­a
         if "faja_garantia" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("faja_garantia = NULLIF(%s,'')")
             params_no_estado.append((d.get("faja_garantia") or "").strip())
 
-        # Número interno MG -> devices.n_de_control
+        # NÃºmero interno MG -> devices.n_de_control
         if "numero_interno" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
@@ -3963,7 +4006,7 @@ class IngresoDetalleView(APIView):
                     params,
                 )
 
-        # Equipo: N° de serie
+        # Equipo: NÂ° de serie
         if "numero_serie" in d:
             if rol not in ROL_EDIT_BASICS:
                 raise PermissionDenied("No autorizado para editar N/S")
@@ -3986,7 +4029,7 @@ class IngresoDetalleView(APIView):
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("alquilado=%s")
             params_no_estado.append(bool(d.get("alquilado")))
-            # Si se marcó como alquilado, reflejar en el estado del equipo
+            # Si se marcÃ³ como alquilado, reflejar en el estado del equipo
             try:
                 if bool(d.get("alquilado")):
                     sets_no_estado.append("estado='alquilado'")
@@ -4008,15 +4051,15 @@ class IngresoDetalleView(APIView):
             sets_no_estado.append("alquiler_fecha=%s")
             params_no_estado.append(d.get("alquiler_fecha") or None)
 
-        # --- Transición de estado ---
-        # Antes solo se promovía con descripción. Ahora también con trabajos o fecha de servicio.
+        # --- TransiciÃ³n de estado ---
+        # Antes solo se promovÃ­a con descripciÃ³n. Ahora tambiÃ©n con trabajos o fecha de servicio.
         diag_present = desc_present or trab_present or fecha_present
         promote_from_ingresado = diag_present and estado_actual == "ingresado"
         promote_from_asignado  = diag_present and estado_actual == "asignado"
 
         if promote_from_ingresado:
             if not asignado_a:
-                raise ValidationError("Antes de diagnosticar, asigná un técnico al ingreso.")
+                raise ValidationError("Antes de diagnosticar, asignÃ¡ un tÃ©cnico al ingreso.")
             with transaction.atomic():
                 if sets_no_estado:
                     params_tmp = list(params_no_estado) + [ingreso_id]
@@ -4095,7 +4138,7 @@ class CerrarReparacionView(APIView):
         require_roles(request, ["jefe","jefe_veedor","admin"])
         r = (request.data or {}).get("resolucion")
         if r not in ("reparado","no_reparado","no_se_encontro_falla","presupuesto_rechazado"):
-            return Response({"detail": "resolución inválida"}, status=400)
+            return Response({"detail": "resoluciÃ³n invÃ¡lida"}, status=400)
 
         with connection.cursor() as cur:
             _set_audit_user(request)
@@ -4116,7 +4159,7 @@ class RemitoSalidaPdfView(APIView):
         if not cur_row:
             return Response(status=404)
         if not cur_row["resolucion"] and cur_row["estado"] != 'liberado':
-            return Response({"detail": "No se puede liberar sin resolución"}, status=409)
+            return Response({"detail": "No se puede liberar sin resoluciÃ³n"}, status=409)
 
         exec_void("""
           UPDATE ingresos
@@ -4132,7 +4175,7 @@ class RemitoSalidaPdfView(APIView):
 class IngresoHistorialView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
-        # Solo lectura para roles de supervisión/administración
+        # Solo lectura para roles de supervisiÃ³n/administraciÃ³n
         require_roles(request, ["jefe", "jefe_veedor", "admin"])
         if connection.vendor == "postgresql":
             rows = q(
@@ -4320,4 +4363,7 @@ class TiposEquipoView(APIView):
         exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(TRIM(nombre))=UPPER(TRIM(%s))", [nombre])
         exec_void("UPDATE models SET tipo_equipo=NULL WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))", [nombre])
         return Response({"ok": True})
+
+
+
 

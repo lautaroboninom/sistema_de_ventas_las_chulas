@@ -227,6 +227,10 @@ export const deleteCatalogVariante = (varianteId) =>
   export const patchMarca = (id, payload) =>
     api.patch(`/api/catalogos/marcas/${id}/`, payload);
 
+  // Unificar marcas
+  export const postMarcaMerge = (sourceId, targetId) =>
+    api.post(`/api/catalogos/marcas/merge/`, { source_id: sourceId, target_id: targetId });
+
   export const getTiposEquipo = () =>
     api.get("/api/catalogos/tipos-equipo/");
 
@@ -446,4 +450,5 @@ export const postModelo = (brandId, payloadOrNombre) => {
   // Historial de cambios por ingreso
   export const getIngresoHistorial = (ingresoId) =>
     api.get(`/api/ingresos/${ingresoId}/historial/`);
+
 
