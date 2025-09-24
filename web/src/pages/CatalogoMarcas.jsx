@@ -75,7 +75,7 @@ export default function CatalogoMarcas() {
         const needle = typeKey(tipoName);
         return tName === needle || tLabel === needle;
       });
-      if (!tipo) { updatePMV(md.id, { loading:false, error:`No se encontrÃ³ el Tipo en catálogo para: ${tipoName}`, variantes:[], tipoId:null, serieId:null }); return; }
+      if (!tipo) { updatePMV(md.id, { loading:false, error:`No se encontróel Tipo en catálogo para: ${tipoName}`, variantes:[], tipoId:null, serieId:null }); return; }
       const modelosCat = await fetchCatalogModelos(sel.id, tipo.id);
       const mdName = canon(md.nombre || "");
       let serie = modelosCat.find(m => canon(m.name||"") === mdName || (m.alias && canon(m.alias) === mdName));
