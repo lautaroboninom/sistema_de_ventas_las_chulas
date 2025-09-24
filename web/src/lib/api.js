@@ -257,6 +257,10 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const patchModelo = (id, payload) =>
     api.patch(`/api/catalogos/modelos/${id}/`, payload);
 
+  // Unificar modelos (mueve devices del source al target y elimina el duplicado)
+  export const postModelMerge = (sourceId, targetId) =>
+    api.post(`/api/catalogos/modelos/merge/`, { source_id: sourceId, target_id: targetId });
+
   export const getUbicaciones = () => api.get("/api/catalogos/ubicaciones/");
   export const getMotivos = () => api.get("/api/catalogos/motivos/");
   export const getAccesoriosCatalogo = () => api.get("/api/catalogos/accesorios/");

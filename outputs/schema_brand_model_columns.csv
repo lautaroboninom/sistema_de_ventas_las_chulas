@@ -1,0 +1,12 @@
+TABLE_NAME,COLUMN_NAME
+brand_aliases,brand_id
+canonical_models,brand_id
+devices,marca_id
+devices,model_id
+devices__bkp_normalizacion_20250918_1434,marca_id
+devices__bkp_normalizacion_20250918_1434,model_id
+django_content_type,model
+model_aliases,brand_id
+model_aliases,model_id
+models,marca_id
+models__bkp_normalizacion_20250918_1434,marca_id

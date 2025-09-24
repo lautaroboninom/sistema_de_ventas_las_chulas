@@ -4,7 +4,7 @@ import {
   getModelos, postModelo, deleteModelo,
   getTecnicos, patchMarcaTecnico, postMarcaAplicarTecnico, patchModeloTecnico,
   getTiposEquipo, patchModeloTipoEquipo,
-  patchMarca, patchModelo,
+  patchMarca, patchModelo, postModelMerge,
   // Catálogo jerárquico (v2)
   getCatalogTipos as fetchCatalogTipos,
   getCatalogModelos as fetchCatalogModelos,
@@ -277,7 +277,38 @@ export default function CatalogoMarcas() {
                     <span>Tipo: {md.tipo_equipo || "-"}</span>
                     <span>Var.: {(perModelVariants[md.id]?.variantes || []).length || (md.variante ? 1 : 0)}</span>
                     <span>Téc.: {md.tecnico_id ? (tecnicos.find((t) => t.id === md.tecnico_id)?.nombre || md.tecnico_id) : "hereda/ninguno"}</span>
-                    <button className="px-2 py-1 border rounded text-xs" type="button" onClick={async () => { const nuevo = prompt("Renombrar modelo", md.nombre || ""); const nombre = (nuevo || "").trim(); if (!nombre || nombre === md.nombre) return; try { setLoading(true); setErr(""); setMsg(""); await patchModelo(md.id, { nombre }); setModelos(arr => arr.map(x => x.id === md.id ? { ...x, nombre } : x)); setMsg("Modelo renombrado"); } catch (e) { setErr(e.message || "No se pudo renombrar el modelo"); } finally { setLoading(false); } }}>Renombrar</button>
+                    <button className="px-2 py-1 border rounded text-xs" type="button" onClick={async () => {
+  const nuevo = prompt("Renombrar modelo", md.nombre || "");
+  const nombre = (nuevo || "").trim();
+  if (!nombre || nombre === md.nombre) return;
+  try {
+    setLoading(true); setErr(""); setMsg("");
+    await patchModelo(md.id, { nombre });
+    setModelos(arr => arr.map(x => x.id === md.id ? { ...x, nombre } : x));
+    setMsg("Modelo renombrado");
+  } catch (e) {
+    const msg = e?.message || "";
+    if (msg.includes("409")) {
+      try {
+        const ms = await getModelos(sel.id);
+        const desired = canon(nombre);
+        const myTipo = typeKey(mdlTipoSel[md.id] ?? md.tipo_equipo || "");
+        const dup = (ms||[]).find(x => x.id !== md.id && canon(x.nombre||"") === desired && typeKey(x.tipo_equipo||"") === myTipo);
+        if (dup) {
+          const ok = confirm(`Ya existe un modelo con ese nombre y tipo de equipo (ID ${dup.id}). �Unificar?`);
+          if (ok) {
+            await postModelMerge(md.id, dup.id);
+            await loadModelos(sel.id);
+            setExpandedModelId(dup.id);
+            setMsg("Modelos unificados");
+            return;
+          }
+        }
+      } catch {}
+    }
+    setErr(msg || "No se pudo renombrar el modelo");
+  } finally { setLoading(false); }
+}}>Renombrar</button>
                   </div>
                 </div>
 
@@ -346,3 +377,6 @@ export default function CatalogoMarcas() {
     </div>
   );
 }
+
+
+

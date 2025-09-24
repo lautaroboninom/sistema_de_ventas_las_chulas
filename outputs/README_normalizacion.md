@@ -1,0 +1,177 @@
+# Normalización de marcas y modelos
+
+- Fecha de ejecución: 2025-09-18 16:47:36
+- Umbrales: HIGH≥92.0, MED≥85.0
+- Alias marcas procesados: 110 (HIGH: 109, MED: 1, LOW: 0)
+- Alias modelos procesados: 836 (HIGH: 708, MED: 128, LOW: 0)
+
+## Conformidad
+- marcas nombre: 100.0% (109/109)
+- models nombre: 100.0% (349/349)
+- devices marca_id/model_id: 100.0% (12529/12529)
+
+## Fuentes por marca
+- Abbott: https://www.abbott.com/
+- Agilent: https://www.agilent.com/
+- AIR SEP: https://www.caireinc.com/airsep/
+- AirSep: https://www.caireinc.com/airsep/
+- Aitecs: https://www.aitecs.com/
+- Apema: https://apemasa.com.ar/
+- Arcomed: https://www.arcomed.com/
+- Argus: https://www.mindray.com/en/product/Patient-Monitoring/Argus.html
+- BCI: https://www.smiths-medical.com/products/airway-management/pulse-oximetry/bci
+- Bird: https://www.vyaire.com/products/brands/bird
+- BMC: https://global.bmc-medical.com/
+- Breas: https://www.breas.com/
+- Cardimax: https://www.nihon-kohden.com/int/defibrillators/cardimax.html
+- Choice: https://www.choicemed.com/
+- ChoiceMMed: https://www.choicemed.com/
+- Cloud: PENDING
+- Code Master: https://www.stryker.com/us/en/emergency-care/products/codemaster.html
+- CodeMaster: https://www.stryker.com/us/en/emergency-care/products/codemaster.html
+- Colin: https://www.omron-healthcare.com/eu/colin-branded-equipment
+- Comp. Edan: PENDING
+- Comp. Meditech: https://www.meditech.com.cn/
+- Compat: PENDING
+- Contec: https://www.contecmed.com/
+- Corionic: https://www.corionic.com/
+- Datex: https://www.gehealthcare.com/products/anesthesia-delivery/datex-ohmeda
+- Datex-Ohmeda: https://www.gehealthcare.com/products/anesthesia-delivery/datex-ohmeda
+- Debilbiss: https://www.devilbisshealthcare.com/
+- Demobrand: PENDING
+- DeVilbiss: https://www.devilbisshealthcare.com/
+- Drager: https://www.draeger.com/
+- Draguer: https://www.draeger.com/
+- Dulovak: https://www.dulovak.com/
+- E&M: PENDING
+- Easote: https://www.esaote.com/
+- Easy GO: PENDING
+- Edan: https://www.edan.com/
+- EI: https://www.electroindustria.com.ar/
+- Electromedik: https://electromedik.com.ar/
+- EMA: PENDING
+- Energy Saver: https://www.energysaver.com.ar/
+- Esaote: https://www.esaote.com/
+- Everflo: https://www.usa.philips.com/healthcare/product/HCNOCTN146/everflo-oxygen-concentrator
+- Ficher & Paykel: https://www.fphcare.com/
+- Fiorino: https://www.fiorino.com.ar/
+- Fisher & Paykel: https://www.fphcare.com/
+- Fukuda: https://www.fukuda.com/
+- G3G: PENDING
+- GE Healthcare: https://www.gehealthcare.com/
+- General Electric: https://www.gehealthcare.com/
+- Hand: PENDING
+- Heahldyne: PENDING
+- Hewlett Packard: https://www.keysight.com/us/en/assets/7018-01168/brochures/5989-9880EN.pdf
+- Hoffrichter: https://www.hoffrichter.de/en/
+- HP- Philips: https://www.philips.com/healthcare
+- Innomed: https://innomedmedical.com/
+- Inogen: https://www.inogen.com/
+- Inogen ONE: https://www.inogen.com/
+- Intermed: https://www.intermed.com.br/
+- Invacare: https://www.invacare.com/
+- Kairos: PENDING
+- Kangaroo: https://www.cardinalhealth.com/en/product-solutions/medical/enteral-feeding/enteral-feeding-pumps.html
+- Kendall: https://www.cardinalhealth.com/en/product-solutions/medical/surgical-products/medical-imaging-and-electrodes.html
+- Konsung: https://www.konsungmedical.com/
+- Laerdal: https://www.laerdal.com/
+- Leistung: https://www.leistung.com.ar/
+- Life Care: PENDING
+- Long Fian: http://www.longfian.com/
+- Longfian: http://www.longfian.com/
+- Marbel: https://marbelmed.com/
+- Masimo: https://www.masimo.com/
+- Maxtec: https://www.maxtec.com/
+- Medd: PENDING
+- Medical Healthy: PENDING
+- Meditech: https://www.meditech.com.cn/
+- Medix: https://www.medix.com.mx/
+- MEK: PENDING
+- Mindray: https://www.mindray.com/
+- Movi-vac: https://www.movivac.com/
+- MRL: PENDING
+- Nellcor: https://www.medtronic.com/covidien/en-us/products/pulse-oximetry-sensors.html
+- Neumovent: https://www.neumovent.com/
+- Newport: https://www.medtronic.com/covidien/en-us/products/ventilation/newport-ht70-plus-ventilator.html
+- Nidek: https://www.nidekmedical.com/
+- Novametrix: https://www.smiths-medical.com/products/respiratory-care/capnography
+- Ohmeda: https://www.gehealthcare.com/products/anesthesia-delivery
+- Patrol: PENDING
+- Philips: https://www.philips.com/healthcare
+- Phillips: https://www.philips.com/healthcare
+- Phisyo Control: https://www.stryker.com/us/en/emergency-care/products/lifepak.html
+- Physio-Control: https://www.stryker.com/us/en/emergency-care/products/lifepak.html
+- Pulmonetic: https://www.medtronic.com/covidien/en-us/products/ventilation/ltv-series-ventilators.html
+- Pulmonetic Systems: https://www.medtronic.com/covidien/en-us/products/ventilation/ltv-series-ventilators.html
+- Purita Bennett: https://www.medtronic.com/covidien/en-us/products/ventilation/puritan-bennett-560-ventilator.html
+- Puritan Bennett: https://www.medtronic.com/covidien/en-us/products/ventilation/puritan-bennett-560-ventilator.html
+- Razel: PENDING
+- Remedy: PENDING
+- Remstar: PENDING
+- RES MED: https://www.resmed.com/
+- Resmart: PENDING
+- ResMed: https://www.resmed.com/
+- Respire: PENDING
+- Respironics: https://www.respironics.com/
+- Rhomicron: PENDING
+- Rosch: PENDING
+- Samaritan: PENDING
+- Samtronic: https://www.samtronic.com.br/
+- Schiller: PENDING
+- Sechrist: PENDING
+- Silfab: https://www.silfab.com.ar/
+- Sin Información: PENDING
+- Sullivan: PENDING
+- Sunrise: PENDING
+- Systel Vita: PENDING
+- Taema: PENDING
+- Tranquility: PENDING
+- Tronik: https://tronik.com.ar/
+- Vacumax: PENDING
+- Valeylab: PENDING
+- Viasys: https://www.gehealthcare.com/products/respiratory-care
+- Vision Aire: PENDING
+- Volumed: PENDING
+- Wellch Allen: PENDING
+- Weros: PENDING
+
+## Pendientes de verificación
+- Cloud (requiere fuente oficial)
+- Comp. Edan (requiere fuente oficial)
+- Compat (requiere fuente oficial)
+- Demobrand (requiere fuente oficial)
+- E&M (requiere fuente oficial)
+- Easy GO (requiere fuente oficial)
+- EMA (requiere fuente oficial)
+- G3G (requiere fuente oficial)
+- Hand (requiere fuente oficial)
+- Heahldyne (requiere fuente oficial)
+- Kairos (requiere fuente oficial)
+- Life Care (requiere fuente oficial)
+- Medd (requiere fuente oficial)
+- Medical Healthy (requiere fuente oficial)
+- MEK (requiere fuente oficial)
+- MRL (requiere fuente oficial)
+- Patrol (requiere fuente oficial)
+- Razel (requiere fuente oficial)
+- Remedy (requiere fuente oficial)
+- Remstar (requiere fuente oficial)
+- Resmart (requiere fuente oficial)
+- Respire (requiere fuente oficial)
+- Rhomicron (requiere fuente oficial)
+- Rosch (requiere fuente oficial)
+- Samaritan (requiere fuente oficial)
+- Schiller (requiere fuente oficial)
+- Sechrist (requiere fuente oficial)
+- Sin Información (requiere fuente oficial)
+- Sullivan (requiere fuente oficial)
+- Sunrise (requiere fuente oficial)
+- Systel Vita (requiere fuente oficial)
+- Taema (requiere fuente oficial)
+- Tranquility (requiere fuente oficial)
+- Vacumax (requiere fuente oficial)
+- Valeylab (requiere fuente oficial)
+- Vision Aire (requiere fuente oficial)
+- Volumed (requiere fuente oficial)
+- Wellch Allen (requiere fuente oficial)
+- Weros (requiere fuente oficial)

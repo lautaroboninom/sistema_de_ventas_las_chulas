@@ -1,0 +1,261 @@
+class TiposEquipoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        # Compatibilidad: si existe la tabla externa "equipos" (legado), usarla.
+        if connection.vendor == "postgresql":
+            reg = q("SELECT to_regclass('public.equipos') AS reg", one=True)
+            if reg and reg.get("reg"):
+                rows = q(
+                    """
+                    SELECT "IdEquipos" AS id, "Equipo" AS nombre
+                    FROM equipos
+                    ORDER BY "Equipo"
+                    """
+                ) or []
+                return Response(rows)
+        else:
+            chk = q(
+                """
+                SELECT COUNT(*) AS n
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = 'equipos'
+                """,
+                one=True,
+            )
+            if chk and chk.get("n"):
+                rows = q(
+                    """
+                    SELECT IdEquipos AS id, Equipo AS nombre
+                    FROM equipos
+                    ORDER BY Equipo
+                    """
+                ) or []
+                return Response(rows)
+
+        # Fallback: tipos desde models.tipo_equipo + catálogo extendido suministrado
+        internos = []
+        try:
+            internos = q(
+                """
+                SELECT DISTINCT UPPER(TRIM(nombre)) AS nombre
+                FROM marca_tipos_equipo
+                WHERE activo = TRUE
+                ORDER BY 1
+                """
+            ) or []
+        except Exception:
+            internos = []
+
+        usados = q("""
+            SELECT DISTINCT TRIM(m.tipo_equipo) AS nombre
+            FROM models m
+            WHERE COALESCE(TRIM(m.tipo_equipo),'') <> ''
+        """) or []
+        usados_set = { (r.get('nombre') or '').strip().upper() for r in usados }
+
+        catalogo_fijo = [
+            "ACUMULADOR DE OXIGENO","ALARGUE DE SENSOR","ALARMA DE ESPIROMETRO","ALTO FLUJO","AMBIENTE OXIMETRO DE","ANALIZADOR DE OXIGENO","ARTROSCOPIO","ASPIRADOR","ASPIRADOR A BATERAS","BALANZA","BAÑO TERMOSTATICO","BATERIA PORTATIL","BATERY PACK","BBB","BLENDER DE OXIGENO","BOMBA DE ALIMENTACION","BOMBA DE ALIMENTACION","BOMBA DE ASPIRACION DE DRENAJE","BOMBA DE INFUSION","BOMBA SACA LECHE","BPAP","BPAP AUTO","BPAP AUTO C/HUMIDIF","BPAP C/AVAPS","BPAP C/BIFLEX","BPAP C/FREC.","BPAP C/HUMIDIFICADOR","CABEZALES DE BOMBA","CABLE DE CONEXIÓN 12V","CABLE PACIENTE","CABLE TRANSMISION DATOS","CALENTADOR HUMIDIFICADOR","CANISTER DE CAL SODADA","CAPNOGRAFO","CAPNOMETRO","CAPOTA DE INCUBADORA","CARDIODESFIBRILADOR","CARGADOR DE BATERIAS","CENTRAL DE MONITOREO","COLCHON DE AIRE","COLPOSCOPIO","COMPRESOR DE COLCHON ANTI ESCARAS","COMPRESOR DE CONCENTRADOR","COMPRESOR DE RESPIRADOR","COMPRESOR PARA BOTA","CONCENTRADOR DE OXIGENO","CONCENTRADOR PORTATIL DE OXIGENO","CONECTOR PLASTICO","CONTRA ANGULO","CONTROL DE MICROMOTOR","COUGH ASIST","CPAP","CPAP AUTO","CPAP AUTO C/HUMIDIF","CPAP C/CFLEX","CPAP C/HUMIDIF","CRANEOMOTRO","CUNA PEDIATRICA","DESFIBRILADOR","DETECTOR FETAL","ELECTROBISTURI","ELECTROCARDIOGRAFO","ELECTROCOAGULADOR","ELECTRODO PASIVO ELECTROVISTURI","ESPIROMETRO MA-1","ESTABILIZADOR DE TENSION","ESTUFA DE LABORATORIO","FERULA DE TORONTO","FLOWMETER","FRONTOLUZ","FUENTE DE ALIMENTACION","FUENTE DE FIBRA OPTICA","GENERADOR DE MARCAPASOS","GENERADOR DE OZONO","GRUPO CONTROL DE SERVOCUNA","GRUPO MOTOR DE INCUBADORA","HOLTER","IMPRESORA","INCUBADOR DE MONITORES BIOLOGICOS","INCUBADORA","INCUBADORA DE TRANSPORTE","LAMPARA DE ODONTOLOGIA","LARINGOSCOPIO","LASER INFRAROJO","LUMINOTERAPIA","LUMINOTERAPIA LED","MAGNETO","MANGUERA DE ALTA PRESION","MANOMETROS","MARCAPASO","MEDIDOR DE OXIGENO","MESA DE ANESTESIA","MOCHILA O2 425L","MODULO DE ENTRADA","MONITOR AUXILIAR","MONITOR CARDIACO","MONITOR DE APNEA","MONITOR DE PORTERO ELECTRICO","MONITOR DE PRESION NO INVASIVO","MONITOR DE SEG ELECTRICA","MONITOR FETAL","MONITOR LED","MONITOR MULTIPARAMETRICO","MONITOR PRE PARTO","MOTO NEBULIZADOR","MOTORES CON TURBINA","NEBULIZADOR","ONDA CORTA","OTOSCOPIO","OXICAPNOGRAFO","OXIMETRO DE PULSO","OXIMETRO DE PULSO C/CURVA","PACK DE BATERIA","PALETAS DE DESFIBRILADOR","PANEL DE SERVOCUNA","PARA RECARGAR","PEDAL DE ELECTROBISTURI","PIE PORTASUEROS","PIE RODANTE DE MONITOR","PIEZA DE MANO","PLACA INDIFERENTE DE ELECTROBISTURI","PLAQUETA DE OXIMETRO DE PULSO","POLIGRAFO","PORTA FUELLE DE RESPIRADOR","PROLONGADOR DE SENSOR","PUNTA DE ASPIRADOR ULTRASONICO","RECTOSCOPIO","REGULADOR DE MOCHILA","RELOJES","RESPIRADOR","SELLADORA DE BOLSAS","SENSOR DE GOTA","SENSOR DE OXIMETRO DE PULSO","SENSOR DE TEMPERATURA","SENSOR DE XFLUJO","SERVICIO DE GUARDIA","SERVOCUNA","SIERRA ORTOPEDICA","SOPORTE DE PALETAS DESFIBRILADOR","SWICH TPLINK","TAPA DE CALENTADOR","TAPA DE CONCENTRADOR","TAPA DE HUMIDIFICADOR","TAPA DE RESPIRADOR","TENSIOMETRO","TERMINALES DE SENSOR","TRANSFORMADOR","TUBO DE OXIGENO 1M","TUBO DE OXIGENO 6 M3","ULTRASONIDO","UPS","VALVULA AHORRADORA","VALVULA DE MESA DE ANESTESIA","VALVULA DE PEEP","VALVULA EXPIROMETRIA","VALVULA REDUCTORA DE PRESION","VENTILADOR","OTRO"
+        ]
+        # Combinar usados + catálogo fijo
+        nombres = sorted({ *(n for n in usados_set if n), *catalogo_fijo })
+        internos_set = { (r.get('nombre') or '').strip().upper() for r in (internos or []) }
+        nombres = sorted({ *internos_set, *(n for n in usados_set if n), *catalogo_fijo })
+        rows = [{ "id": i+1, "nombre": n } for i, n in enumerate(nombres)]
+        return Response(rows)
+
+# views.py
+class ModeloTipoEquipoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, marca_id: int, modelo_id: int):
+        d = request.data or {}
+        tipo_nombre = (d.get("tipo_equipo") or "").strip()
+        tipo_id = d.get("tipo_equipo_id")
+
+        if tipo_id is not None and not tipo_nombre:
+            reg = q("SELECT to_regclass('public.equipos') AS reg", one=True)
+            if reg and reg.get("reg"):
+                r = q('SELECT "Equipo" AS equipo FROM equipos WHERE "IdEquipos"=%s', [tipo_id], one=True)
+                if not r:
+                    return Response({"detail": "Tipo de equipo inexistente"}, status=400)
+                tipo_nombre = r["equipo"]
+            else:
+                return Response({"detail": "tipo_equipo_id no disponible en este entorno"}, status=400)
+
+        # permitir limpiar
+        tipo_nombre = tipo_nombre or ""
+
+        exec_void("""
+            UPDATE models
+               SET tipo_equipo = NULLIF(%s,'')
+             WHERE id=%s AND marca_id=%s
+        """, [tipo_nombre, modelo_id, marca_id])
+
+        return Response({"ok": True})
+
+class ModeloVarianteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, marca_id: int, modelo_id: int):
+        d = request.data or {}
+        variante = (d.get("variante") or "").strip()
+        exec_void(
+            """
+            UPDATE models
+               SET variante = NULLIF(%s,'')
+             WHERE id=%s AND marca_id=%s
+            """,
+            [variante, modelo_id, marca_id],
+        )
+        return Response({"ok": True})
+
+class CatalogoUbicacionesView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        ensure_default_locations()
+        return Response(q("SELECT id, nombre FROM locations ORDER BY id"))
+
+class CatalogoMotivosView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        # MySQL: detectar tabla externa 'equipos' vía information_schema
+        if connection.vendor == "mysql":
+            chk = q(
+                """
+                SELECT COUNT(*) AS n
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = 'equipos'
+                """,
+                one=True,
+            )
+            if chk and chk.get("n"):
+                rows = q(
+                    """
+                    SELECT "IdEquipos" AS id, "Equipo" AS nombre
+                    FROM equipos
+                    ORDER BY "Equipo"
+                    """
+                ) or []
+                return Response(rows)
+        if connection.vendor == "postgresql":
+            rows = q(
+                """
+                SELECT e.enumlabel AS value, e.enumlabel AS label
+                FROM pg_type t
+                JOIN pg_enum e ON e.enumtypid = t.oid
+                WHERE t.typname = 'motivo_ingreso'
+                ORDER BY (e.enumlabel = 'urgente control') DESC, e.enumlabel ASC
+                """
+            )
+            return Response(rows)
+        # MySQL: derivar desde information_schema o fallback fijo
+        try:
+            row = q(
+                """
+                SELECT COLUMN_TYPE AS ct
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'ingresos'
+                  AND column_name = 'motivo'
+                """,
+                one=True,
+            )
+            valores = []
+            if row and row.get("ct", "").lower().startswith("enum("):
+                ct = row["ct"][5:-1]  # dentro de los paréntesis
+                partes = [p.strip() for p in ct.split(",")]
+                for p in partes:
+                    v = p.strip().strip("'")
+                    if v:
+                        valores.append(v)
+            if not valores:
+                valores = [
+                    "urgente control",
+                    "reparación",
+                    "service preventivo",
+                    "baja alquiler",
+                    "reparación alquiler",
+                    "otros",
+                ]
+            # ordenar con 'urgente control' primero y resto alfabético
+            valores = sorted(set(valores), key=lambda x: (x != "urgente control", x))
+            return Response([{"value": v, "label": v} for v in valores])
+        except Exception:
+            valores = [
+                "urgente control",
+                "reparación",
+                "service preventivo",
+                "baja alquiler",
+                "reparación alquiler",
+                "otros",
+            ]
+            return Response([{"value": v, "label": v} for v in valores])
+
+# Accesorios: catálogo y por ingreso
+class CatalogoAccesoriosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        if connection.vendor == "mysql":
+            exists = q(
+                """
+                SELECT COUNT(*) AS n
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = 'catalogo_accesorios'
+                """,
+                one=True,
+            )
+            if not exists or not exists.get("n"):
+                return Response([])
+        rows = q("SELECT id, nombre FROM catalogo_accesorios WHERE activo ORDER BY nombre")
+        return Response(rows)
+
+class IngresoAccesoriosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request, ingreso_id: int):
+        require_roles(request, ["jefe","admin","jefe_veedor","tecnico","recepcion"])
+        rows = q(
+            """
+              SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
+              FROM ingreso_accesorios ia
+              JOIN catalogo_accesorios ca ON ca.id = ia.accesorio_id AND ca.activo
+              WHERE ia.ingreso_id=%s
+              ORDER BY ia.id
+            """,
+            [ingreso_id]
+        )
+        return Response(rows)
+
+    def post(self, request, ingreso_id: int):
+        require_roles(request, ["jefe","admin","jefe_veedor","tecnico","recepcion"])
+        d = request.data or {}
+        if connection.vendor == "mysql":
+            exists = q(
+                """
+                SELECT COUNT(*) AS n
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = 'catalogo_accesorios'
+                """,
+                one=True,
+            )
+            if not exists or not exists.get("n"):
+                raise ValidationError("Catálogo de accesorios no disponible en este entorno")
+        try:
+            acc_id = int(d.get("accesorio_id"))
+        except (TypeError, ValueError):
+            return Response({"detail": "accesorio_id requerido"}, status=400)
+        acc = q("SELECT id FROM catalogo_accesorios WHERE id=%s AND activo", [acc_id], one=True)
+        if not acc:
+            return Response({"detail": "accesorio inválido"}, status=400)
+        ref = (d.get("referencia") or "").strip() or None
+        desc = (d.get("descripcion") or "").strip() or None
+        _set_audit_user(request)
+        exec_void(
+            "INSERT INTO ingreso_accesorios(ingreso_id, accesorio_id, referencia, descripcion) VALUES (%s,%s,%s,%s)",
+            [ingreso_id, acc_id, ref, desc]
+        )
+        new_id = q("SELECT LAST_INSERT_ID() AS id", one=True)["id"]
+        row = q(
+            """
+              SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
+              FROM ingreso_accesorios ia

@@ -3311,6 +3311,43 @@ class ModeloDeleteView(APIView):
         return Response({"ok": True})
 
 
+class ModelMergeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        d = request.data or {}
+        try:
+            source_id = int(d.get("source_id"))
+            target_id = int(d.get("target_id"))
+        except Exception:
+            return Response({"detail": "source_id y target_id requeridos"}, status=400)
+        if source_id == target_id:
+            return Response({"detail": "source y target no pueden ser iguales"}, status=400)
+
+        src = q("SELECT id, marca_id, COALESCE(TRIM(tipo_equipo), '') AS tipo, nombre FROM models WHERE id=%s", [source_id], one=True)
+        dst = q("SELECT id, marca_id, COALESCE(TRIM(tipo_equipo), '') AS tipo, nombre FROM models WHERE id=%s", [target_id], one=True)
+        if not src or not dst:
+            return Response({"detail": "modelo source/target inexistente"}, status=404)
+        if src["marca_id"] != dst["marca_id"]:
+            return Response({"detail": "Solo se puede unificar dentro de la misma marca"}, status=409)
+
+        # Reglas: unificar solo si ambos tienen mismo tipo_equipo no vacío
+        tipo_a = (src.get("tipo") or "").strip()
+        tipo_b = (dst.get("tipo") or "").strip()
+        if not tipo_a or not tipo_b or tipo_a.lower() != tipo_b.lower():
+            return Response({"detail": "No se puede unificar: los tipos de equipo no coinciden o están vacíos"}, status=409)
+
+        with transaction.atomic():
+            # mover devices al target
+            exec_void("UPDATE devices SET model_id=%s WHERE model_id=%s", [target_id, source_id])
+            # eliminar modelo source (cascadeará en model_hierarchy si corresponde)
+            exec_void("DELETE FROM models WHERE id=%s", [source_id])
+
+        moved = q("SELECT COUNT(*) AS cnt FROM devices WHERE model_id=%s", [target_id], one=True)
+        return Response({"ok": True, "devices_now_point_to": target_id, "moved_count": moved.get("cnt") if moved else None})
+
+
 class MarcaDeleteCascadeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, bid):

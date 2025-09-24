@@ -42,6 +42,8 @@ from .views import (
     # clientes / marcas-modelos / proveedores externos
     ClientesView, ClienteDeleteView,
     MarcaDeleteView, MarcaDeleteCascadeView, ModelosPorMarcaView, ModeloDeleteView,
+    ModelMergeView,
+    
     ProveedoresExternosView,
 
     # detalle de ingreso
@@ -127,6 +129,7 @@ urlpatterns = [
     path("catalogos/marcas/<int:bid>/eliminar-con-modelos/", MarcaDeleteCascadeView.as_view()),  # DELETE (cascade)
     path("catalogos/marcas/<int:bid>/modelos/", ModelosPorMarcaView.as_view()), # GET/POST
     path("catalogos/modelos/<int:mid>/", ModeloDeleteView.as_view()),            # DELETE
+    path("catalogos/modelos/merge/", ModelMergeView.as_view()),                  # POST {source_id,target_id}
 
     # detalle de ingreso (GET, PATCH)
     path("ingresos/<int:ingreso_id>/", IngresoDetalleView.as_view()),

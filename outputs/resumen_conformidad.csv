@@ -1,0 +1,4 @@
+tabla,columna,total,conformes,porcentaje
+marcas,nombre,109,109,100.0
+models,nombre,349,349,100.0
+devices,marca_id/model_id,12529,12529,100.0

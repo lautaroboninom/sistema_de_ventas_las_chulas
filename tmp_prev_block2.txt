@@ -1,0 +1,238 @@
+
+    def delete(self, request, pid):
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        q("DELETE FROM proveedores_externos WHERE id = %(id)s", {"id": pid})
+        return Response({"ok": True})
+
+
+class PendientesGeneralView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        tecnico_raw = (request.GET.get("tecnico_id") or "").strip()
+
+        with connection.cursor() as cur:
+            _set_audit_user(request)
+
+            sql = """
+                SELECT t.id,
+                       t.estado,
+                       t.presupuesto_estado,
+                       t.motivo,
+                       c.razon_social,
+                       d.numero_serie,
+                       COALESCE(b.nombre,'') AS marca,
+                       COALESCE(m.nombre,'') AS modelo,
+                       COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                       t.fecha_ingreso,
+                       CASE WHEN ed.estado = 'devuelto' THEN true ELSE false END AS derivado_devuelto
+                FROM ingresos t
+                JOIN devices d   ON d.id = t.device_id
+                JOIN customers c ON c.id = d.customer_id
+                LEFT JOIN marcas b ON b.id = d.marca_id
+                LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                LEFT JOIN (
+                  SELECT e.*, ROW_NUMBER() OVER (
+                    PARTITION BY e.ingreso_id ORDER BY e.fecha_deriv DESC, e.id DESC
+                  ) AS rn
+                  FROM equipos_derivados e
+                ) ed ON ed.ingreso_id = t.id AND ed.rn = 1
+                WHERE LOWER(loc.nombre) = LOWER(%s)
+                  AND t.estado NOT IN ('liberado','entregado', 'alquilado')
+            """
+            params = ["taller"]
+            if tecnico_raw.isdigit():
+                sql += " AND t.asignado_a = %s"
+                params.append(int(tecnico_raw))
+
+            sql += """
+                ORDER BY
+                  (CASE WHEN ed.estado = 'devuelto' THEN 1 ELSE 0 END) DESC,
+                  (t.motivo = 'urgente control') DESC,
+                  t.fecha_ingreso ASC
+            """
+            cur.execute(sql, params)
+            rows = _fetchall_dicts(cur)
+
+        return Response(IngresoListItemSerializer(rows, many=True).data)
+
+
+class AprobadosParaRepararView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        with connection.cursor() as cur:
+            _set_audit_user(request)
+            cur.execute("""
+                SELECT
+                  t.id,
+                  t.estado,
+                  t.presupuesto_estado,
+                  c.razon_social,
+                  d.numero_serie,
+                  COALESCE(b.nombre,'') AS marca,
+                  COALESCE(m.nombre,'') AS modelo,
+                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  t.fecha_ingreso,
+                  q.fecha_aprobado AS fecha_aprobacion
+                FROM ingresos t
+                JOIN devices d ON d.id=t.device_id
+                JOIN customers c ON c.id=d.customer_id
+                LEFT JOIN marcas b ON b.id=d.marca_id
+                LEFT JOIN models m ON m.id=d.model_id
+                LEFT JOIN quotes q ON q.ingreso_id = t.id
+                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                WHERE LOWER(loc.nombre) = LOWER(%s)
+                  AND (
+                        (t.presupuesto_estado = 'aprobado'
+                        AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado'))
+                        OR t.estado = 'reparar'
+                      )
+                  AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado')
+                ORDER BY COALESCE(q.fecha_aprobado, t.fecha_ingreso) ASC;
+            """, ["taller"])
+            data = _fetchall_dicts(cur)
+        return Response(IngresoListItemSerializer(data, many=True).data)
+
+class AprobadosYReparadosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        with connection.cursor() as cur:
+            _set_audit_user(request)
+            cur.execute("""
+              SELECT t.id, t.estado, t.presupuesto_estado,
+                     c.razon_social,
+                     d.numero_serie,
+                     COALESCE(b.nombre,'') AS marca,
+                     COALESCE(m.nombre,'') AS modelo,
+                     COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                     t.fecha_ingreso,
+                     ev.fecha_reparado
+              FROM ingresos t
+              JOIN devices d ON d.id=t.device_id
+              JOIN customers c ON c.id=d.customer_id
+              LEFT JOIN marcas b ON b.id=d.marca_id
+              LEFT JOIN models m ON m.id=d.model_id
+              LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+              LEFT JOIN (
+                SELECT e.ingreso_id, e.ts AS fecha_reparado,
+                       ROW_NUMBER() OVER (PARTITION BY e.ingreso_id ORDER BY e.ts DESC, e.id DESC) AS rn
+                FROM ingreso_events e
+                WHERE e.a_estado = 'reparado'
+              ) ev ON ev.ingreso_id = t.id AND ev.rn = 1
+              WHERE t.estado IN ('reparado')
+                AND LOWER(loc.nombre) = LOWER(%s)
+              ORDER BY COALESCE(ev.fecha_reparado, t.fecha_ingreso) DESC;
+            """, ["taller"])
+            rows = _fetchall_dicts(cur)
+        return Response(IngresoListItemSerializer(rows, many=True).data)
+
+class LiberadosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        with connection.cursor() as cur:
+            _set_audit_user(request)
+            cur.execute("""
+                SELECT
+                  t.id,
+                  t.estado,
+                  t.presupuesto_estado,
+                  c.razon_social,
+                  d.numero_serie,
+                  COALESCE(b.nombre,'') AS marca,
+                  COALESCE(m.nombre,'') AS modelo,
+                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  t.fecha_ingreso,
+                  t.ubicacion_id,
+                  COALESCE(l.nombre,'') AS ubicacion_nombre,
+                  ev.fecha_listo
+                FROM ingresos t
+                JOIN devices   d ON d.id = t.device_id
+                JOIN customers c ON c.id = d.customer_id
+                LEFT JOIN marcas    b ON b.id = d.marca_id
+                LEFT JOIN models    m ON m.id = d.model_id
+                LEFT JOIN locations l ON l.id = t.ubicacion_id
+                LEFT JOIN (
+                  SELECT e.ingreso_id, e.ts AS fecha_listo,
+                         ROW_NUMBER() OVER (PARTITION BY e.ingreso_id ORDER BY e.ts DESC, e.id DESC) AS rn
+                  FROM ingreso_events e
+                  WHERE e.a_estado = 'liberado'
+                ) ev ON ev.ingreso_id = t.id AND ev.rn = 1
+                WHERE t.estado = 'liberado'
+                  AND LOWER(l.nombre) = LOWER(%s)
+                ORDER BY COALESCE(ev.fecha_listo, t.fecha_ingreso) DESC;
+            """, ["taller"])
+            rows = _fetchall_dicts(cur)
+        return Response(IngresoListItemSerializer(rows, many=True).data)
+    
+class GeneralEquiposView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        qtxt = (request.GET.get("q") or "").strip()
+        estado = (request.GET.get("estado") or "").strip().lower()
+        ubicacion_id = (request.GET.get("ubicacion_id") or "").strip()
+        solo_taller = (request.GET.get("solo_taller") or "1") in ("1","true","t","yes","y")
+        excluir_raw = (request.GET.get("excluir_estados") or "").strip()
+        excluir_estados = []
+        if excluir_raw:
+            for part in excluir_raw.replace(';', ',').split(','):
+                val = part.strip().lower()
+                if val:
+                    excluir_estados.append(val)
+        with connection.cursor() as cur:
+            _set_audit_user(request)
+            base = """
+              SELECT t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
+                     COALESCE(loc.nombre, '') AS ubicacion_nombre,
+                     c.razon_social,
+                     d.numero_serie,
+                     COALESCE(b.nombre,'') AS marca,
+                     COALESCE(m.nombre,'') AS modelo,
+                     COALESCE(m.tipo_equipo,'') AS tipo_equipo
+              FROM ingresos t
+              JOIN devices d ON d.id=t.device_id
+              JOIN customers c ON c.id=d.customer_id
+              LEFT JOIN marcas b ON b.id=d.marca_id
+              LEFT JOIN models m ON m.id=d.model_id
+              LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+              WHERE 1=1
+            """
+            params = []
+            if solo_taller:
+                base += " AND LOWER(loc.nombre) = LOWER(%s)"
+                params.append("taller")
+            if estado:
+                base += " AND t.estado = %s"
+                params.append(estado)
+            if ubicacion_id.isdigit():
+                base += " AND t.ubicacion_id = %s"
+                params.append(int(ubicacion_id))
+            if excluir_estados:
+                placeholders = ', '.join(['%s'] * len(excluir_estados))
+                base += ' AND t.estado NOT IN (' + placeholders + ')' 
+                params.extend(excluir_estados)
+            if qtxt:
+                base += " AND (LOWER(c.razon_social) LIKE LOWER(%s) OR LOWER(d.numero_serie) LIKE LOWER(%s) OR LOWER(b.nombre) LIKE LOWER(%s) OR LOWER(m.nombre) LIKE LOWER(%s))"
+                like = f"%{qtxt}%"
+                params += [like, like, like, like]
+            base += " ORDER BY t.fecha_ingreso DESC"
+            cur.execute(base, params)
+            data = _fetchall_dicts(cur)
+        return Response(IngresoListItemSerializer(data, many=True).data)
+        
+class IngresoDetalleView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, ingreso_id: int):
+        row = q("""
+            SELECT
+              t.id,
+              t.motivo,
+              t.estado,
+              t.presupuesto_estado,
+              t.resolucion,
+              t.fecha_ingreso,
+              t.fecha_servicio,
+              t.garantia_reparacion,
+              t.faja_garantia,
+              t.remito_salida,
