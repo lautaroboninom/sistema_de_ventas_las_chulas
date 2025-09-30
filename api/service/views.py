@@ -50,6 +50,12 @@ LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
 LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 
+# Salud básica (ping)
+@api_view(["GET"])  # público
+@permission_classes([AllowAny])
+def ping(request):
+    return Response({"pong": True, "time": timezone.now().isoformat()})
+
 # Pie legal para correos (solo emails, no en el sitio)
 EMAIL_LEGAL_FOOTER = getattr(settings, "EMAIL_LEGAL_FOOTER", (
     "La información de este correo es confidencial y concierne únicamente a la persona a la que está dirigida. "
