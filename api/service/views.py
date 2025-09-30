@@ -1,11 +1,13 @@
 ﻿# service/views.py
 from django.db import connection, transaction, IntegrityError
+import unicodedata
 import os
 import secrets, hashlib, datetime as dt
 import logging
 from urllib.parse import quote
 from django.conf import settings
 from django.core.cache import cache
+from django.template.loader import get_template
 from django.core.mail import send_mail
 from django.core.files.storage import default_storage
 from django.utils import timezone
@@ -32,10 +34,12 @@ from .serializers import (
 from decimal import Decimal, ROUND_HALF_UP
 from .pdf import ( render_quote_pdf, render_remito_salida_pdf)
 from .media_utils import (process_upload, save_processed_image, delete_media_paths, MediaValidationError, MediaProcessingError)
+from .roles import ROLE_CHOICES, ROLE_KEYS
+from .constants import DEFAULT_LOCATION_NAMES, LOCATION_NAME_REMAPS
 logger = logging.getLogger(__name__)
 
 TOKEN_TTL_MIN = 30       # vence en 30 minutos
-COOLDOWN_MIN  = 1       # mÃ¡x 1 mail cada 1 minutos por usuario
+COOLDOWN_MIN  = 1       # máx 1 mail cada 1 minutos por usuario
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
@@ -43,25 +47,60 @@ LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 
 # Pie legal para correos (solo emails, no en el sitio)
 EMAIL_LEGAL_FOOTER = getattr(settings, "EMAIL_LEGAL_FOOTER", (
-    "La informaciÃ³n de este correo es confidencial y concierne Ãºnicamente a la persona a la que estÃ¡ dirigida. "
-    "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los tÃ©rminos que autoriza el art. 318 del CCyCN. "
-    "Si este mensaje no estÃ¡ dirigido a usted, por favor tenga presente que no tiene autorizaciÃ³n para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que estÃ¡ dirigido, como asÃ­ tampoco valerse del mismo. "
+    "La información de este correo es confidencial y concierne únicamente a la persona a la que está dirigida. "
+    "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los términos que autoriza el art. 318 del CCyCN. "
+    "Si este mensaje no está dirigido a usted, por favor tenga presente que no tiene autorización para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que está dirigido, como así­ tampoco valerse del mismo. "
     "Si recibe este correo por error, por favor, avise al remitente, luego de lo cual rogamos a usted destruya el mensaje original. "
-    "No se puede responsabilizar al remitente de ninguna forma por/o en relaciÃ³n con alguna consecuencia y/o daÃ±o que resulte del apropiado y completo envÃ­o y recepciÃ³n del contenido de este correo."
+    "No se puede responsabilizar al remitente de ninguna forma por/o en relación con alguna consecuencia y/o daño que resulte del apropiado y completo enví­o y recepción del contenido de este correo."
 ))
+
+def _load_email_footer_text() -> str:
+    """Obtiene el pie legal desde plantilla (txt) o settings como fallback."""
+    try:
+        tpl = get_template("email/_legal_footer.txt")
+        text = (tpl.render({}) or "").strip()
+        if text:
+            return text
+    except Exception:
+        pass
+    return EMAIL_LEGAL_FOOTER
+
+# Rebind de constantes locales a valores centralizados en settings
+try:
+    TOKEN_TTL_MIN = getattr(settings, 'TOKEN_TTL_MIN', TOKEN_TTL_MIN)
+    COOLDOWN_MIN = getattr(settings, 'EMAIL_COOLDOWN_MIN', COOLDOWN_MIN)
+    LOGIN_MAX_ATTEMPTS = getattr(settings, 'LOGIN_MAX_ATTEMPTS', LOGIN_MAX_ATTEMPTS)
+    LOGIN_LOCKOUT_MINUTES = getattr(settings, 'LOGIN_LOCKOUT_MINUTES', LOGIN_LOCKOUT_MINUTES)
+    LOGIN_LOCKOUT_SECONDS = getattr(settings, 'LOGIN_LOCKOUT_SECONDS', LOGIN_LOCKOUT_SECONDS)
+    PASSWORD_MIN_LENGTH = getattr(settings, 'PASSWORD_MIN_LENGTH', PASSWORD_MIN_LENGTH)
+except Exception:
+    pass
 
 def _email_append_footer_text(txt: str) -> str:
     try:
         base = (txt or "").rstrip()
-        return f"{base}\n\n{EMAIL_LEGAL_FOOTER}"
+        footer = _load_email_footer_text()
+        if not footer:
+            return base
+        return f"{base}\n\n{footer}"
     except Exception:
         return txt
 
 def _email_append_footer_html(html: str) -> str:
     try:
-        style = "font-size:10px;color:#6b7280;text-align:justify;line-height:1.3;margin-top:12px;"
-        footer = f"<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:12px 0;\"/><div style=\"{style}\">{EMAIL_LEGAL_FOOTER}</div>"
-        return (html or "") + footer
+        # Cargar HTML dedicado si está disponible
+        try:
+            tpl = get_template("email/_legal_footer.html")
+            footer_html = (tpl.render({}) or "").strip()
+        except Exception:
+            footer_html = ""
+        if not footer_html:
+            # Fallback: derivar a partir de texto
+            text = _load_email_footer_text()
+            if text:
+                style = "font-size:10px;color:#6b7280;text-align:justify;line-height:1.3;margin-top:12px;"
+                footer_html = f"<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:12px 0;\"/><div style=\"{style}\">{text}</div>"
+        return (html or "") + (footer_html or "")
     except Exception:
         return html
 
@@ -73,7 +112,7 @@ def _login_rate_key(email: str, ip: str) -> str:
 def _is_login_locked(key: str) -> bool:
     try:
         attempts = cache.get(key, 0) or 0
-        return attempts >= LOGIN_MAX_ATTEMPTS
+        return attempts >= getattr(settings, "LOGIN_MAX_ATTEMPTS", 5)
     except Exception:
         logger.debug('No se pudo leer el cache de login', exc_info=True)
         return False
@@ -81,8 +120,8 @@ def _is_login_locked(key: str) -> bool:
 def _register_login_failure(key: str) -> None:
     try:
         attempts = (cache.get(key, 0) or 0) + 1
-        cache.set(key, attempts, LOGIN_LOCKOUT_SECONDS)
-        if attempts >= LOGIN_MAX_ATTEMPTS:
+        cache.set(key, attempts, getattr(settings, "LOGIN_LOCKOUT_SECONDS", 300))
+        if attempts >= getattr(settings, "LOGIN_MAX_ATTEMPTS", 5):
             logger.warning('Login bloqueado por demasiados intentos')
     except Exception:
         logger.debug('No se pudo registrar intento fallido de login', exc_info=True)
@@ -94,8 +133,8 @@ def _reset_login_failure(key: str) -> None:
         logger.debug('No se pudo limpiar el estado de login', exc_info=True)
 
 def _validate_password_strength(password: str) -> None:
-    if len(password) < PASSWORD_MIN_LENGTH:
-        raise ValidationError(f'La contrasena debe tener al menos {PASSWORD_MIN_LENGTH} caracteres.')
+    if len(password) < getattr(settings, "PASSWORD_MIN_LENGTH", 8):
+        raise ValidationError(f"La contrasena debe tener al menos {getattr(settings, 'PASSWORD_MIN_LENGTH', 8)} caracteres.")
     classes = 0
     if any(c.islower() for c in password):
         classes += 1
@@ -108,14 +147,14 @@ def _validate_password_strength(password: str) -> None:
     if classes < 3:
         raise ValidationError('La contrasena debe combinar mayusculas, minusculas, numeros o simbolos.')
 
-ROLE_CHOICES = [
-    ("tecnico", "TÃ©cnico"),
-    ("admin", "AdministraciÃ³n"),
+_DEPRECATED_ROLE_CHOICES = [
+    ("tecnico", "Técnico"),
+    ("admin", "Administración"),
     ("jefe", "Jefe"),
     ("jefe_veedor", "Jefe veedor"),
-    ("recepcion", "RecepciÃ³n"),
+    ("recepcion", "Recepción"),
 ]
-ROLE_KEYS = [r for r, _ in ROLE_CHOICES]
+_DEPRECATED_ROLE_KEYS = [r for r, _ in _DEPRECATED_ROLE_CHOICES]
 TWO = Decimal("0.01")
 
 def money(x):
@@ -134,12 +173,12 @@ def _set_audit_user(request):
         uid = str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", ""))
         role = getattr(request, "user_role", "")
         with connection.cursor() as cur:
-            # SET (no LOCAL) para compatibilidad fuera de transacciones explÃ­citas
+            # SET (no LOCAL) para compatibilidad fuera de transacciones explí­citas
             cur.execute("SET app.user_id = %s;", [uid])
             cur.execute("SET app.user_role = %s;", [role])
 # ---------------------------------------
 # Utilidades DB
-_SUSPECT_UTF8 = ("Ãƒ", "Ã‚", "Â¤", "Â¢", "\ufffd")
+_SUSPECT_UTF8 = ("íƒ", "í‚", "Â¤", "Â¢", "\ufffd")
 
 
 def _fix_text_value(val):
@@ -156,10 +195,16 @@ def _fix_text_value(val):
             return val
         if any(ch in val for ch in _SUSPECT_UTF8):
             try:
-                repaired = val.encode("latin1").decode("utf-8")
-                return repaired
+                return val.encode("latin1").decode("utf-8")
             except Exception:
                 return val
+        # Fix common mojibake: strings containing 'Ã' or 'Â'
+        if ("Ã" in val) or ("Â" in val):
+            try:
+                fixed = val.encode("latin1").decode("utf-8")
+                return fixed
+            except Exception:
+                pass
     return val
 
 
@@ -188,12 +233,76 @@ def exec_returning(sql, params=None):
         return row[0] if row else None
 
 def last_insert_id():
-    """Devuelve el Ãºltimo ID autoincremental segÃºn el motor actual."""
+    """Devuelve el último ID autoincremental según el motor actual."""
     if connection.vendor == "postgresql":
         row = q("SELECT LASTVAL() AS id", one=True)
     else:
         row = q("SELECT LAST_INSERT_ID() AS id", one=True)
     return row and row.get("id")
+
+# ------------------------------
+# Catálogo 'motivo' (ENUM) utils
+# ------------------------------
+def _norm_txt(val: str) -> str:
+    """Lowercase + remove diacritics; also runs through _fix_text_value."""
+    try:
+        s = _fix_text_value(val)
+        s = "" if s is None else str(s)
+        # strip + lowercase + remove diacritics
+        s = s.strip().lower()
+        s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+        return s
+    except Exception:
+        return (val or "").strip().lower()
+
+def _get_motivo_enum_values() -> list:
+    """Obtiene los valores válidos del ENUM ingresos.motivo para el motor actual.
+    Fallback defensivo si falla la introspección.
+    """
+    try:
+        if connection.vendor == "postgresql":
+            rows = q(
+                """
+                SELECT e.enumlabel AS v
+                  FROM pg_type t
+                  JOIN pg_enum e ON e.enumtypid = t.oid
+                 WHERE t.typname = 'motivo_ingreso'
+                """
+            ) or []
+            vals = [(_fix_text_value(r.get("v"))) for r in rows]
+        else:
+            row = q(
+                """
+                SELECT COLUMN_TYPE AS ct
+                  FROM information_schema.columns
+                 WHERE table_schema = DATABASE()
+                   AND table_name = 'ingresos'
+                   AND column_name = 'motivo'
+                """,
+                one=True,
+            )
+            vals = []
+            if row and (row.get("ct") or "").lower().startswith("enum("):
+                ct = row["ct"][5:-1]  # contenido dentro de enum(...)
+                for p in ct.split(","):
+                    v = p.strip().strip("'")
+                    if v:
+                        vals.append(_fix_text_value(v))
+        vals = [v for v in (vals or []) if v]
+        if vals:
+            return vals
+    except Exception:
+        pass
+    # Fallback estable (incluye acentos correctos)
+    return [
+        "urgente control",
+        "reparación",
+        "service preventivo",
+        "baja alquiler",
+        "reparación alquiler",
+        "devolución demo",
+        "otros",
+    ]
 
 def _fetchall_dicts(cur):
     cols = [c[0] for c in cur.description]
@@ -296,41 +405,226 @@ def _frontend_url(request, path: str) -> str:
     except Exception:
         return path
 
-DEFAULT_LOCATION_NAMES = [
+# ======================================
+# Métricas helpers (business hours, fechas)
+# ======================================
+
+WORKDAY_START_HOUR = int(os.getenv("WORKDAY_START_HOUR", "9"))
+WORKDAY_END_HOUR = int(os.getenv("WORKDAY_END_HOUR", "17"))
+WORKDAYS = set(int(x) for x in os.getenv("WORKDAYS", "0,1,2,3,4").split(",") if x != "")  # 0=Lunes
+
+
+def _tz_aware(dtobj: dt.datetime):
+    if not isinstance(dtobj, dt.datetime):
+        return None
+    if timezone.is_naive(dtobj):
+        return timezone.make_aware(dtobj, timezone.get_current_timezone())
+    return dtobj
+
+
+def _clamp_to_work_window_forward(ts: dt.datetime) -> dt.datetime:
+    ts = _tz_aware(ts)
+    if ts is None:
+        return ts
+    d = ts
+    while d.weekday() not in WORKDAYS:
+        d = (d + dt.timedelta(days=1)).replace(hour=WORKDAY_START_HOUR, minute=0, second=0, microsecond=0)
+    start = d.replace(hour=WORKDAY_START_HOUR, minute=0, second=0, microsecond=0)
+    end = d.replace(hour=WORKDAY_END_HOUR, minute=0, second=0, microsecond=0)
+    if d < start:
+        return start
+    if d > end:
+        d = d + dt.timedelta(days=1)
+        while d.weekday() not in WORKDAYS:
+            d = d + dt.timedelta(days=1)
+        return d.replace(hour=WORKDAY_START_HOUR, minute=0, second=0, microsecond=0)
+    return d
+
+
+def _clamp_to_work_window_backward(ts: dt.datetime) -> dt.datetime:
+    ts = _tz_aware(ts)
+    if ts is None:
+        return ts
+    d = ts
+    while d.weekday() not in WORKDAYS:
+        d = (d - dt.timedelta(days=1)).replace(hour=WORKDAY_END_HOUR, minute=0, second=0, microsecond=0)
+    start = d.replace(hour=WORKDAY_START_HOUR, minute=0, second=0, microsecond=0)
+    end = d.replace(hour=WORKDAY_END_HOUR, minute=0, second=0, microsecond=0)
+    if d > end:
+        return end
+    if d < start:
+        d = d - dt.timedelta(days=1)
+        while d.weekday() not in WORKDAYS:
+            d = d - dt.timedelta(days=1)
+        return d.replace(hour=WORKDAY_END_HOUR, minute=0, second=0, microsecond=0)
+    return d
+
+
+def _holidays_between(d1: dt.date, d2: dt.date):
+    try:
+        k = f"holidays:{d1.isoformat()}:{d2.isoformat()}"
+        cached = cache.get(k)
+        if cached is not None:
+            return cached
+        rows = q(
+            "SELECT fecha FROM feriados WHERE fecha BETWEEN %s AND %s",
+            [d1, d2],
+        ) or []
+        s = {r.get("fecha") for r in rows if r.get("fecha")}
+        cache.set(k, s, 3600)
+        return s
+    except Exception:
+        return set()
+
+
+def business_minutes_between(start: dt.datetime, end: dt.datetime, holidays: set | None = None) -> int:
+    if not start or not end:
+        return 0
+    s = _clamp_to_work_window_forward(_tz_aware(start))
+    e = _clamp_to_work_window_backward(_tz_aware(end))
+    if not s or not e or e <= s:
+        return 0
+    total = 0
+    day = s.date()
+    end_day = e.date()
+    if holidays is None:
+        holidays = _holidays_between(day, end_day)
+    while day <= end_day:
+        if (day.weekday() in WORKDAYS) and (day not in (holidays or set())):
+            ws = dt.datetime.combine(day, dt.time(hour=WORKDAY_START_HOUR, tzinfo=s.tzinfo))
+            we = dt.datetime.combine(day, dt.time(hour=WORKDAY_END_HOUR, tzinfo=s.tzinfo))
+            seg_ini = max(ws, s)
+            seg_fin = min(we, e)
+            if seg_fin > seg_ini:
+                total += int((seg_fin - seg_ini).total_seconds() // 60)
+        day = day + dt.timedelta(days=1)
+    return max(0, total)
+
+
+def _parse_range_params(request):
+    tz = timezone.get_current_timezone()
+    now = timezone.now()
+    from_s = request.GET.get("from") or request.GET.get("desde")
+    to_s = request.GET.get("to") or request.GET.get("hasta")
+    if from_s:
+        try:
+            d = parse_date(from_s)
+            from_dt = timezone.make_aware(dt.datetime.combine(d, dt.time.min), tz)
+        except Exception:
+            from_dt = now - dt.timedelta(days=30)
+    else:
+        from_dt = now - dt.timedelta(days=30)
+    if to_s:
+        try:
+            d = parse_date(to_s)
+            to_dt = timezone.make_aware(dt.datetime.combine(d, dt.time.max), tz)
+        except Exception:
+            to_dt = now
+    else:
+        to_dt = now
+    return from_dt, to_dt
+
+
+def _first_event_ts_map(state_name: str):
+    rows = q(
+        """
+        SELECT ingreso_id, MIN(ts) AS ts
+        FROM ingreso_events
+        WHERE a_estado=%s
+        GROUP BY ingreso_id
+        """,
+        [state_name],
+    ) or []
+    return {r["ingreso_id"]: r["ts"] for r in rows}
+
+
+def _metrics_build_diag_map():
+    diag = q(
+        """
+        SELECT i.id AS ingreso_id,
+               COALESCE(di.ts, i.fecha_servicio, i.fecha_ingreso) AS diag_ts,
+               i.fecha_ingreso
+        FROM ingresos i
+        LEFT JOIN (
+          SELECT ingreso_id, MIN(ts) AS ts
+          FROM ingreso_events
+          WHERE a_estado='diagnosticado'
+          GROUP BY ingreso_id
+        ) di ON di.ingreso_id=i.id
+        """
+    ) or []
+    return {r["ingreso_id"]: {"diag_ts": r["diag_ts"], "fecha_ingreso": r["fecha_ingreso"]} for r in diag}
+
+
+def _daterange_months(start_dt: dt.datetime, end_dt: dt.datetime):
+    y, m = start_dt.year, start_dt.month
+    while (y < end_dt.year) or (y == end_dt.year and m <= end_dt.month):
+        yield y, m
+        if m == 12:
+            y += 1
+            m = 1
+        else:
+            m += 1
+
+
+def _month_key(y, m):
+    return f"{y:04d}-{m:02d}"
+
+
+def _calc_percentiles(values, percent_list=(50, 75, 90, 95)):
+    arr = sorted([float(v) for v in values if v is not None])
+    n = len(arr)
+    if n == 0:
+        return {f"p{p}": None for p in percent_list} | {"avg": None, "count": 0}
+    def pct(p):
+        if n == 1:
+            return arr[0]
+        k = (p/100.0) * (n - 1)
+        f = int(k)
+        c = min(f + 1, n - 1)
+        if f == c:
+            return arr[f]
+        d0 = arr[f] * (c - k)
+        d1 = arr[c] * (k - f)
+        return d0 + d1
+    out = {f"p{p}": pct(p) for p in percent_list}
+    out["avg"] = sum(arr) / n
+    out["count"] = n
+    return out
+
+_DEPRECATED_DEFAULT_LOCATION_NAMES = [
     "Taller",
-    "EstanterÃ­a de Alquiler",
+    "Estanterí­a de Alquiler",
     "Sarmiento",
-    "DepÃ³sito SEPID",
+    "Depósito SEPID",
     "Desguace",
 ]
 
-LOCATION_RENAMES = {
-    "estanteria alquileres": "EstanterÃ­a de Alquiler",
-}
 
 
 def ensure_default_locations():
-    # Usar nombres canÃ³nicos corregidos (evita duplicados por encoding)
+    # Usar nombres canónicos corregidos (evita duplicados por encoding)
+    
     NAMES = [
         "Taller",
-        "EstanterÃ­a de Alquiler",
+        "Estanterí­a de Alquiler",
         "Sarmiento",
-        "DepÃ³sito SEPID",
+        "Depósito SEPID",
         "Desguace",
     ]
     REMAPS = {
-        "estanteria alquileres": "EstanterÃ­a de Alquiler",
-        "estanteria de alquiler": "EstanterÃ­a de Alquiler",
-        "estanterÃ­a de aluiler": "EstanterÃ­a de Alquiler",
-        "estanteria de aluiler": "EstanterÃ­a de Alquiler",
+        "estanteria alquileres": "Estanterí­a de Alquiler",
+        "estanteria de alquiler": "Estanterí­a de Alquiler",
+        "estanterí­a de aluiler": "Estanterí­a de Alquiler",
+        "estanteria de aluiler": "Estanterí­a de Alquiler",
     }
     with connection.cursor() as cur:
-        for alias, target in REMAPS.items():
+        for alias, target in LOCATION_NAME_REMAPS.items():
             cur.execute(
                 "UPDATE locations SET nombre=%s WHERE LOWER(nombre)=LOWER(%s)",
                 [target, alias],
             )
-        for name in NAMES:
+        for name in DEFAULT_LOCATION_NAMES:
             cur.execute(
                 """
                 INSERT INTO locations (nombre)
@@ -352,7 +646,7 @@ def _rol(request):
 def require_roles(request, roles):
     r = _rol(request)
     expanded = set(roles)
-    # Si el endpoint acepta "jefe", tambiÃ©n aceptar "jefe_veedor"
+    # Si el endpoint acepta "jefe", también aceptar "jefe_veedor"
     if "jefe" in expanded:
         expanded.add("jefe_veedor")
     if r not in expanded:
@@ -382,7 +676,7 @@ def _ensure_quote(ingreso_id: int):
             )
             return new_id
         except Exception:
-            # Si ya existe por condiciÃ³n de carrera, recuperar id existente
+            # Si ya existe por condición de carrera, recuperar id existente
             row2 = q("SELECT id FROM quotes WHERE ingreso_id=%s", [ingreso_id], one=True)
             if row2:
                 return row2["id"]
@@ -454,7 +748,7 @@ def _load_quote_payload(ingreso_id: int):
         "estado": head["estado"],
         "moneda": head["moneda"],
         "items": items,
-        # total de repuestos se calcula directamente por Ã­tems tipo 'repuesto'
+        # total de repuestos se calcula directamente por í­tems tipo 'repuesto'
         "tot_repuestos": tot_rep,
         "mano_obra": mano_obra,
         "subtotal": subtotal_calc,
@@ -484,23 +778,23 @@ class LoginView(APIView):
         rate_key = _login_rate_key(email, ip)
 
         if not email or not password:
-            raise AuthenticationFailed("Email y contraseÃ±a requeridos.")
+            raise AuthenticationFailed("Email y contraseña requeridos.")
 
         if _is_login_locked(rate_key):
-            raise AuthenticationFailed(f"Demasiados intentos. Espera {LOGIN_LOCKOUT_MINUTES} minutos e intentalo de nuevo.")
+            raise AuthenticationFailed(f"Demasiados intentos. Espera {getattr(settings, 'LOGIN_LOCKOUT_MINUTES', 5)} minutos e intentalo de nuevo.")
 
         try:
             user = User.objects.get(email=email, activo=True)
         except User.DoesNotExist:
             _register_login_failure(rate_key)
-            raise AuthenticationFailed("Usuario o contraseÃ±a invÃ¡lidos.")
+            raise AuthenticationFailed("Usuario o contraseña inválidos.")
 
         if not user.hash_pw:
-            raise AuthenticationFailed("El usuario aun no tiene contraseÃ±a. Usa 'Olvide mi contraseÃ±a' para inicializarla.")
+            raise AuthenticationFailed("El usuario aun no tiene contraseña. Usa 'Olvide mi contraseña' para inicializarla.")
 
         if not verify_hash(password, user.hash_pw):
             _register_login_failure(rate_key)
-            raise AuthenticationFailed("Usuario o contraseÃ±a invÃ¡lidos.")
+            raise AuthenticationFailed("Usuario o contraseña inválidos.")
 
         token = issue_token(user)
         _reset_login_failure(rate_key)
@@ -535,7 +829,7 @@ class ForgotPasswordView(APIView):
         ua = request.META.get("HTTP_USER_AGENT", "")
         ip = request.META.get("REMOTE_ADDR", "")
 
-        # Siempre devolvemos 200 para evitar enumeraciÃ³n de usuarios
+        # Siempre devolvemos 200 para evitar enumeración de usuarios
         ok_response = Response({"ok": True})
 
         if not email:
@@ -545,24 +839,24 @@ class ForgotPasswordView(APIView):
         if not user or not user.get("activo"):
             return ok_response
 
-        # Guardar un lock de enfriamiento en cache para evitar envÃ­os duplicados
+        # Guardar un lock de enfriamiento en cache para evitar enví­os duplicados
         # causados por doble click o peticiones concurrentes muy cercanas.
         try:
             lock_key = f"pwreset:{user['id']}"
             # cache.add solo setea si no existe; retorna False si ya existe
-            if not cache.add(lock_key, "1", COOLDOWN_MIN * 60):
+            if not cache.add(lock_key, "1", getattr(settings, 'EMAIL_COOLDOWN_MIN', 1) * 60):
                 return ok_response
         except Exception:
-            # Si cache falla, continuamos y confiamos en el chequeo por DB mÃ¡s abajo
+            # Si cache falla, continuamos y confiamos en el chequeo por DB más abajo
             pass
 
         # Rate limit simple (vendor-aware)
-        if connection.vendor == "mysql":
+        if False and connection.vendor == "mysql":
             recent = q(
                 f"""
                   SELECT id FROM password_reset_tokens
                   WHERE user_id=%s AND used_at IS NULL AND expires_at>NOW()
-                    AND created_at > DATE_SUB(NOW(), INTERVAL {int(COOLDOWN_MIN)} MINUTE)
+                    AND created_at > DATE_SUB(NOW(), INTERVAL {int(getattr(settings, 'EMAIL_COOLDOWN_MIN', 1))} MINUTE)
                   ORDER BY id DESC LIMIT 1
                 """,
                 [user["id"]],
@@ -576,7 +870,7 @@ class ForgotPasswordView(APIView):
                     AND created_at > now() - interval '%s minutes'
                   ORDER BY id DESC LIMIT 1
                 """,
-                [user["id"], COOLDOWN_MIN],
+                [user["id"], getattr(settings, 'EMAIL_COOLDOWN_MIN', 1)],
                 one=True,
             )
         if recent:
@@ -593,13 +887,13 @@ class ForgotPasswordView(APIView):
         """, [user["id"], token_hash, exp, ip, ua])
 
         url = f'{getattr(settings,"FRONTEND_ORIGIN","http://localhost:5173")}/restablecer?t={token}'
-        subj = "RecuperaciÃ³n de contraseÃ±a"
-        txt  = f"Hola {user['nombre']},\n\nUsÃ¡ este enlace para restablecer tu contraseÃ±a (vÃ¡lido {TOKEN_TTL_MIN} minutos):\n{url}\n\nSi no fuiste vos, ignorÃ¡ este correo."
+        subj = "Recuperación de contraseña"
+        txt  = f"Hola {user['nombre']},\n\nUsá este enlace para restablecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\nSi no fuiste vos, ignorá este correo."
         html = f"""
           <p>Hola {user['nombre']},</p>
-          <p>UsÃ¡ este enlace para restablecer tu contraseÃ±a (vÃ¡lido {TOKEN_TTL_MIN} minutos):</p>
+          <p>Usá este enlace para restablecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):</p>
           <p><a href="{url}">{url}</a></p>
-          <p>Si no fuiste vos, ignorÃ¡ este correo.</p>
+          <p>Si no fuiste vos, ignorá este correo.</p>
         """
         try:
             txt = _email_append_footer_text(txt)
@@ -630,7 +924,7 @@ class ResetPasswordView(APIView):
         """, [token_hash], one=True)
 
         if not row:
-            return Response({"detail": "Token invÃ¡lido o vencido"}, status=400)
+            return Response({"detail": "Token inválido o vencido"}, status=400)
 
         # Actualizar password
         hashed = make_password(password)
@@ -642,7 +936,7 @@ class ResetPasswordView(APIView):
         return Response({"ok": True})
 
 # ---------------------------------------
-# Vistas de tÃ©cnico / ingresos
+# Vistas de técnico / ingresos
 class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request):
@@ -677,6 +971,1155 @@ class CatalogoTecnicosView(APIView):
           ORDER BY nombre
         """)
         return Response(rows)
+
+
+# =====================
+# MÉTRICAS (solo Jefe)
+# =====================
+
+class MetricasResumenView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        require_roles(request, ["jefe"])  # solo Jefe
+        since, until = _parse_range_params(request)
+        def _get_bool(name):
+            val = (request.GET.get(name) or "").strip().lower()
+            return val in ("1","true","t","yes","y","on")
+        # Por defecto excluimos derivados del SLA; el query param puede sobreescribir
+        sla_excluir_param = (
+            _get_bool("sla_excluir_derivados") or _get_bool("sla_exclude_derivados") or _get_bool("sla_excl_der")
+        )
+        sla_excluir_der = sla_excluir_param if ("sla_excluir_derivados" in request.GET or "sla_exclude_derivados" in request.GET or "sla_excl_der" in request.GET) else True
+
+        # Filtros comunes
+        def _filters_join_where(req):
+            joins = []
+            wh = []
+            params = []
+            t_id = req.GET.get("tecnico_id")
+            m_id = req.GET.get("marca_id")
+            tipo = (req.GET.get("tipo_equipo") or "").strip()
+            if t_id:
+                try:
+                    params.append(int(t_id))
+                    wh.append(" i.asignado_a = %s ")
+                except Exception:
+                    pass
+            if m_id or tipo:
+                joins.append(" JOIN devices d ON d.id=i.device_id ")
+                joins.append(" LEFT JOIN models m ON m.id=d.model_id ")
+            if m_id:
+                try:
+                    params.append(int(m_id))
+                    wh.append(" d.marca_id = %s ")
+                except Exception:
+                    pass
+            if tipo:
+                params.append(tipo)
+                wh.append(" UPPER(TRIM(m.tipo_equipo)) = UPPER(TRIM(%s)) ")
+            join_sql = "".join(joins)
+            where_sql = (" AND " + " AND ".join(wh)) if wh else ""
+            return join_sql, where_sql, params
+
+        join_dm, where_i, where_params = _filters_join_where(request)
+
+        # 1) CERRADOS (OFICIAL): estado => 'entregado'
+        cerrados_7d = q(
+            (
+                "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS cerrados\n"
+                "FROM ingreso_events e\n"
+                "JOIN ingresos i ON i.id=e.ingreso_id\n"
+                f"{join_dm}\n"
+                "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                "WHERE e.a_estado='entregado' AND e.ts >= (NOW() - INTERVAL 7 DAY)"
+                f"{where_i}\n"
+                "GROUP BY i.asignado_a, tecnico_nombre\n"
+                "ORDER BY cerrados DESC"
+            ),
+            where_params,
+        ) or []
+
+        rep_rows = q(
+            (
+                "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM(qi.qty*qi.precio_u),2) AS ingreso_repuestos\n"
+                "FROM quote_items qi\n"
+                "JOIN quotes q ON q.id=qi.quote_id\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='repuesto'"
+                f"{where_i}\n"
+                "GROUP BY i.asignado_a, tecnico_nombre\n"
+                "ORDER BY ingreso_repuestos DESC\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        cerrados_30d = q(
+            (
+                "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS cerrados\n"
+                "FROM ingreso_events e\n"
+                "JOIN ingresos i ON i.id=e.ingreso_id\n"
+                f"{join_dm}\n"
+                "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                "WHERE e.a_estado='entregado' AND e.ts >= (NOW() - INTERVAL 30 DAY)"
+                f"{where_i}\n"
+                "GROUP BY i.asignado_a, tecnico_nombre\n"
+                "ORDER BY cerrados DESC"
+            ),
+            where_params,
+        ) or []
+
+        # 2) WIP por técnico (incluye jefe si asignado)
+        wip = q(
+            (
+                "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS wip\n"
+                "FROM ingresos i\n"
+                f"{join_dm}\n"
+                "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                "WHERE i.estado IN ('ingresado','diagnosticado','presupuestado','reparar','reparado')"
+                f"{(' AND ' + where_i[5:]) if where_i else ''}\n"
+                "GROUP BY i.asignado_a, tecnico_nombre\n"
+                "ORDER BY wip DESC"
+            ),
+            where_params,
+        ) or []
+
+        # 3) MTTR (desde iniciar reparar -> reparado) dentro del rango (por reparado_ts)
+        reparado_rows = q(
+            (
+                "SELECT r.ingreso_id, r.reparar_ts, d.reparado_ts\n"
+                "FROM (SELECT ingreso_id, MIN(ts) AS reparar_ts FROM ingreso_events WHERE a_estado='reparar' GROUP BY ingreso_id) r\n"
+                "JOIN (SELECT ingreso_id, MIN(ts) AS reparado_ts FROM ingreso_events WHERE a_estado='reparado' GROUP BY ingreso_id) d\n"
+                "  ON d.ingreso_id = r.ingreso_id\n"
+                "JOIN ingresos i ON i.id=d.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE d.reparado_ts BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        mttr_minutes = [max(0, int((row["reparado_ts"] - row["reparar_ts"]).total_seconds() // 60)) for row in reparado_rows if row.get("reparar_ts") and row.get("reparado_ts")]
+        mttr_dias = (sum(mttr_minutes) / 60 / 24 / len(mttr_minutes)) if mttr_minutes else None
+
+        # 4) SLA diagnóstico < 24 horas hábiles (medido por ingresos iniciados en el rango)
+        diag_map = _metrics_build_diag_map()
+        # ids derivados (para excluir del SLA si aplica)
+        derivados_ids = set()
+        if sla_excluir_der:
+            rows_der = q(
+                (
+                    "SELECT DISTINCT ed.ingreso_id AS id\n"
+                    "FROM equipos_derivados ed\n"
+                    "JOIN ingresos i ON i.id=ed.ingreso_id\n"
+                    f"{join_dm}\n"
+                    "WHERE 1=1"
+                    f"{where_i}\n"
+                ),
+                where_params,
+            ) or []
+            derivados_ids = {r.get("id") for r in rows_der}
+        ingresos_periodo = q(
+            (
+                "SELECT i.id FROM ingresos i\n"
+                f"{join_dm}\n"
+                "WHERE i.fecha_ingreso BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        # Preload feriados dentro de la ventana (con margen)
+        holi = _holidays_between((since - dt.timedelta(days=7)).date(), (until + dt.timedelta(days=7)).date())
+        sla_total = 0
+        sla_dentro = 0
+        for r in ingresos_periodo:
+            rid = r.get("id")
+            if sla_excluir_der and rid in derivados_ids:
+                continue
+            m = diag_map.get(rid) or {}
+            fi = m.get("fecha_ingreso")
+            dtg = m.get("diag_ts")
+            if fi and dtg:
+                sla_total += 1
+                mins = business_minutes_between(fi, dtg, holidays=holi)
+                if mins <= 24 * 60:
+                    sla_dentro += 1
+        sla = {
+            "total": sla_total,
+            "dentro": sla_dentro,
+            "cumplimiento": (sla_dentro / sla_total) if sla_total else 0.0,
+        }
+
+        # 5) Presupuestos: emitidos, aprobados y tiempos
+        presup_emitidos = q(
+            (
+                "SELECT COUNT(*) AS c\n"
+                "FROM quotes q\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE q.fecha_emitido BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+            one=True,
+        ) or {"c": 0}
+        presup_aprobados = q(
+            (
+                "SELECT COUNT(*) AS c\n"
+                "FROM quotes q\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE q.fecha_aprobado BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+            one=True,
+        ) or {"c": 0}
+        aprob_tasa = (presup_aprobados["c"] / float(presup_emitidos["c"]) if presup_emitidos["c"] else 0.0)
+
+        # Tiempo desde diagnóstico -> emitir presupuesto
+        t_emit_rows = q(
+            (
+                "SELECT i.id AS ingreso_id, COALESCE(di.ts, i.fecha_servicio, i.fecha_ingreso) AS diag_ts, q.fecha_emitido\n"
+                "FROM ingresos i\n"
+                f"{join_dm}\n"
+                "JOIN quotes q ON q.ingreso_id=i.id\n"
+                "LEFT JOIN (SELECT ingreso_id, MIN(ts) AS ts FROM ingreso_events WHERE a_estado='diagnosticado' GROUP BY ingreso_id) di\n"
+                "  ON di.ingreso_id=i.id\n"
+                "WHERE q.fecha_emitido BETWEEN %s AND %s AND q.fecha_emitido IS NOT NULL"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        t_emit_min = [max(0, int((row["fecha_emitido"] - row["diag_ts"]).total_seconds() // 60)) for row in t_emit_rows if row.get("diag_ts") and row.get("fecha_emitido")]
+        t_emit_horas = (sum(t_emit_min) / 60 / len(t_emit_min)) if t_emit_min else None
+
+        # Tiempo desde emitido -> aprobado
+        t_aprob_rows = q(
+            (
+                "SELECT TIMESTAMPDIFF(MINUTE, q.fecha_emitido, q.fecha_aprobado) AS mins\n"
+                "FROM quotes q\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE q.fecha_emitido BETWEEN %s AND %s AND q.fecha_aprobado IS NOT NULL"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        t_aprob_min = [max(0, r.get("mins") or 0) for r in t_aprob_rows]
+        t_aprob_horas = (sum(t_aprob_min) / 60 / len(t_aprob_min)) if t_aprob_min else None
+
+        # Tiempo desde aprobación -> reparado; y casos reparado antes de aprobar
+        t_rep_rows = q(
+            (
+                "SELECT q.ingreso_id, q.fecha_aprobado, r.reparado_ts\n"
+                "FROM quotes q\n"
+                "JOIN (SELECT ingreso_id, MIN(ts) AS reparado_ts FROM ingreso_events WHERE a_estado='reparado' GROUP BY ingreso_id) r\n"
+                "  ON r.ingreso_id=q.ingreso_id\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE q.fecha_aprobado BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        reparado_antes_aprob = 0
+        t_rep_min = []
+        for row in t_rep_rows:
+            fa = row.get("fecha_aprobado")
+            rr = row.get("reparado_ts")
+            if not fa or not rr:
+                continue
+            if rr <= fa:
+                reparado_antes_aprob += 1
+            else:
+                t_rep_min.append(int((rr - fa).total_seconds() // 60))
+        t_rep_dias = (sum(t_rep_min) / 60 / 24 / len(t_rep_min)) if t_rep_min else None
+
+        # Facturación aprobada y utilidad estimada (mano de obra) por técnico
+        fact_rows = q(
+            (
+                "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM(q.total),2) AS facturacion\n"
+                "FROM quotes q\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s"
+                f"{where_i}\n"
+                "GROUP BY i.asignado_a, tecnico_nombre\n"
+                "ORDER BY facturacion DESC\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        util_mo_rows = q(
+            (
+                "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM(qi.qty*qi.precio_u),2) AS utilidad_mo\n"
+                "FROM quote_items qi\n"
+                "JOIN quotes q ON q.id=qi.quote_id\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='mano_obra'"
+                f"{where_i}\n"
+                "GROUP BY i.asignado_a, tecnico_nombre\n"
+                "ORDER BY utilidad_mo DESC\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+
+        # 6) Derivaciones externas (contabilizar aparte)
+        deriv_wip = q(
+            (
+                "SELECT COUNT(*) AS c\n"
+                "FROM equipos_derivados ed\n"
+                "JOIN ingresos i ON i.id=ed.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE ed.estado IN ('derivado','en_servicio')"
+                f"{where_i}\n"
+            ),
+            where_params,
+            one=True,
+        ) or {"c": 0}
+        deriv_derivados = q(
+            (
+                "SELECT COUNT(*) AS c\n"
+                "FROM equipos_derivados ed\n"
+                "JOIN ingresos i ON i.id=ed.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE ed.fecha_deriv BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+            one=True,
+        ) or {"c": 0}
+        deriv_devueltos = q(
+            (
+                "SELECT COUNT(*) AS c, AVG(TIMESTAMPDIFF(MINUTE, ed.fecha_deriv, ed.fecha_entrega)) AS avg_min\n"
+                "FROM equipos_derivados ed\n"
+                "JOIN ingresos i ON i.id=ed.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE ed.fecha_entrega BETWEEN %s AND %s AND ed.fecha_entrega IS NOT NULL"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+            one=True,
+        ) or {"c": 0, "avg_min": None}
+        deriv_t_deriv_a_dev_dias = ( (deriv_devueltos.get("avg_min") or 0) / 60 / 24 ) if deriv_devueltos.get("avg_min") is not None else None
+        # desde devuelto -> entregado (event)
+        deriv_dev_a_ent = q(
+            (
+                "SELECT AVG(TIMESTAMPDIFF(MINUTE, ed.fecha_entrega, ev.ts)) AS avg_min\n"
+                "FROM equipos_derivados ed\n"
+                "JOIN ingresos i ON i.id=ed.ingreso_id\n"
+                f"{join_dm}\n"
+                "JOIN (SELECT ingreso_id, MIN(ts) AS ts FROM ingreso_events WHERE a_estado='entregado' GROUP BY ingreso_id) ev\n"
+                "  ON ev.ingreso_id=ed.ingreso_id\n"
+                "WHERE ed.fecha_entrega BETWEEN %s AND %s AND ed.fecha_entrega IS NOT NULL"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+            one=True,
+        ) or {"avg_min": None}
+        deriv_t_dev_a_ent_dias = ( (deriv_dev_a_ent.get("avg_min") or 0) / 60 / 24 ) if deriv_dev_a_ent.get("avg_min") is not None else None
+
+        return Response({
+            "range": {"from": since, "to": until},
+            "mttr_dias": mttr_dias,
+            "sla_diag_24h": sla,
+            "aprob_presupuestos": {
+                "emitidos": presup_emitidos.get("c", 0),
+                "aprobados": presup_aprobados.get("c", 0),
+                "tasa": aprob_tasa,
+                "t_emitir_horas": t_emit_horas,
+                "t_aprobar_horas": t_aprob_horas,
+            },
+            "t_reparar_desde_aprob_dias": t_rep_dias,
+            "reparado_antes_de_aprobar": reparado_antes_aprob,
+            "cerrados_por_tecnico_7d": cerrados_7d,
+            "cerrados_por_tecnico_30d": cerrados_30d,
+            "wip_por_tecnico": wip,
+            "facturacion_por_tecnico": fact_rows,
+            "utilidad_mo_por_tecnico": util_mo_rows,
+            "repuestos_por_tecnico": rep_rows,
+            "derivaciones": {
+                "wip_externo": deriv_wip.get("c", 0),
+                "derivados_periodo": deriv_derivados.get("c", 0),
+                "devueltos_periodo": deriv_devueltos.get("c", 0),
+                "t_deriv_a_devuelto_dias": deriv_t_deriv_a_dev_dias,
+                "t_devuelto_a_entregado_dias": deriv_t_dev_a_ent_dias,
+            },
+        })
+
+
+class MetricasSeriesView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        require_roles(request, ["jefe"])  # solo Jefe
+        since, until = _parse_range_params(request)
+        gran = (request.GET.get("granularity") or request.GET.get("g") or "month").lower()
+        def _get_bool(name):
+            val = (request.GET.get(name) or "").strip().lower()
+            return val in ("1","true","t","yes","y","on")
+        sla_excluir_param = (
+            _get_bool("sla_excluir_derivados") or _get_bool("sla_exclude_derivados") or _get_bool("sla_excl_der")
+        )
+        sla_excluir_der = sla_excluir_param if ("sla_excluir_derivados" in request.GET or "sla_exclude_derivados" in request.GET or "sla_excl_der" in request.GET) else True
+        group = (request.GET.get("group") or "").strip().lower()
+
+        # Filtros comunes
+        def _filters_join_where(req):
+            joins = []
+            wh = []
+            params = []
+            t_id = req.GET.get("tecnico_id")
+            m_id = req.GET.get("marca_id")
+            tipo = (req.GET.get("tipo_equipo") or "").strip()
+            if t_id:
+                try:
+                    params.append(int(t_id))
+                    wh.append(" i.asignado_a = %s ")
+                except Exception:
+                    pass
+            if m_id or tipo:
+                joins.append(" JOIN devices d ON d.id=i.device_id ")
+                joins.append(" LEFT JOIN models m ON m.id=d.model_id ")
+            if m_id:
+                try:
+                    params.append(int(m_id))
+                    wh.append(" d.marca_id = %s ")
+                except Exception:
+                    pass
+            if tipo:
+                params.append(tipo)
+                wh.append(" UPPER(TRIM(m.tipo_equipo)) = UPPER(TRIM(%s)) ")
+            join_sql = "".join(joins)
+            where_sql = (" AND " + " AND ".join(wh)) if wh else ""
+            return join_sql, where_sql, params
+
+        join_dm, where_i, where_params = _filters_join_where(request)
+
+        # Preload maps (sin filtros; se aplican al seleccionar ingresos/quotes)
+        diag_map = _metrics_build_diag_map()
+
+        # Helpers de bucket
+        months = list(_daterange_months(since, until))
+        holi = _holidays_between((since - dt.timedelta(days=7)).date(), (until + dt.timedelta(days=7)).date())
+        buckets = [_month_key(y, m) for (y, m) in months]
+        data = {k: {
+            "entregados": 0,
+            "mttr_dias": None,
+            "_mttr_sum_min": 0,
+            "_mttr_n": 0,
+            "sla_diag_total": 0,
+            "sla_diag_dentro": 0,
+            "aprob_emitidos": 0,
+            "aprob_aprobados": 0,
+            "t_emitir_min_sum": 0,
+            "t_emitir_n": 0,
+            "t_aprobar_min_sum": 0,
+            "t_aprobar_n": 0,
+        } for k in buckets}
+
+        # Entregados por mes
+        entreg_rows = q(
+            (
+                "SELECT DATE_FORMAT(e.ts, '%%Y-%%m') AS ym, COUNT(*) AS c\n"
+                "FROM ingreso_events e\n"
+                "JOIN ingresos i ON i.id=e.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                f"{where_i}\n"
+                "GROUP BY ym"
+            ),
+            [since, until, *where_params],
+        ) or []
+        for r in entreg_rows:
+            k = r.get("ym")
+            if k in data:
+                data[k]["entregados"] = r.get("c", 0)
+
+        # MTTR por mes (mes del reparado)
+        rep_rows = q(
+            (
+                "SELECT DATE_FORMAT(d.reparado_ts, '%%Y-%%m') AS ym, r.reparar_ts, d.reparado_ts\n"
+                "FROM (SELECT ingreso_id, MIN(ts) AS reparar_ts FROM ingreso_events WHERE a_estado='reparar' GROUP BY ingreso_id) r\n"
+                "JOIN (SELECT ingreso_id, MIN(ts) AS reparado_ts FROM ingreso_events WHERE a_estado='reparado' GROUP BY ingreso_id) d\n"
+                "  ON d.ingreso_id=r.ingreso_id\n"
+                "JOIN ingresos i ON i.id=d.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE d.reparado_ts BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        for r in rep_rows:
+            k = r.get("ym")
+            if k in data and r.get("reparar_ts") and r.get("reparado_ts"):
+                mins = max(0, int((r["reparado_ts"] - r["reparar_ts"]).total_seconds() // 60))
+                data[k]["_mttr_sum_min"] += mins
+                data[k]["_mttr_n"] += 1
+
+        # SLA diag por mes (ingresos con fecha_ingreso en el mes)
+        sla_rows = q(
+            (
+                "SELECT DATE_FORMAT(i.fecha_ingreso, '%%Y-%%m') AS ym, i.id\n"
+                "FROM ingresos i\n"
+                f"{join_dm}\n"
+                "WHERE i.fecha_ingreso BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        # ids derivados para excluir del SLA
+        derivados_ids = set()
+        if sla_excluir_der:
+            rows_der = q(
+                (
+                    "SELECT DISTINCT ed.ingreso_id AS id\n"
+                    "FROM equipos_derivados ed\n"
+                    "JOIN ingresos i ON i.id=ed.ingreso_id\n"
+                    f"{join_dm}\n"
+                    "WHERE 1=1"
+                    f"{where_i}\n"
+                ),
+                where_params,
+            ) or []
+            derivados_ids = {r.get("id") for r in rows_der}
+        for r in sla_rows:
+            k = r.get("ym")
+            if k not in data:
+                continue
+            m = diag_map.get(r.get("id")) or {}
+            if sla_excluir_der and (r.get("id") in derivados_ids):
+                continue
+            fi = m.get("fecha_ingreso")
+            dtg = m.get("diag_ts")
+            if fi and dtg:
+                data[k]["sla_diag_total"] += 1
+                if business_minutes_between(fi, dtg, holidays=holi) <= 24 * 60:
+                    data[k]["sla_diag_dentro"] += 1
+
+        # Presupuestos por mes: emitidos/aprobados y tiempos
+        emit_rows = q(
+            (
+                "SELECT DATE_FORMAT(q.fecha_emitido, '%%Y-%%m') AS ym, q.fecha_emitido, q.fecha_aprobado, q.ingreso_id\n"
+                "FROM quotes q\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE q.fecha_emitido BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+
+        # Derivaciones externas por mes
+        ext_deriv = q(
+            (
+                "SELECT DATE_FORMAT(ed.fecha_deriv, '%%Y-%%m') AS ym, COUNT(*) AS c\n"
+                "FROM equipos_derivados ed\n"
+                "JOIN ingresos i ON i.id=ed.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE ed.fecha_deriv BETWEEN %s AND %s"
+                f"{where_i}\n"
+                "GROUP BY ym\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        ext_dev = q(
+            (
+                "SELECT DATE_FORMAT(ed.fecha_entrega, '%%Y-%%m') AS ym, COUNT(*) AS c, AVG(TIMESTAMPDIFF(MINUTE, ed.fecha_deriv, ed.fecha_entrega)) AS avg_min\n"
+                "FROM equipos_derivados ed\n"
+                "JOIN ingresos i ON i.id=ed.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE ed.fecha_entrega BETWEEN %s AND %s AND ed.fecha_entrega IS NOT NULL"
+                f"{where_i}\n"
+                "GROUP BY ym\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        for r in emit_rows:
+            k = r.get("ym")
+            if k not in data:
+                continue
+            data[k]["aprob_emitidos"] += 1
+            # tiempo emitir (diag -> emitido)
+            m = diag_map.get(r.get("ingreso_id")) or {}
+            dtg = m.get("diag_ts")
+            fei = r.get("fecha_emitido")
+            if dtg and fei:
+                delta = int(max(0, (fei - dtg).total_seconds() // 60))
+                data[k]["t_emitir_min_sum"] += delta
+                data[k]["t_emitir_n"] += 1
+            # tiempo aprobar (emitido -> aprobado)
+            fa = r.get("fecha_aprobado")
+            if fa:
+                data[k]["aprob_aprobados"] += 1
+                delta = int(max(0, (fa - fei).total_seconds() // 60))
+                data[k]["t_aprobar_min_sum"] += delta
+                data[k]["t_aprobar_n"] += 1
+
+        # Consolidar
+        series = []
+        for k in buckets:
+            item = {
+                "period": k,
+                "entregados": data[k]["entregados"],
+                "mttr_dias": None,
+                "sla_diag_24h": {
+                    "total": data[k]["sla_diag_total"],
+                    "dentro": data[k]["sla_diag_dentro"],
+                    "cumplimiento": (data[k]["sla_diag_dentro"] / data[k]["sla_diag_total"]) if data[k]["sla_diag_total"] else 0.0,
+                },
+                "aprob_presupuestos": {
+                    "emitidos": data[k]["aprob_emitidos"],
+                    "aprobados": data[k]["aprob_aprobados"],
+                    "tasa": (data[k]["aprob_aprobados"] / data[k]["aprob_emitidos"]) if data[k]["aprob_emitidos"] else 0.0,
+                    "t_emitir_horas": (data[k]["t_emitir_min_sum"] / 60 / data[k]["t_emitir_n"]) if data[k]["t_emitir_n"] else None,
+                    "t_aprobar_horas": (data[k]["t_aprobar_min_sum"] / 60 / data[k]["t_aprobar_n"]) if data[k]["t_aprobar_n"] else None,
+                },
+            }
+            if data[k]["_mttr_n"]:
+                item["mttr_dias"] = data[k]["_mttr_sum_min"] / 60 / 24 / data[k]["_mttr_n"]
+            # externo
+            ext_d = next((r for r in ext_deriv if r.get("ym") == k), None)
+            ext_v = next((r for r in ext_dev if r.get("ym") == k), None)
+            item["externo"] = {
+                "derivados": ext_d.get("c", 0) if ext_d else 0,
+                "devueltos": ext_v.get("c", 0) if ext_v else 0,
+                "t_deriv_a_devuelto_dias": ((ext_v.get("avg_min") or 0) / 60 / 24) if ext_v and ext_v.get("avg_min") is not None else None,
+            }
+            series.append(item)
+
+        # Agregados anuales
+        yearly = {}
+        for it in series:
+            y = it["period"].split("-")[0]
+            yy = yearly.setdefault(y, {
+                "period": y,
+                "entregados": 0,
+                "mttr_sum": 0.0,
+                "mttr_n": 0,
+                "sla_total": 0,
+                "sla_dentro": 0,
+                "emitidos": 0,
+                "aprobados": 0,
+                "t_emitir_sum": 0.0,
+                "t_emitir_n": 0,
+                "t_aprobar_sum": 0.0,
+                "t_aprobar_n": 0,
+                "ext_deriv": 0,
+                "ext_dev": 0,
+                "ext_t_sum": 0.0,
+                "ext_t_n": 0,
+            })
+            yy["entregados"] += (it.get("entregados") or 0)
+            if it.get("mttr_dias") is not None:
+                yy["mttr_sum"] += it["mttr_dias"] * 1.0
+                yy["mttr_n"] += 1
+            sla = it.get("sla_diag_24h", {})
+            yy["sla_total"] += sla.get("total", 0)
+            yy["sla_dentro"] += sla.get("dentro", 0)
+            ap = it.get("aprob_presupuestos", {})
+            yy["emitidos"] += ap.get("emitidos", 0)
+            yy["aprobados"] += ap.get("aprobados", 0)
+            if ap.get("t_emitir_horas") is not None:
+                yy["t_emitir_sum"] += ap["t_emitir_horas"]
+                yy["t_emitir_n"] += 1
+            if ap.get("t_aprobar_horas") is not None:
+                yy["t_aprobar_sum"] += ap["t_aprobar_horas"]
+                yy["t_aprobar_n"] += 1
+            ext = it.get("externo") or {}
+            yy["ext_deriv"] += ext.get("derivados", 0)
+            yy["ext_dev"] += ext.get("devueltos", 0)
+            if ext.get("t_deriv_a_devuelto_dias") is not None:
+                yy["ext_t_sum"] += ext["t_deriv_a_devuelto_dias"]
+                yy["ext_t_n"] += 1
+
+        series_year = []
+        for y, v in sorted(yearly.items()):
+            series_year.append({
+                "period": y,
+                "entregados": v["entregados"],
+                "mttr_dias": (v["mttr_sum"] / v["mttr_n"]) if v["mttr_n"] else None,
+                "sla_diag_24h": {
+                    "total": v["sla_total"],
+                    "dentro": v["sla_dentro"],
+                    "cumplimiento": (v["sla_dentro"] / v["sla_total"]) if v["sla_total"] else 0.0,
+                },
+                "aprob_presupuestos": {
+                    "emitidos": v["emitidos"],
+                    "aprobados": v["aprobados"],
+                    "tasa": (v["aprobados"] / v["emitidos"]) if v["emitidos"] else 0.0,
+                    "t_emitir_horas": (v["t_emitir_sum"] / v["t_emitir_n"]) if v["t_emitir_n"] else None,
+                    "t_aprobar_horas": (v["t_aprobar_sum"] / v["t_aprobar_n"]) if v["t_aprobar_n"] else None,
+                },
+                "externo": {
+                    "derivados": v["ext_deriv"],
+                    "devueltos": v["ext_dev"],
+                    "t_deriv_a_devuelto_dias": (v["ext_t_sum"] / v["ext_t_n"]) if v["ext_t_n"] else None,
+                },
+            })
+
+        resp = {
+            "range": {"from": since, "to": until},
+            "monthly": series,
+            "yearly": series_year,
+        }
+
+        # Desglose mensual por técnico (para export)
+        if group == "tecnico":
+            bytec = q(
+                (
+                    "SELECT DATE_FORMAT(e.ts, '%%Y-%%m') AS period, i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS entregados\n"
+                    "FROM ingreso_events e\n"
+                    "JOIN ingresos i ON i.id=e.ingreso_id\n"
+                    f"{join_dm}\n"
+                    "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                    "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                    f"{where_i}\n"
+                    "GROUP BY period, i.asignado_a, tecnico_nombre\n"
+                    "ORDER BY period ASC, entregados DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+
+            fac_tec = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM(q.total),2) AS facturacion\n"
+                    "FROM quotes q\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    f"{join_dm}\n"
+                    "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s"
+                    f"{where_i}\n"
+                    "GROUP BY period, i.asignado_a, tecnico_nombre\n"
+                    "ORDER BY period ASC, facturacion DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+
+            mo_tec = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM(qi.qty*qi.precio_u),2) AS monto_mo\n"
+                    "FROM quote_items qi\n"
+                    "JOIN quotes q ON q.id=qi.quote_id\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    f"{join_dm}\n"
+                    "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='mano_obra'"
+                    f"{where_i}\n"
+                    "GROUP BY period, i.asignado_a, tecnico_nombre\n"
+                    "ORDER BY period ASC, monto_mo DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+
+            rep_tec = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM(qi.qty*qi.precio_u),2) AS monto_repuestos\n"
+                    "FROM quote_items qi\n"
+                    "JOIN quotes q ON q.id=qi.quote_id\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    f"{join_dm}\n"
+                    "LEFT JOIN users u ON u.id=i.asignado_a\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='repuesto'"
+                    f"{where_i}\n"
+                    "GROUP BY period, i.asignado_a, tecnico_nombre\n"
+                    "ORDER BY period ASC, monto_repuestos DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+
+            resp["by_tecnico_monthly"] = bytec
+            resp["facturacion_tecnico_monthly"] = fac_tec
+            resp["mo_tecnico_monthly"] = mo_tec
+            resp["repuestos_tecnico_monthly"] = rep_tec
+        elif group == "marca":
+            bym = q(
+                (
+                    "SELECT DATE_FORMAT(e.ts, '%%Y-%%m') AS period, d.marca_id AS marca_id, COALESCE(b.nombre,'') AS marca_nombre, COUNT(*) AS entregados\n"
+                    "FROM ingreso_events e\n"
+                    "JOIN ingresos i ON i.id=e.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "LEFT JOIN marcas b ON b.id=d.marca_id\n"
+                    f"{join_dm}\n"
+                    "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                    f"{where_i}\n"
+                    "GROUP BY period, d.marca_id, marca_nombre\n"
+                    "ORDER BY period ASC, entregados DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            facm = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, d.marca_id AS marca_id, COALESCE(b.nombre,'') AS marca_nombre, ROUND(SUM(q.total),2) AS facturacion\n"
+                    "FROM quotes q\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "LEFT JOIN marcas b ON b.id=d.marca_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s"
+                    f"{where_i}\n"
+                    "GROUP BY period, d.marca_id, marca_nombre\n"
+                    "ORDER BY period ASC, facturacion DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            mom = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, d.marca_id AS marca_id, COALESCE(b.nombre,'') AS marca_nombre, ROUND(SUM(qi.qty*qi.precio_u),2) AS monto_mo\n"
+                    "FROM quote_items qi\n"
+                    "JOIN quotes q ON q.id=qi.quote_id\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "LEFT JOIN marcas b ON b.id=d.marca_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='mano_obra'"
+                    f"{where_i}\n"
+                    "GROUP BY period, d.marca_id, marca_nombre\n"
+                    "ORDER BY period ASC, monto_mo DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            repm = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, d.marca_id AS marca_id, COALESCE(b.nombre,'') AS marca_nombre, ROUND(SUM(qi.qty*qi.precio_u),2) AS monto_repuestos\n"
+                    "FROM quote_items qi\n"
+                    "JOIN quotes q ON q.id=qi.quote_id\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "LEFT JOIN marcas b ON b.id=d.marca_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='repuesto'"
+                    f"{where_i}\n"
+                    "GROUP BY period, d.marca_id, marca_nombre\n"
+                    "ORDER BY period ASC, monto_repuestos DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            resp["by_marca_monthly"] = bym
+            resp["facturacion_marca_monthly"] = facm
+            resp["mo_marca_monthly"] = mom
+            resp["repuestos_marca_monthly"] = repm
+        elif group in ("tipo", "tipo_equipo"):
+            byt = q(
+                (
+                    "SELECT DATE_FORMAT(e.ts, '%%Y-%%m') AS period, COALESCE(m.tipo_equipo,'') AS tipo_equipo, COUNT(*) AS entregados\n"
+                    "FROM ingreso_events e\n"
+                    "JOIN ingresos i ON i.id=e.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "LEFT JOIN models m ON m.id=d.model_id\n"
+                    f"{join_dm}\n"
+                    "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                    f"{where_i}\n"
+                    "GROUP BY period, tipo_equipo\n"
+                    "ORDER BY period ASC, entregados DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            fact = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, COALESCE(m.tipo_equipo,'') AS tipo_equipo, ROUND(SUM(q.total),2) AS facturacion\n"
+                    "FROM quotes q\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "LEFT JOIN models m ON m.id=d.model_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s"
+                    f"{where_i}\n"
+                    "GROUP BY period, tipo_equipo\n"
+                    "ORDER BY period ASC, facturacion DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            mot = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, COALESCE(m.tipo_equipo,'') AS tipo_equipo, ROUND(SUM(qi.qty*qi.precio_u),2) AS monto_mo\n"
+                    "FROM quote_items qi\n"
+                    "JOIN quotes q ON q.id=qi.quote_id\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "LEFT JOIN models m ON m.id=d.model_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='mano_obra'"
+                    f"{where_i}\n"
+                    "GROUP BY period, tipo_equipo\n"
+                    "ORDER BY period ASC, monto_mo DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            rept = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, COALESCE(m.tipo_equipo,'') AS tipo_equipo, ROUND(SUM(qi.qty*qi.precio_u),2) AS monto_repuestos\n"
+                    "FROM quote_items qi\n"
+                    "JOIN quotes q ON q.id=qi.quote_id\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "LEFT JOIN models m ON m.id=d.model_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='repuesto'"
+                    f"{where_i}\n"
+                    "GROUP BY period, tipo_equipo\n"
+                    "ORDER BY period ASC, monto_repuestos DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            resp["by_tipo_monthly"] = byt
+            resp["facturacion_tipo_monthly"] = fact
+            resp["mo_tipo_monthly"] = mot
+            resp["repuestos_tipo_monthly"] = rept
+        elif group in ("cliente", "customer"):
+            byc = q(
+                (
+                    "SELECT DATE_FORMAT(e.ts, '%%Y-%%m') AS period, c.id AS cliente_id, COALESCE(c.razon_social,'') AS cliente_nombre, COUNT(*) AS entregados\n"
+                    "FROM ingreso_events e\n"
+                    "JOIN ingresos i ON i.id=e.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "JOIN customers c ON c.id=d.customer_id\n"
+                    f"{join_dm}\n"
+                    "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                    f"{where_i}\n"
+                    "GROUP BY period, c.id, cliente_nombre\n"
+                    "ORDER BY period ASC, entregados DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            facc = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, c.id AS cliente_id, COALESCE(c.razon_social,'') AS cliente_nombre, ROUND(SUM(q.total),2) AS facturacion\n"
+                    "FROM quotes q\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "JOIN customers c ON c.id=d.customer_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s"
+                    f"{where_i}\n"
+                    "GROUP BY period, c.id, cliente_nombre\n"
+                    "ORDER BY period ASC, facturacion DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            moc = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, c.id AS cliente_id, COALESCE(c.razon_social,'') AS cliente_nombre, ROUND(SUM(qi.qty*qi.precio_u),2) AS monto_mo\n"
+                    "FROM quote_items qi\n"
+                    "JOIN quotes q ON q.id=qi.quote_id\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "JOIN customers c ON c.id=d.customer_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='mano_obra'"
+                    f"{where_i}\n"
+                    "GROUP BY period, c.id, cliente_nombre\n"
+                    "ORDER BY period ASC, monto_mo DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            repc = q(
+                (
+                    "SELECT DATE_FORMAT(q.fecha_aprobado, '%%Y-%%m') AS period, c.id AS cliente_id, COALESCE(c.razon_social,'') AS cliente_nombre, ROUND(SUM(qi.qty*qi.precio_u),2) AS monto_repuestos\n"
+                    "FROM quote_items qi\n"
+                    "JOIN quotes q ON q.id=qi.quote_id\n"
+                    "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                    "JOIN devices d ON d.id=i.device_id\n"
+                    "JOIN customers c ON c.id=d.customer_id\n"
+                    f"{join_dm}\n"
+                    "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s AND qi.tipo='repuesto'"
+                    f"{where_i}\n"
+                    "GROUP BY period, c.id, cliente_nombre\n"
+                    "ORDER BY period ASC, monto_repuestos DESC\n"
+                ),
+                [since, until, *where_params],
+            ) or []
+            resp["by_cliente_monthly"] = byc
+            resp["facturacion_cliente_monthly"] = facc
+            resp["mo_cliente_monthly"] = moc
+            resp["repuestos_cliente_monthly"] = repc
+
+        return Response(resp)
+
+
+class FeriadosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        require_roles(request, ["jefe"])  # solo Jefe
+        rows = q("SELECT fecha, nombre FROM feriados ORDER BY fecha ASC") or []
+        return Response(rows)
+
+    def post(self, request):
+        require_roles(request, ["jefe"])  # solo Jefe
+        d = request.data or {}
+        fecha = (d.get("fecha") or "").strip()
+        nombre = (d.get("nombre") or "").strip() or "Feriado"
+        if not fecha:
+            return Response({"detail": "fecha requerida (YYYY-MM-DD)"}, status=400)
+        try:
+            q("INSERT INTO feriados (fecha, nombre) VALUES (%s, %s) ON DUPLICATE KEY UPDATE nombre=VALUES(nombre)", [fecha, nombre])
+            # limpiar caches
+            try:
+                cache.clear()
+            except Exception:
+                pass
+            return Response({"ok": True})
+        except Exception as ex:
+            return Response({"detail": str(ex)}, status=400)
+
+    def delete(self, request):
+        require_roles(request, ["jefe"])  # solo Jefe
+        fecha = (request.GET.get("fecha") or "").strip()
+        if not fecha:
+            return Response({"detail": "fecha requerida (YYYY-MM-DD)"}, status=400)
+        q("DELETE FROM feriados WHERE fecha=%s", [fecha])
+        try:
+            cache.clear()
+        except Exception:
+            pass
+        return Response({"ok": True})
+
+
+class MetricasCalibracionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        require_roles(request, ["jefe"])  # solo Jefe
+        since, until = _parse_range_params(request)
+
+        # Reutilizar filtros
+        def _filters_join_where(req):
+            joins = []
+            wh = []
+            params = []
+            t_id = req.GET.get("tecnico_id")
+            m_id = req.GET.get("marca_id")
+            tipo = (req.GET.get("tipo_equipo") or "").strip()
+            if t_id:
+                try:
+                    params.append(int(t_id))
+                    wh.append(" i.asignado_a = %s ")
+                except Exception:
+                    pass
+            if m_id or tipo:
+                joins.append(" JOIN devices d ON d.id=i.device_id ")
+                joins.append(" LEFT JOIN models m ON m.id=d.model_id ")
+            if m_id:
+                try:
+                    params.append(int(m_id))
+                    wh.append(" d.marca_id = %s ")
+                except Exception:
+                    pass
+            if tipo:
+                params.append(tipo)
+                wh.append(" UPPER(TRIM(m.tipo_equipo)) = UPPER(TRIM(%s)) ")
+            join_sql = "".join(joins)
+            where_sql = (" AND " + " AND ".join(wh)) if wh else ""
+            return join_sql, where_sql, params
+
+        join_dm, where_i, where_params = _filters_join_where(request)
+
+        # SLA diagnóstico (hábitos): fecha_ingreso -> diag_ts (business minutes)
+        diag_map = _metrics_build_diag_map()
+        ingresos_rows = q(
+            (
+                "SELECT i.id, i.fecha_ingreso FROM ingresos i\n"
+                f"{join_dm}\n"
+                "WHERE i.fecha_ingreso BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        diag_bmins = []
+        for r in ingresos_rows:
+            mid = r.get("id")
+            m = diag_map.get(mid) or {}
+            fi = m.get("fecha_ingreso")
+            dtg = m.get("diag_ts")
+            if fi and dtg:
+                diag_bmins.append(business_minutes_between(fi, dtg))
+
+        # diag -> emitir (horas), emitir -> aprobar (horas)
+        t_emit_rows = q(
+            (
+                "SELECT COALESCE(di.ts, i.fecha_servicio, i.fecha_ingreso) AS diag_ts, q.fecha_emitido\n"
+                "FROM ingresos i\n"
+                f"{join_dm}\n"
+                "JOIN quotes q ON q.ingreso_id=i.id\n"
+                "LEFT JOIN (SELECT ingreso_id, MIN(ts) AS ts FROM ingreso_events WHERE a_estado='diagnosticado' GROUP BY ingreso_id) di\n"
+                "  ON di.ingreso_id=i.id\n"
+                "WHERE q.fecha_emitido BETWEEN %s AND %s AND q.fecha_emitido IS NOT NULL"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        emit_hours = [max(0.0, (row["fecha_emitido"] - row["diag_ts"]).total_seconds() / 3600.0) for row in t_emit_rows if row.get("diag_ts") and row.get("fecha_emitido")]
+        t_aprob_rows = q(
+            (
+                "SELECT TIMESTAMPDIFF(MINUTE, q.fecha_emitido, q.fecha_aprobado) AS mins\n"
+                "FROM quotes q\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE q.fecha_emitido BETWEEN %s AND %s AND q.fecha_aprobado IS NOT NULL"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        apro_hours = [max(0.0, (r.get("mins") or 0) / 60.0) for r in t_aprob_rows]
+
+        # aprobar -> reparado (días) y reparado -> entregado (días)
+        t_rep_rows = q(
+            (
+                "SELECT q.fecha_aprobado, r.reparado_ts\n"
+                "FROM quotes q\n"
+                "JOIN (SELECT ingreso_id, MIN(ts) AS reparado_ts FROM ingreso_events WHERE a_estado='reparado' GROUP BY ingreso_id) r\n"
+                "  ON r.ingreso_id=q.ingreso_id\n"
+                "JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE q.fecha_aprobado BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        apr_rep_days = [max(0.0, (row["reparado_ts"] - row["fecha_aprobado"]).total_seconds() / 86400.0) for row in t_rep_rows if row.get("fecha_aprobado") and row.get("reparado_ts") and row.get("reparado_ts") > row.get("fecha_aprobado")]
+        rep_ent_rows = q(
+            (
+                "SELECT r.reparado_ts, e2.ts AS entregado_ts\n"
+                "FROM (SELECT ingreso_id, MIN(ts) AS reparado_ts FROM ingreso_events WHERE a_estado='reparado' GROUP BY ingreso_id) r\n"
+                "JOIN (SELECT ingreso_id, MIN(ts) AS ts FROM ingreso_events WHERE a_estado='entregado' GROUP BY ingreso_id) e2\n"
+                "  ON e2.ingreso_id=r.ingreso_id\n"
+                "JOIN ingresos i ON i.id=r.ingreso_id\n"
+                f"{join_dm}\n"
+                "WHERE e2.ts BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        rep_ent_days = [max(0.0, (row["entregado_ts"] - row["reparado_ts"]).total_seconds() / 86400.0) for row in rep_ent_rows if row.get("reparado_ts") and row.get("entregado_ts") and row.get("entregado_ts") > row.get("reparado_ts")]
+
+        # ingreso -> entregado (días)
+        ing_ent_rows = q(
+            (
+                "SELECT i.fecha_ingreso, e2.ts AS entregado_ts\n"
+                "FROM ingresos i\n"
+                f"{join_dm}\n"
+                "JOIN (SELECT ingreso_id, MIN(ts) AS ts FROM ingreso_events WHERE a_estado='entregado' GROUP BY ingreso_id) e2\n"
+                "  ON e2.ingreso_id=i.id\n"
+                "WHERE e2.ts BETWEEN %s AND %s"
+                f"{where_i}\n"
+            ),
+            [since, until, *where_params],
+        ) or []
+        ing_ent_days = [max(0.0, (row["entregado_ts"] - row["fecha_ingreso"]).total_seconds() / 86400.0) for row in ing_ent_rows if row.get("fecha_ingreso") and row.get("entregado_ts") and row.get("entregado_ts") > row.get("fecha_ingreso")]
+
+        return Response({
+            "range": {"from": since, "to": until},
+            "diag_business_minutes": _calc_percentiles(diag_bmins),
+            "diag_to_emit_hours": _calc_percentiles(emit_hours),
+            "emit_to_approve_hours": _calc_percentiles(apro_hours),
+            "approve_to_repair_days": _calc_percentiles(apr_rep_days),
+            "repair_to_deliver_days": _calc_percentiles(rep_ent_days),
+            "ingreso_to_deliver_days": _calc_percentiles(ing_ent_days),
+        })
 
 class MisPendientesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -732,7 +2175,7 @@ class QuoteDetailView(APIView):
 
 
 class QuoteItemsView(APIView):
-    """POST crea Ã­tem (repuesto / mano_obra / servicio)"""
+    """POST crea í­tem (repuesto / mano_obra / servicio)"""
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
@@ -740,7 +2183,7 @@ class QuoteItemsView(APIView):
         d = request.data or {}
         tipo = (d.get("tipo") or "").strip()
         if tipo not in ("repuesto", "mano_obra", "servicio"):
-            raise ValidationError("tipo invÃ¡lido")
+            raise ValidationError("tipo inválido")
         desc = (d.get("descripcion") or "").strip()
         if not desc:
             raise ValidationError("descripcion requerida")
@@ -749,7 +2192,7 @@ class QuoteItemsView(APIView):
             qty    = money(d.get("qty"))
             precio = money(d.get("precio_u"))
         except (TypeError, ValueError):
-            raise ValidationError("qty y precio_u deben ser numÃ©ricos")
+            raise ValidationError("qty y precio_u deben ser numéricos")
         if qty < 0 or precio < 0:
             raise ValidationError("qty y precio_u no pueden ser negativos")
         repuesto_id = d.get("repuesto_id")
@@ -766,7 +2209,7 @@ class QuoteItemsView(APIView):
 
 
 class QuoteItemDetailView(APIView):
-    """PATCH/DELETE de un Ã­tem puntual"""
+    """PATCH/DELETE de un í­tem puntual"""
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, ingreso_id: int, item_id: int):
@@ -776,7 +2219,7 @@ class QuoteItemDetailView(APIView):
         if "tipo" in d:
             t = (d.get("tipo") or "").strip()
             if t not in ("repuesto", "mano_obra", "servicio"):
-                raise ValidationError("tipo invÃ¡lido")
+                raise ValidationError("tipo inválido")
             sets.append("tipo=%s"); params.append(t)
         if "descripcion" in d:
             sets.append("descripcion=%s"); params.append((d.get("descripcion") or "").strip())
@@ -784,14 +2227,14 @@ class QuoteItemDetailView(APIView):
             try:
                 qv = float(d.get("qty"))
             except (TypeError, ValueError):
-                raise ValidationError("qty debe ser numÃ©rico")     
+                raise ValidationError("qty debe ser numérico")     
             if qv < 0: raise ValidationError("qty no puede ser negativo")  
             sets.append("qty=%s"); params.append(qv)
         if "precio_u" in d:
             try:
                 pv = float(d.get("precio_u"))
             except (TypeError, ValueError):
-                raise ValidationError("precio_u debe ser numÃ©rico")
+                raise ValidationError("precio_u debe ser numérico")
             if pv < 0: raise ValidationError("precio_u no puede ser negativo")
             sets.append("precio_u=%s"); params.append(pv)
         if "repuesto_id" in d:
@@ -800,12 +2243,21 @@ class QuoteItemDetailView(APIView):
         if sets:
             _set_audit_user(request)
             params += [ingreso_id, item_id]
-            exec_void(f"""
-              UPDATE quote_items qi
-                 SET {', '.join(sets)}
-              FROM quotes q
-              WHERE qi.quote_id=q.id AND q.ingreso_id=%s AND qi.id=%s
-            """, params)
+            if connection.vendor == "postgresql":
+                exec_void(f"""
+                  UPDATE quote_items qi
+                     SET {', '.join(sets)}
+                  FROM quotes q
+                  WHERE qi.quote_id=q.id AND q.ingreso_id=%s AND qi.id=%s
+                """, params)
+            else:
+                # MySQL syntax uses JOIN in UPDATE
+                exec_void(f"""
+                  UPDATE quote_items qi
+                  JOIN quotes q ON q.id = qi.quote_id
+                     SET {', '.join(sets)}
+                  WHERE q.ingreso_id=%s AND qi.id=%s
+                """, params)
 
         data = _load_quote_payload(ingreso_id)
         return Response(QuoteDetailSerializer(data).data)
@@ -813,11 +2265,19 @@ class QuoteItemDetailView(APIView):
     def delete(self, request, ingreso_id: int, item_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
         _set_audit_user(request)
-        exec_void("""
-          DELETE FROM quote_items qi
-          USING quotes q
-          WHERE qi.quote_id=q.id AND q.ingreso_id=%s AND qi.id=%s
-        """, [ingreso_id, item_id])
+        if connection.vendor == "postgresql":
+            exec_void("""
+              DELETE FROM quote_items qi
+              USING quotes q
+              WHERE qi.quote_id=q.id AND q.ingreso_id=%s AND qi.id=%s
+            """, [ingreso_id, item_id])
+        else:
+            # MySQL multi-table DELETE syntax
+            exec_void("""
+              DELETE qi FROM quote_items qi
+              JOIN quotes q ON q.id = qi.quote_id
+              WHERE q.ingreso_id=%s AND qi.id=%s
+            """, [ingreso_id, item_id])
 
         data = _load_quote_payload(ingreso_id)
         return Response(QuoteDetailSerializer(data).data)
@@ -826,7 +2286,7 @@ class QuoteItemDetailView(APIView):
 class QuoteResumenView(APIView):
     """
     PATCH { mano_obra: number }
-    Upsertea un Ãºnico renglÃ³n 'mano_obra' (qty=1) y recalcula totales.
+    Upsertea un único renglón 'mano_obra' (qty=1) y recalcula totales.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -838,7 +2298,7 @@ class QuoteResumenView(APIView):
         try:
             mo = float(mo)
         except (TypeError, ValueError):
-            raise ValidationError("mano_obra debe ser numÃ©rico")
+            raise ValidationError("mano_obra debe ser numérico")
         if mo < 0:
             raise ValidationError("mano_obra no puede ser negativo")
 
@@ -878,7 +2338,7 @@ class EmitirPresupuestoView(APIView):
         # Ingreso: usar el nombre viejo 'presupuestado'
         exec_void("UPDATE ingresos SET presupuesto_estado='presupuestado' WHERE id=%s", [ingreso_id])
 
-        # PDF (generar y guardar copia en disco si estÃ¡ configurado)
+        # PDF (generar y guardar copia en disco si está configurado)
         fname, pdf = render_quote_pdf(ingreso_id)
         try:
             save_dir = getattr(settings, "QUOTES_SAVE_DIR", None)
@@ -920,7 +2380,7 @@ class QuotePdfView(APIView):
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
 
-        fname, pdf = render_quote_pdf(ingreso_id)   # <- ahora sÃ­, 2 valores
+        fname, pdf = render_quote_pdf(ingreso_id)   # <- ahora sí­, 2 valores
         if not pdf:
             raise ValidationError("Ingreso no encontrado o sin presupuesto")
 
@@ -946,7 +2406,7 @@ class AprobarPresupuestoView(APIView):
            WHERE id=%s
         """, [qid])
 
-        # Reflejar en ingreso segÃºn regla
+        # Reflejar en ingreso según regla
         exec_void("""
           UPDATE ingresos
              SET presupuesto_estado='aprobado',
@@ -977,7 +2437,7 @@ class AprobarPresupuestoView(APIView):
                 [ingreso_id, ingreso_id],
             )
 
-        # Enviar aviso por mail al tÃ©cnico asignado (con detalles del equipo)
+        # Enviar aviso por mail al técnico asignado (con detalles del equipo)
         try:
             row = q("""
                 SELECT
@@ -1010,11 +2470,11 @@ class AprobarPresupuestoView(APIView):
                     f"- Cliente: {row.get('cliente') or '-'}",
                     f"- Marca/Modelo: {row.get('marca') or '-'} / {row.get('modelo') or '-'}",
                     f"- Tipo: {row.get('tipo_equipo') or '-'}",
-                    f"- NÂ° de serie: {row.get('numero_serie') or '-'}",
+                    f"- N° de serie: {row.get('numero_serie') or '-'}",
                     "",
                     f"Abrir hoja de servicio: {link}",
                     "",
-                    "Aviso automÃ¡tico Ã¢Â€Â” no responder a este correo.",
+                    "Aviso automático — no responder a este correo.",
                 ]
                 body = "\n".join(body_lines)
                 body = _email_append_footer_text(body)
@@ -1042,7 +2502,7 @@ class ComenzarReparacionView(APIView):
     def post(self, request, ingreso_id: int):
         require_roles(request, ["tecnico","jefe","jefe_veedor"])
         _set_audit_user(request)
-        # Si ya estÃ¡ en reparar, OK; si venÃ­a de estados previos vÃ¡lidos, permitir; si no, 409
+        # Si ya está en reparar, OK; si vení­a de estados previos válidos, permitir; si no, 409
         row = q("SELECT estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
@@ -1065,7 +2525,7 @@ class AnularPresupuestoView(APIView):
         if not row:
             raise ValidationError("Ingreso no encontrado")
         if (row.get("presupuesto_estado") or "").strip() != "presupuestado":
-            raise ValidationError("Solo se puede anular cuando el presupuesto estÃ¡ 'presupuestado'.")
+            raise ValidationError("Solo se puede anular cuando el presupuesto está 'presupuestado'.")
 
         qid = _ensure_quote(ingreso_id)
 
@@ -1206,10 +2666,10 @@ class EntregarIngresoView(APIView):
         # IMPORTANTE: mismo transaction + mismo cursor para SET LOCAL + UPDATE
         with transaction.atomic():
             with connection.cursor() as cur:
-                # Seteamos GUC para RLS en esta transacciÃ³n
+                # Seteamos GUC para RLS en esta transacción
                 
 
-                # Hacemos el UPDATE en el MISMO cursor/conexiÃ³n
+                # Hacemos el UPDATE en el MISMO cursor/conexión
                 cur.execute("""
                     UPDATE ingresos
                        SET estado='entregado',
@@ -1281,12 +2741,22 @@ class NuevoIngresoView(APIView):
         data = request.data or {}
         cliente = data.get("cliente") or {}
         equipo  = data.get("equipo") or {}
-        motivo = (data.get("motivo") or "").strip().lower()
+        # Motivo de ingreso: validar y normalizar contra ENUM de DB
+        motivo_raw = (data.get("motivo") or "").strip()
+        if not motivo_raw:
+            return Response({"detail": "motivo requerido"}, status=400)
+        valid_motivos = _get_motivo_enum_values()
+        by_lower = { (v or "").strip().lower(): v for v in valid_motivos }
+        by_norm  = { _norm_txt(v): v for v in valid_motivos }
+        motivo_db = by_lower.get(motivo_raw.strip().lower()) or by_norm.get(_norm_txt(motivo_raw))
+        if not motivo_db:
+            return Response({"detail": "motivo inválido", "valid_values": valid_motivos}, status=400)
+        motivo = motivo_db
         numero_interno = (equipo.get("numero_interno") or "").strip()
         if numero_interno and not numero_interno.upper().startswith("MG"):
             numero_interno = "MG " + numero_interno
 
-        # UbicaciÃ³n: si no viene, buscar 'Taller'
+        # Ubicación: si no viene, buscar 'Taller'
         ubicacion_id = data.get("ubicacion_id")
         if not ubicacion_id:
             t = q(
@@ -1295,7 +2765,7 @@ class NuevoIngresoView(APIView):
             )
             if not t:
                 return Response(
-                    {"detail": "No se encontrÃ³ la ubicaciÃ³n 'Taller' en el catÃ¡logo. Creala en 'locations'."},
+                    {"detail": "No se encontró la ubicación 'Taller' en el catálogo. Creala en 'locations'."},
                     status=400
                 )
             ubicacion_id = t["id"]
@@ -1321,8 +2791,7 @@ class NuevoIngresoView(APIView):
                     _dt = timezone.make_aware(_dt, timezone.get_current_timezone())
                 fecha_ingreso_dt = _dt
 
-        if not motivo:
-            return Response({"detail": "motivo requerido"}, status=400)
+        # motivo ya validado arriba
         
         if not equipo.get("marca_id") or not equipo.get("modelo_id"):
             return Response({"detail": "equipo.marca_id y equipo.modelo_id son requeridos"}, status=400)
@@ -1342,9 +2811,9 @@ class NuevoIngresoView(APIView):
             return Response({"detail": "Cliente inexistente"}, status=400)
 
         if cliente.get("cod_empresa") and c["cod_empresa"] != cliente["cod_empresa"]:
-            return Response({"detail": "El cÃ³digo no corresponde a la razÃ³n social seleccionada."}, status=400)
+            return Response({"detail": "El código no corresponde a la razón social seleccionada."}, status=400)
         if cliente.get("razon_social") and c["razon_social"].lower() != cliente["razon_social"].lower():
-            return Response({"detail": "La razÃ³n social no corresponde al cÃ³digo seleccionado."}, status=400)
+            return Response({"detail": "La razón social no corresponde al código seleccionado."}, status=400)
 
         customer_id = c["id"]
 
@@ -1363,7 +2832,37 @@ class NuevoIngresoView(APIView):
         numero_serie = (equipo.get("numero_serie") or "").strip()
         garantia_bool = bool(equipo.get("garantia"))
 
-        dev = q("SELECT id FROM devices WHERE numero_serie=%s", [numero_serie], one=True) if numero_serie else None
+        # Si ya existe un ingreso NO ENTREGADO para el mismo cliente y N/S,
+        # devolver ese ingreso en lugar de crear uno nuevo (evita duplicados).
+        if numero_serie:
+            dup = q(
+                """
+                SELECT t.id
+                  FROM ingresos t
+                  JOIN devices d ON d.id = t.device_id
+                 WHERE d.customer_id = %s
+                   AND d.numero_serie = %s
+                   AND t.estado <> 'entregado'
+                 ORDER BY t.id DESC
+                 LIMIT 1
+                """,
+                [customer_id, numero_serie],
+                one=True,
+            )
+            if dup:
+                existing_id = dup["id"]
+                return Response({"ok": True, "ingreso_id": existing_id, "os": os_label(existing_id), "existing": True})
+
+        # Importante: no reutilizar un equipo por n° de serie si pertenece a otro cliente.
+        # Solo se reutiliza si coincide el numero_serie Y el customer_id resuelto arriba.
+        dev = None
+        if numero_serie:
+            dev = q(
+                "SELECT id FROM devices WHERE numero_serie=%s AND customer_id=%s",
+                [numero_serie, customer_id],
+                one=True,
+            )
+        dev = None
         if dev:
             device_id = dev["id"]
         else:
@@ -1388,11 +2887,11 @@ class NuevoIngresoView(APIView):
         if numero_interno:
             exec_void("UPDATE devices SET n_de_control = NULLIF(%s,'') WHERE id=%s", [numero_interno, device_id])
 
-        # --- GarantÃ­a de reparaciÃ³n por N/S o NÂ° interno (MG): Ãºltima fecha_entrega < 90 dÃ­as ---
-        from django.utils import timezone
+        # --- Garantí­a de reparación por N/S o N° interno (MG): última fecha_entrega < 90 dí­as ---
+        
         auto_gar_rep = False
         last_out_candidates = []
-        # Por nÃºmero de serie
+        # Por número de serie
         if numero_serie:
             row_last_ns = q(
                 """
@@ -1408,7 +2907,7 @@ class NuevoIngresoView(APIView):
             last_out_ns = row_last_ns and row_last_ns.get("last_out")
             if last_out_ns:
                 last_out_candidates.append(last_out_ns)
-        # Por nÃºmero interno (MG)
+        # Por número interno (MG)
         if numero_interno:
             row_last_mg = q(
                 """
@@ -1430,24 +2929,24 @@ class NuevoIngresoView(APIView):
         garantia_rep_payload = bool(data.get("garantia_reparacion"))
         garantia_rep_final = garantia_rep_payload or auto_gar_rep
 
-        # ---- TÃ©cnico asignado ----
+        # ---- Técnico asignado ----
         # 1) viene en payload -> ok; 2) default por modelo -> ok
         tecnico_id = data.get("tecnico_id")
         if not tecnico_id:
             tdef = q("SELECT tecnico_id FROM models WHERE id=%s", [equipo["modelo_id"]], one=True)
             tecnico_id = tdef["tecnico_id"] if tdef else None
 
-        # Ã¢ÂœÂ… 3) fallback por marca si el modelo no tiene
+        # í¢ÂœÂ… 3) fallback por marca si el modelo no tiene
         if not tecnico_id:
             tmarca = q("SELECT tecnico_id FROM marcas WHERE id=%s", [equipo["marca_id"]], one=True)
             tecnico_id = (tmarca or {}).get("tecnico_id")
 
-        # ValidaciÃ³n
+        # Validación
         if tecnico_id:
             tech = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
          [tecnico_id], one=True)
             if not tech:
-                return Response({"detail": "TÃ©cnico invÃ¡lido o inactivo"}, status=400)
+                return Response({"detail": "Técnico inválido o inactivo"}, status=400)
 
         # Usuario
         uid = getattr(request.user, "id", None) or getattr(request, "user_id", None)
@@ -1539,7 +3038,7 @@ class GarantiaReparacionCheckView(APIView):
             return Response({"within_90_days": False, "last_ingreso": None})
 
         last_out_candidates = []
-        # Buscar por nÃºmero de serie
+        # Buscar por número de serie
         if ns:
             row_ns = q(
                 """
@@ -1556,7 +3055,7 @@ class GarantiaReparacionCheckView(APIView):
             if last_ns:
                 last_out_candidates.append(last_ns)
 
-        # Buscar por nÃºmero interno (MG)
+        # Buscar por número interno (MG)
         if mg:
             row_mg = q(
                 """
@@ -1576,13 +3075,13 @@ class GarantiaReparacionCheckView(APIView):
         if not last_out_candidates:
             return Response({"within_90_days": False, "last_ingreso": None})
 
-        from django.utils import timezone
+        
         last_out = max(last_out_candidates)
         within = (timezone.now() - last_out).days <= 90
         # Mantenemos la clave last_ingreso por compatibilidad (aunque es fecha_entrega)
         return Response({"within_90_days": within, "last_ingreso": last_out})
 # ---------------------------------------
-# CatÃ¡logos
+# Catálogos
 class CatalogoMarcasView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1610,7 +3109,7 @@ class CatalogoMarcasView(APIView):
             try:
                 tecnico_id = int(tecnico_raw)
             except (TypeError, ValueError):
-                raise ValidationError("tecnico_id invÃ¡lido")
+                raise ValidationError("tecnico_id inválido")
 
         existing = q(
             "SELECT id FROM marcas WHERE LOWER(nombre)=LOWER(%s)",
@@ -2153,7 +3652,7 @@ class TiposEquipoView(APIView):
                 ) or []
                 return Response(rows)
 
-        # Fallback: tipos desde models.tipo_equipo + catÃ¡logo extendido suministrado
+        # Fallback: tipos desde models.tipo_equipo + catálogo extendido suministrado
         internos = []
         try:
             internos = q(
@@ -2170,7 +3669,7 @@ class TiposEquipoView(APIView):
         usados_set = set()
 
         catalogo_fijo = []
-        # Combinar usados + catÃ¡logo fijo
+        # Combinar usados + catálogo fijo
         internos_set = { (r.get('nombre') or '').strip().upper() for r in (internos or []) }
         nombres = sorted(internos_set)
         rows = [{ "id": i+1, "nombre": n } for i, n in enumerate(nombres)]
@@ -2204,7 +3703,7 @@ class ModeloTipoEquipoView(APIView):
              WHERE id=%s AND marca_id=%s
         """, [tipo_nombre, modelo_id, marca_id])
 
-        # Asegurar presencia del tipo en el catÃ¡logo por marca para evitar
+        # Asegurar presencia del tipo en el catálogo por marca para evitar
         # inconsistencias en el front (series/variantes esperan esta fila)
         if tipo_nombre:
             # Buscar coincidencia case/acentos-insensitive y normalizar el nombre exacto
@@ -2219,7 +3718,7 @@ class ModeloTipoEquipoView(APIView):
                 one=True,
             )
             if row:
-                # Si existe con diferencias de acentuaciÃ³n/espacios, actualizamos al texto elegido
+                # Si existe con diferencias de acentuación/espacios, actualizamos al texto elegido
                 if (row.get("nombre") or "").strip() != tipo_nombre:
                     exec_void("UPDATE marca_tipos_equipo SET nombre=%s WHERE id=%s", [tipo_nombre, row["id"]])
             else:
@@ -2266,10 +3765,10 @@ class CatalogoUbicacionesView(APIView):
         ensure_default_locations()
         return Response(q("SELECT id, nombre FROM locations ORDER BY id"))
 
-class CatalogoMotivosView(APIView):
+class CatalogoMotivosView__OLD(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
-        # MySQL: detectar tabla externa 'equipos' vÃ­a information_schema
+        # MySQL: detectar tabla externa 'equipos' ví­a information_schema
         if connection.vendor == "mysql":
             chk = q(
                 """
@@ -2313,7 +3812,7 @@ class CatalogoMotivosView(APIView):
             )
             valores = []
             if row and row.get("ct", "").lower().startswith("enum("):
-                ct = row["ct"][5:-1]  # dentro de los parÃ©ntesis
+                ct = row["ct"][5:-1]  # dentro de los paréntesis
                 partes = [p.strip() for p in ct.split(",")]
                 for p in partes:
                     v = p.strip().strip("'")
@@ -2322,27 +3821,27 @@ class CatalogoMotivosView(APIView):
             if not valores:
                 valores = [
                     "urgente control",
-                    "reparaciÃ³n",
+                    "reparación",
                     "service preventivo",
                     "baja alquiler",
-                    "reparaciÃ³n alquiler",
+                    "reparación alquiler",
                     "otros",
                 ]
-            # ordenar con 'urgente control' primero y resto alfabÃ©tico
+            # ordenar con 'urgente control' primero y resto alfabético
             valores = sorted(set(valores), key=lambda x: (x != "urgente control", x))
             return Response([{"value": v, "label": v} for v in valores])
         except Exception:
             valores = [
                 "urgente control",
-                "reparaciÃ³n",
+                "reparación",
                 "service preventivo",
                 "baja alquiler",
-                "reparaciÃ³n alquiler",
+                "reparación alquiler",
                 "otros",
             ]
             return Response([{"value": v, "label": v} for v in valores])
 
-# Accesorios: catÃ¡logo y por ingreso
+# Accesorios: catálogo y por ingreso
 class CatalogoAccesoriosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
@@ -2389,14 +3888,14 @@ class IngresoAccesoriosView(APIView):
                 one=True,
             )
             if not exists or not exists.get("n"):
-                raise ValidationError("CatÃ¡logo de accesorios no disponible en este entorno")
+                raise ValidationError("Catálogo de accesorios no disponible en este entorno")
         try:
             acc_id = int(d.get("accesorio_id"))
         except (TypeError, ValueError):
             return Response({"detail": "accesorio_id requerido"}, status=400)
         acc = q("SELECT id FROM catalogo_accesorios WHERE id=%s AND activo", [acc_id], one=True)
         if not acc:
-            return Response({"detail": "accesorio invÃ¡lido"}, status=400)
+            return Response({"detail": "accesorio inválido"}, status=400)
         ref = (d.get("referencia") or "").strip() or None
         desc = (d.get("descripcion") or "").strip() or None
         _set_audit_user(request)
@@ -2704,13 +4203,13 @@ class IngresoMediaThumbnailView(APIView):
         return response
 
 
-# DerivaciÃ³n a servicio externo
+# Derivación a servicio externo
 class DerivarIngresoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
     def post(self, request, ingreso_id: int):
-        # AuditorÃ­a y control de permisos
+        # Auditorí­a y control de permisos
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
         _set_audit_user(request)
 
@@ -2726,7 +4225,7 @@ class DerivarIngresoView(APIView):
 
         prov = q("SELECT id FROM proveedores_externos WHERE id=%s", [proveedor_id], one=True)
         if not prov:
-            return Response({"detail": "Proveedor externo invÃ¡lido"}, status=400)
+            return Response({"detail": "Proveedor externo inválido"}, status=400)
 
         # Insertar en el nuevo log
         exec_void(""" 
@@ -2755,12 +4254,12 @@ class DevolverDerivacionView(APIView):
             one=True,
         )
         if not row:
-            return Response({"detail": "DerivaciÃ³n no encontrada"}, status=404)
+            return Response({"detail": "Derivación no encontrada"}, status=404)
 
         data = request.data or {}
         fecha = data.get("fecha_entrega") or None
 
-        # Marcar fecha de devoluciÃ³n y estado
+        # Marcar fecha de devolución y estado
         exec_void(
             """
             UPDATE equipos_derivados
@@ -2771,13 +4270,13 @@ class DevolverDerivacionView(APIView):
             [fecha, deriv_id],
         )
 
-        # TambiÃ©n reencolar el ingreso como 'ingresado' (solo si cambia)
+        # También reencolar el ingreso como 'ingresado' (solo si cambia)
         exec_void("UPDATE ingresos SET estado='ingresado' WHERE id=%s AND estado <> 'ingresado'", [ingreso_id])
-        # Actualizar comentario del Ãºltimo evento de estado para dejar trazabilidad clara
+        # Actualizar comentario del último evento de estado para dejar trazabilidad clara
         try:
             exec_void(
                 """
-                UPDATE ingreso_events SET comentario='DevoluciÃ³n de externo'
+                UPDATE ingreso_events SET comentario='Devolución de externo'
                 WHERE id = (
                   SELECT id FROM ingreso_events
                    WHERE ingreso_id=%s AND a_estado='ingresado'
@@ -2790,7 +4289,7 @@ class DevolverDerivacionView(APIView):
         except Exception:
             pass
 
-        # Enviar aviso al tÃ©cnico asignado (si tiene email)
+        # Enviar aviso al técnico asignado (si tiene email)
         try:
             info = q(
                 """
@@ -2813,13 +4312,13 @@ class DevolverDerivacionView(APIView):
             )
             email = (info or {}).get("tech_email")
             if email:
-                subj = f"Aviso: equipo devuelto de externo Ã¢Â€Â” OS #{ingreso_id}"
+                subj = f"Aviso: equipo devuelto de externo — OS #{ingreso_id}"
                 txt = (
                     f"Hola {info.get('tech_nombre','')},\n\n"
-                    f"El equipo derivado fue devuelto del servicio externo y se reencolÃ³ como 'ingresado'.\n\n"
+                    f"El equipo derivado fue devuelto del servicio externo y se reencoló como 'ingresado'.\n\n"
                     f"Cliente: {info.get('razon_social','')}\n"
                     f"Equipo: {info.get('marca','')} {info.get('modelo','')}\n"
-                    f"NÃºmero de serie: {info.get('numero_serie','')}\n\n"
+                    f"Número de serie: {info.get('numero_serie','')}\n\n"
                     f"Hoja de servicio: /ingresos/{ingreso_id}\n"
                 )
                 try:
@@ -2860,7 +4359,7 @@ class UsuariosView(APIView):
         if not nombre or not email:
             raise ValidationError("Nombre y email son requeridos")
         if rol not in ROLE_KEYS:
-            raise ValidationError("Rol invÃ¡lido")
+            raise ValidationError("Rol inválido")
 
         existed = q("SELECT id FROM users WHERE email=%s", [email], one=True)
         if connection.vendor == "postgresql":
@@ -2881,12 +4380,12 @@ class UsuariosView(APIView):
                 [nombre, email, rol],
             )
 
-        # Enviar invitaciÃ³n de bienvenida si es nuevo
+        # Enviar invitación de bienvenida si es nuevo
         if not existed:
             try:
                 user = q("SELECT id, nombre, email FROM users WHERE email=%s", [email], one=True)
                 if user:
-                    # Generar token y enviar correo de bienvenida con link para setear contraseÃ±a
+                    # Generar token y enviar correo de bienvenida con link para setear contraseña
                     token = secrets.token_urlsafe(32)
                     token_hash = hashlib.sha256(token.encode()).hexdigest()
                     exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
@@ -2901,17 +4400,17 @@ class UsuariosView(APIView):
                     )
                     base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
                     url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-                    subj = "Bienvenido a SEPID Ã¢Â€Â” ConfigurÃ¡ tu contraseÃ±a"
+                    subj = "Bienvenido a SEPID — Configurá tu contraseña"
                     txt  = (
                         f"Hola {user['nombre']},\n\n"
                         f"Te damos la bienvenida al sistema de reparaciones de SEPID. "
-                        f"UsÃ¡ este enlace para establecer tu contraseÃ±a (vÃ¡lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+                        f"Usá este enlace para establecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
                         f"Si no esperabas este correo, ignoralo."
                     )
                     html = f"""
                         <p>Hola {user['nombre']},</p>
                         <p>Bienvenido al sistema de reparaciones de <strong>SEPID</strong>.</p>
-                        <p>UsÃ¡ este enlace para establecer tu contraseÃ±a (vÃ¡lido {TOKEN_TTL_MIN} minutos):</p>
+                        <p>Usá este enlace para establecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):</p>
                         <p><a href="{url}">{url}</a></p>
                         <p>Si no esperabas este correo, ignoralo.</p>
                     """
@@ -2938,14 +4437,14 @@ class UsuarioActivoView(APIView):
 class UsuarioResetPassView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, uid):
-        # Nuevo comportamiento mÃ¡s seguro: envÃ­a un enlace por email para que el usuario
-        # establezca (o reestablezca) su contraseÃ±a. No se permite fijarla directamente.
+        # Nuevo comportamiento más seguro: enví­a un enlace por email para que el usuario
+        # establezca (o reestablezca) su contraseña. No se permite fijarla directamente.
         require_jefe(request)
         user = q("SELECT id, email, nombre, activo FROM users WHERE id=%s", [uid], one=True)
         if not user or not user.get("activo"):
             return Response({"detail": "Usuario inexistente o inactivo"}, status=404)
 
-        # Generar token vÃ¡lido y enviarlo por mail
+        # Generar token válido y enviarlo por mail
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
@@ -2960,19 +4459,19 @@ class UsuarioResetPassView(APIView):
         )
         base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
         url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-        subj = "SEPID Ã¢Â€Â” Enlace para establecer tu contraseÃ±a"
+        subj = "SEPID — Enlace para establecer tu contraseña"
         txt  = (
             f"Hola {user['nombre']},\n\n"
-            f"Solicitaron un enlace para establecer o restablecer tu contraseÃ±a. "
-            f"UsÃ¡ este enlace (vÃ¡lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
-            f"Si no fuiste vos, ignorÃ¡ este correo."
+            f"Solicitaron un enlace para establecer o restablecer tu contraseña. "
+            f"Usá este enlace (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+            f"Si no fuiste vos, ignorá este correo."
         )
         html = f"""
             <p>Hola {user['nombre']},</p>
-            <p>Solicitaron un enlace para establecer o restablecer tu contraseÃ±a.</p>
-            <p>UsÃ¡ este enlace (vÃ¡lido {TOKEN_TTL_MIN} minutos):</p>
+            <p>Solicitaron un enlace para establecer o restablecer tu contraseña.</p>
+            <p>Usá este enlace (válido {TOKEN_TTL_MIN} minutos):</p>
             <p><a href="{url}">{url}</a></p>
-            <p>Si no fuiste vos, ignorÃ¡ este correo.</p>
+            <p>Si no fuiste vos, ignorá este correo.</p>
         """
         try:
             txt = _email_append_footer_text(txt)
@@ -2994,7 +4493,7 @@ class UsuarioRolePermView(APIView):
         if rol is not None:
             r = (rol or "").strip().lower()
             if r not in ROLE_KEYS:
-                raise ValidationError("Rol invÃ¡lido")
+                raise ValidationError("Rol inválido")
             sets.append("rol = %(rol)s")
             params["rol"] = r
         if perm_ing is not None:
@@ -3023,10 +4522,10 @@ class UsuarioDeleteView(APIView):
                 # Borrar el usuario
                 exec_void("DELETE FROM users WHERE id = %s", [uid])
         except IntegrityError:
-            # AÃºn queda alguna referencia (otra FK en otra tabla)
+            # Aún queda alguna referencia (otra FK en otra tabla)
             return Response(
-                {"detail": "No se pudo eliminar: el usuario estÃ¡ referenciado por otros registros. "
-                           "ReasignÃ¡/desasignÃ¡ esas referencias o desactivÃ¡ el usuario."},
+                {"detail": "No se pudo eliminar: el usuario está referenciado por otros registros. "
+                           "Reasigná/desasigná esas referencias o desactivá el usuario."},
                 status=409,
             )
         return Response({"ok": True})
@@ -3037,7 +4536,7 @@ class ClientesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor", "recepcion"])
-        # Compatibilidad: usar SELECT * para no romper si la DB aÃºn no tiene columnas nuevas (telefono_2, email)
+        # Compatibilidad: usar SELECT * para no romper si la DB aún no tiene columnas nuevas (telefono_2, email)
         return Response(q("SELECT * FROM customers ORDER BY razon_social"))
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
@@ -3101,7 +4600,7 @@ class ModeloTecnicoView(APIView):
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
 
-            if not ok: raise ValidationError("TÃ©cnico invÃ¡lido")
+            if not ok: raise ValidationError("Técnico inválido")
         q("UPDATE models SET tecnico_id=%s WHERE id=%s AND marca_id=%s", [tecnico_id, mid, bid])
         return Response({"ok": True, "tecnico_id": tecnico_id})
 
@@ -3114,7 +4613,7 @@ class MarcaTecnicoView(APIView):
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
 
-            if not ok: raise ValidationError("TÃ©cnico invÃ¡lido")
+            if not ok: raise ValidationError("Técnico inválido")
         q("UPDATE marcas SET tecnico_id=%s WHERE id=%s", [tecnico_id, bid])
         return Response({"ok": True, "tecnico_id": tecnico_id})
 
@@ -3150,14 +4649,14 @@ class MarcaAplicarTecnicoAModelosView(APIView):
 class IngresoAsignarTecnicoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, ingreso_id):
-        require_roles(request, ["jefe", "admin","jefe_veedor"])  # o sumÃ¡ "recepcion" si querÃ©s
+        require_roles(request, ["jefe", "admin","jefe_veedor"]) 
         tecnico_id = request.data.get("tecnico_id")
         if tecnico_id is None:
             return Response({"detail": "tecnico_id requerido"}, status=400)
         ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
         if not ok:
-            return Response({"detail": "TÃ©cnico invÃ¡lido"}, status=400)
+            return Response({"detail": "Técnico inválido"}, status=400)
         q("UPDATE ingresos SET asignado_a=%s WHERE id=%s", [tecnico_id, ingreso_id])
         return Response({"ok": True, "asignado_a": tecnico_id})
 
@@ -3174,7 +4673,7 @@ class MarcaDeleteView(APIView):
                     "detail": "No se puede eliminar la marca: tiene modelos asociados. Elimine o reasigne los modelos primero.",
                     "models_count": int(row.get("cnt") or 0),
                 }, status=409)
-            # Intento de borrado (protecciÃ³n ante condiciones de carrera)
+            # Intento de borrado (protección ante condiciones de carrera)
             exec_void("DELETE FROM marcas WHERE id = %s", [bid])
             return Response({"ok": True})
         except IntegrityError:
@@ -3231,7 +4730,7 @@ class ModelosPorMarcaView(APIView):
                 one=True,
             )
             if not ok:
-                raise ValidationError("TÃ©cnico invÃ¡lido")
+                raise ValidationError("Técnico inválido")
 
         if connection.vendor == "postgresql":
             q("""
@@ -3255,7 +4754,7 @@ class ModelosPorMarcaView(APIView):
                 [bid, n, tecnico_id, tipo_equipo, variante],
             )
 
-        # Si se cargÃ³ tipo_equipo al crear/actualizar, asegurarlo en marca_tipos_equipo
+        # Si se cargó tipo_equipo al crear/actualizar, asegurarlo en marca_tipos_equipo
         if tipo_equipo:
             if connection.vendor == "postgresql":
                 q(
@@ -3332,16 +4831,16 @@ class ModelMergeView(APIView):
         if src["marca_id"] != dst["marca_id"]:
             return Response({"detail": "Solo se puede unificar dentro de la misma marca"}, status=409)
 
-        # Reglas: unificar solo si ambos tienen mismo tipo_equipo no vacÃ­o
+        # Reglas: unificar solo si ambos tienen mismo tipo_equipo no vací­o
         tipo_a = (src.get("tipo") or "").strip()
         tipo_b = (dst.get("tipo") or "").strip()
         if not tipo_a or not tipo_b or tipo_a.lower() != tipo_b.lower():
-            return Response({"detail": "No se puede unificar: los tipos de equipo no coinciden o estÃ¡n vacÃ­os"}, status=409)
+            return Response({"detail": "No se puede unificar: los tipos de equipo no coinciden o están vací­os"}, status=409)
 
         with transaction.atomic():
             # mover devices al target
             exec_void("UPDATE devices SET model_id=%s WHERE model_id=%s", [target_id, source_id])
-            # eliminar modelo source (cascadearÃ¡ en model_hierarchy si corresponde)
+            # eliminar modelo source (cascadeará en model_hierarchy si corresponde)
             exec_void("DELETE FROM models WHERE id=%s", [source_id])
 
         moved = q("SELECT COUNT(*) AS cnt FROM devices WHERE model_id=%s", [target_id], one=True)
@@ -3368,7 +4867,7 @@ class MarcaMergeView(APIView):
             return Response({"detail": "marca source/target inexistente"}, status=404)
 
         with transaction.atomic():
-            # Para cada modelo de la marca source, si existe un homÃ³nimo en target, unificar devices y borrar; si no, mover el modelo a target.
+            # Para cada modelo de la marca source, si existe un homónimo en target, unificar devices y borrar; si no, mover el modelo a target.
             modelos = q("SELECT id, nombre, COALESCE(TRIM(tipo_equipo),'' ) AS tipo FROM models WHERE marca_id=%s", [source_id]) or []
             for mm in modelos:
                 dup = q(
@@ -3385,7 +4884,7 @@ class MarcaMergeView(APIView):
             # Mover devices con marca_id directo
             exec_void("UPDATE devices SET marca_id=%s WHERE marca_id=%s", [target_id, source_id])
 
-            # Borrar marca source (cascada en tablas jerÃ¡rquicas si aplica)
+            # Borrar marca source (cascada en tablas jerárquicas si aplica)
             exec_void("DELETE FROM marcas WHERE id=%s", [source_id])
 
         return Response({"ok": True, "target_id": target_id})
@@ -3411,7 +4910,7 @@ class MarcaDeleteCascadeView(APIView):
                 # Borrar modelos de la marca
                 exec_void("DELETE FROM models WHERE marca_id = %s", [bid])
 
-                # Las tablas jerÃ¡rquicas tienen ON DELETE CASCADE por marca/modelo
+                # Las tablas jerárquicas tienen ON DELETE CASCADE por marca/modelo
                 # Borrar marca
                 exec_void("DELETE FROM marcas WHERE id = %s", [bid])
             return Response({"ok": True})
@@ -3693,9 +5192,8 @@ class LiberadosView(APIView):
                   WHERE e.a_estado = 'liberado'
                 ) ev ON ev.ingreso_id = t.id AND ev.rn = 1
                 WHERE t.estado = 'liberado'
-                  AND LOWER(l.nombre) = LOWER(%s)
                 ORDER BY COALESCE(ev.fecha_listo, t.fecha_ingreso) DESC;
-            """, ["taller"])
+            """)
             rows = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(rows, many=True).data)
     
@@ -3750,7 +5248,7 @@ class GeneralEquiposView(APIView):
                 base += " AND (LOWER(c.razon_social) LIKE LOWER(%s) OR LOWER(d.numero_serie) LIKE LOWER(%s) OR LOWER(d.n_de_control) LIKE LOWER(%s) OR LOWER(b.nombre) LIKE LOWER(%s) OR LOWER(m.nombre) LIKE LOWER(%s))"
                 like = f"%{qtxt}%"
                 params += [like, like, like, like, like]
-            base += " ORDER BY t.fecha_ingreso DESC"
+            base += " ORDER BY t.id DESC"
             cur.execute(base, params)
             data = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(data, many=True).data)
@@ -3830,17 +5328,17 @@ class IngresoDetalleView(APIView):
         # Roles con acceso
         ROL_EDIT_DIAG = {"tecnico", "jefe", "jefe_veedor", "admin"}
         ROL_EDIT_UBIC = {"tecnico", "jefe", "jefe_veedor", "admin", "recepcion"}
-        ROL_EDIT_BASICS = {"jefe", "jefe_veedor"}  # ediciÃ³n de datos de cliente/equipo
+        ROL_EDIT_BASICS = {"jefe", "jefe_veedor"}  # edición de datos de cliente/equipo
 
         rol = _rol(request)
         d = request.data or {}
 
-        # Setear variables de auditorÃ­a en la sesiÃ³n DB (para triggers audit.*)
+        # Setear variables de auditorí­a en la sesión DB (para triggers audit.*)
         _set_audit_user(request)
         if connection.vendor == "postgresql":
             exec_void("SET LOCAL app.ingreso_id = %s", [ingreso_id])
 
-        # Estado y asignaciÃ³n actuales
+        # Estado y asignación actuales
         row_est = q("SELECT estado, asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row_est:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
@@ -3849,30 +5347,30 @@ class IngresoDetalleView(APIView):
 
         sets_no_estado, params_no_estado = [], []
 
-        # --- UbicaciÃ³n ---
+        # --- Ubicación ---
         if "ubicacion_id" in d:
             if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado para modificar ubicaciÃ³n")
+                raise PermissionDenied("No autorizado para modificar ubicación")
             ubicacion_id = d.get("ubicacion_id")
             if not ubicacion_id:
                 raise ValidationError("ubicacion_id requerido")
             u = q("SELECT id FROM locations WHERE id=%s", [ubicacion_id], one=True)
             if not u:
-                raise ValidationError("UbicaciÃ³n inexistente")
+                raise ValidationError("Ubicación inexistente")
             sets_no_estado.append("ubicacion_id=%s")
             params_no_estado.append(ubicacion_id)
 
-        # --- DiagnÃ³stico (texto y seÃ±ales asociadas) ---
-        # diag_present serÃ¡ verdadero si el tÃ©cnico cargÃ³ al menos uno de:
-        #   - descripciÃ³n del problema (no vacÃ­a)
-        #   - trabajos realizados (no vacÃ­o)
-        #   - fecha de servicio (vÃ¡lida y no vacÃ­a)
+        # --- Diagnóstico (texto y señales asociadas) ---
+        # diag_present será verdadero si el técnico cargó al menos uno de:
+        #   - descripción del problema (no vací­a)
+        #   - trabajos realizados (no vací­o)
+        #   - fecha de servicio (válida y no vací­a)
         desc_present = False
         trab_present = False
         fecha_present = False
         if "descripcion_problema" in d:
             if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado para modificar diagnÃ³stico")
+                raise PermissionDenied("No autorizado para modificar diagnóstico")
             desc = (d.get("descripcion_problema") or "").strip()
             desc_present = bool(desc)
             sets_no_estado.append("descripcion_problema=%s")
@@ -3903,7 +5401,7 @@ class IngresoDetalleView(APIView):
             else:
                 dt = parse_datetime(val)
                 if not dt:
-                    raise ValidationError("fecha_servicio invÃ¡lida")
+                    raise ValidationError("fecha_servicio inválida")
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
                 sets_no_estado.append("fecha_servicio=%s")
@@ -3927,28 +5425,28 @@ class IngresoDetalleView(APIView):
                 else:
                     dt = parse_datetime(val)
                     if not dt:
-                        raise ValidationError("fecha_entrega invÃ¡lida")
+                        raise ValidationError("fecha_entrega inválida")
                     if timezone.is_naive(dt):
                         dt = timezone.make_aware(dt, timezone.get_current_timezone())
                     sets_no_estado.append("fecha_entrega=%s")
                     params_no_estado.append(dt)
 
         # --- NUEVOS CAMPOS ---
-        # GarantÃ­a de reparaciÃ³n
+        # Garantí­a de reparación
         if "garantia_reparacion" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("garantia_reparacion=%s")
             params_no_estado.append(bool(d.get("garantia_reparacion")))
 
-        # Faja de garantÃ­a
+        # Faja de garantí­a
         if "faja_garantia" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("faja_garantia = NULLIF(%s,'')")
             params_no_estado.append((d.get("faja_garantia") or "").strip())
 
-        # NÃºmero interno MG -> devices.n_de_control
+        # Número interno MG -> devices.n_de_control
         if "numero_interno" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
@@ -4006,7 +5504,7 @@ class IngresoDetalleView(APIView):
                     params,
                 )
 
-        # Equipo: NÂ° de serie
+        # Equipo: N° de serie
         if "numero_serie" in d:
             if rol not in ROL_EDIT_BASICS:
                 raise PermissionDenied("No autorizado para editar N/S")
@@ -4023,13 +5521,20 @@ class IngresoDetalleView(APIView):
             sets_no_estado.append("remito_ingreso = NULLIF(%s,'')")
             params_no_estado.append((d.get("remito_ingreso") or "").strip())
 
+        # Informe preliminar
+        if "informe_preliminar" in d:
+            if rol not in ROL_EDIT_BASICS:
+                raise PermissionDenied("No autorizado para editar informe preliminar")
+            sets_no_estado.append("informe_preliminar = NULLIF(%s,'')")
+            params_no_estado.append((d.get("informe_preliminar") or "").strip())
+
         # Alquiler (propio del ingreso)
         if "alquilado" in d:
             if rol not in ROL_EDIT_UBIC:
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("alquilado=%s")
             params_no_estado.append(bool(d.get("alquilado")))
-            # Si se marcÃ³ como alquilado, reflejar en el estado del equipo
+            # Si se marcó como alquilado, reflejar en el estado del equipo
             try:
                 if bool(d.get("alquilado")):
                     sets_no_estado.append("estado='alquilado'")
@@ -4051,15 +5556,15 @@ class IngresoDetalleView(APIView):
             sets_no_estado.append("alquiler_fecha=%s")
             params_no_estado.append(d.get("alquiler_fecha") or None)
 
-        # --- TransiciÃ³n de estado ---
-        # Antes solo se promovÃ­a con descripciÃ³n. Ahora tambiÃ©n con trabajos o fecha de servicio.
+        # --- Transición de estado ---
+        # Antes solo se promoví­a con descripción. Ahora también con trabajos o fecha de servicio.
         diag_present = desc_present or trab_present or fecha_present
         promote_from_ingresado = diag_present and estado_actual == "ingresado"
         promote_from_asignado  = diag_present and estado_actual == "asignado"
 
         if promote_from_ingresado:
             if not asignado_a:
-                raise ValidationError("Antes de diagnosticar, asignÃ¡ un tÃ©cnico al ingreso.")
+                raise ValidationError("Antes de diagnosticar, asigná un técnico al ingreso.")
             with transaction.atomic():
                 if sets_no_estado:
                     params_tmp = list(params_no_estado) + [ingreso_id]
@@ -4138,7 +5643,7 @@ class CerrarReparacionView(APIView):
         require_roles(request, ["jefe","jefe_veedor","admin"])
         r = (request.data or {}).get("resolucion")
         if r not in ("reparado","no_reparado","no_se_encontro_falla","presupuesto_rechazado"):
-            return Response({"detail": "resoluciÃ³n invÃ¡lida"}, status=400)
+            return Response({"detail": "resolución inválida"}, status=400)
 
         with connection.cursor() as cur:
             _set_audit_user(request)
@@ -4159,7 +5664,7 @@ class RemitoSalidaPdfView(APIView):
         if not cur_row:
             return Response(status=404)
         if not cur_row["resolucion"] and cur_row["estado"] != 'liberado':
-            return Response({"detail": "No se puede liberar sin resoluciÃ³n"}, status=409)
+            return Response({"detail": "No se puede liberar sin resolución"}, status=409)
 
         exec_void("""
           UPDATE ingresos
@@ -4175,7 +5680,7 @@ class RemitoSalidaPdfView(APIView):
 class IngresoHistorialView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
-        # Solo lectura para roles de supervisiÃ³n/administraciÃ³n
+        # Solo lectura para roles de supervisión/administración
         require_roles(request, ["jefe", "jefe_veedor", "admin"])
         if connection.vendor == "postgresql":
             rows = q(

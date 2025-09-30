@@ -370,6 +370,7 @@ export default function ServiceSheet() {
       numero_serie: data?.numero_serie || "",
       numero_interno: data?.numero_interno || "",
       remito_ingreso: data?.remito_ingreso || "",
+      informe_preliminar: data?.informe_preliminar || "",
       garantia_reparacion: !!data?.garantia_reparacion,
     });
     setEditBasics(true);
@@ -390,6 +391,8 @@ export default function ServiceSheet() {
     const remitoNuevo = (formBasics.remito_ingreso || "").trim();
     const remitoActual = (data?.remito_ingreso || "").trim();
     if (remitoNuevo !== remitoActual) diff.remito_ingreso = remitoNuevo;
+    // Informe preliminar
+    if (cmp(formBasics.informe_preliminar, data?.informe_preliminar)) diff.informe_preliminar = formBasics.informe_preliminar;
     if ((formBasics.garantia_reparacion ? 1 : 0) !== (data?.garantia_reparacion ? 1 : 0)) diff.garantia_reparacion = !!formBasics.garantia_reparacion;
     try {
       setSavingBasics(true);
@@ -463,6 +466,15 @@ export default function ServiceSheet() {
   }
 
   async function updateItem(it, patchRow) { await patchQuoteItem(id, it.id, patchRow); await loadQuote(); }
+  async function handleRemoveItem(it) {
+    if (!confirm("¿Eliminar renglón?")) return;
+    try {
+      await deleteQuoteItem(id, it.id);
+      await loadQuote();
+    } catch (e) {
+      setQErr(e?.message || "No se pudo eliminar el renglón");
+    }
+  }
   async function removeItem(it) { if (!confirm("¿Eliminar renglónó")) return; await deleteQuoteItem(id, it.id); await loadQuote(); }
   async function saveManoObra() {
     const mo = Number(manoObraStr || 0);
@@ -752,7 +764,17 @@ export default function ServiceSheet() {
               </div>
               {/* Notas justo debajo del cuadro de Equipo */}
                 <h2 className="font-semibold mt-4 mb-2">Notas</h2>
-                <Row label="Informe preliminar">{data.informe_preliminar || "-"}</Row>
+                <Row label="Informe preliminar">
+                  {editBasics ? (
+                    <textarea
+                      className="border rounded p-2 w-full min-h-[100px]"
+                      value={formBasics?.informe_preliminar ?? ""}
+                      onChange={(e) => setFormBasics(s => ({ ...s, informe_preliminar: e.target.value }))}
+                    />
+                  ) : (
+                    <div className="whitespace-pre-wrap">{data.informe_preliminar || "-"}</div>
+                  )}
+                </Row>
                 <Row label="Accesorios">
                   {Array.isArray(data.accesorios_items) && data.accesorios_items.length > 0 ? (
                     <ul className="list-disc list-inside">
@@ -1318,7 +1340,7 @@ export default function ServiceSheet() {
                       </td>
                       <td className="p-2 text-right">{money(it.subtotal)}</td>
                       <td className="p-2">
-                        <button className="text-red-600 hover:underline" onClick={() => removeItem(it)} type="button" disabled={isAprobado}>
+                        <button className="text-red-600 hover:underline" onClick={() => handleRemoveItem(it)} type="button" disabled={isAprobado}>
                           borrar
                         </button>
                       </td>
@@ -1529,7 +1551,7 @@ export default function ServiceSheet() {
                               if (ingresoId) navigate(`/ingresos/${ingresoId}`);
                             }}
                           >
-                            <td className="p-2 underline">{formatOSHelper(r, ingresoId)}</td>
+                            <td className="p-2 underline">{formatOSHelper(ingresoId)}</td>
                             <td className="p-2 capitalize">{r?.estado || '-'}</td>
                             <td className="p-2 capitalize">{r?.presupuesto_estado || '-'}</td>
                             <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(resolveFechaIngreso(r))}</td>

@@ -452,3 +452,16 @@ export const postModelo = (brandId, payloadOrNombre) => {
     api.get(`/api/ingresos/${ingresoId}/historial/`);
 
 
+  /* =============== MÉTRICAS ================= */
+  export const getMetricasResumen = (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/metricas/resumen/${qs ? `?${qs}` : ""}`);
+  };
+  export const getMetricasSeries = (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/metricas/series/${qs ? `?${qs}` : ""}`);
+  };
+  export const getMetricasCalibracion = (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/metricas/calibracion/${qs ? `?${qs}` : ""}`);
+  };

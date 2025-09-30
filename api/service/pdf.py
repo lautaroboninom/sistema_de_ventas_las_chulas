@@ -51,12 +51,13 @@ def _get_data(ingreso_id: int):
             t.trabajos_realizados,
             t.accesorios,
             t.remito_ingreso,
-            t.motivo AS equipo,
+            t.motivo AS motivo,
             c.razon_social AS cliente,
             COALESCE(c.email, '') AS cliente_email,
             d.numero_serie,
             COALESCE(d.garantia_bool, false) AS garantia,
             COALESCE(b.nombre,'') AS marca,
+            m.tipo_equipo as equipo,
             COALESCE(m.nombre,'') AS modelo,
             q.id AS quote_id, q.estado AS quote_estado, q.moneda,
             COALESCE(q.subtotal,0) AS subtotal,
@@ -155,7 +156,7 @@ def _draw_block(c, x, y, title, value, width, font="Helvetica", fsize=9, leading
         y -= leading
     return y
 
-def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None):
+def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None, remito=None):
     h = 28 * mm
     c.setFillColor(colors.whitesmoke)
     c.roundRect(x, y - h, w, h, 4, stroke=0, fill=1)
@@ -165,9 +166,13 @@ def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None):
     if equipo:
         c.setFont("Helvetica", 9)
         c.setFillColor(colors.black)
-        c.drawString(x + 5*mm, y - 7*mm, f"Equipo: {equipo}")
+        c.setFont("Helvetica", 9); c.drawString(x + 5*mm, y - 7*mm, f"Equipo: {equipo}")
 
-    col_w = w / 3.0
+    if remito:
+        c.setFont("Helvetica", 9); c.drawString(w- 30*mm, y - 7*mm, "Remito Ingreso:")
+        c.setFont("Helvetica", 9); c.drawString(w- 30*mm + 70, y - 7*mm, str(remito))
+
+    col_w = w / 3.0 + 3*mm
     base_y = y - 14*mm
 
     def col(ix, label, value):
@@ -182,7 +187,7 @@ def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None):
     col(0, "Marca", (marca or "").upper())
     col(1, "Modelo", (modelo or "").upper())
     col(2, "Número de serie", (numero_serie or "").upper())
-    return y - h - 6
+    return y - h - 8
 
 def render_quote_pdf(ingreso_id: int):
     head, items = _get_data(ingreso_id)
@@ -209,7 +214,7 @@ def render_quote_pdf(ingreso_id: int):
     if LOGO_PATH and os.path.exists(LOGO_PATH):
         try:
             logo_w = 45 * mm
-            x_logo = ml
+            x_logo = W/3 + logo_w
             c.drawImage(
                 ImageReader(LOGO_PATH),
                 x_logo, y - 15*mm,
@@ -222,18 +227,18 @@ def render_quote_pdf(ingreso_id: int):
             pass
 
     c.setFont("Helvetica-Bold", 12)
-    c.drawCentredString(W/2, y-4*mm, EMPRESA_LINEA2)
-    c.drawCentredString(W/2, y-9*mm, EMPRESA_LINEA3)
+    c.drawCentredString(W - W/3, y-4*mm, EMPRESA_LINEA2)
+    c.drawCentredString(W - W/3, y-9*mm, EMPRESA_LINEA3)
     c.setFont("Helvetica", 9)
-    c.drawCentredString(W/2, y-14*mm, EMPRESA_LINEA1)
+    c.drawCentredString(W - W/3, y-14*mm, EMPRESA_LINEA1)
 
     # Título de OS a la derecha, debajo del encabezado de empresa
     c.setFont("Helvetica-Bold", 18)
-    y_title = y - 20*mm
-    c.drawRightString(W - ml, y_title, title)
+    y_title = y - 25*mm
+    c.drawCentredString(W/2, y_title, title)
 
     # Separación suficiente para no superponer con encabezado/título
-    y -= 22*mm
+    y -= 27 *mm
     c.setLineWidth(0.8)
     c.line(ml, y, W-ml, y)
     y -= 10
@@ -245,21 +250,18 @@ def render_quote_pdf(ingreso_id: int):
     y = _draw_equipment_panel(
         c, ml, y, W - 2*ml,
         head.get("marca"), head.get("modelo"), head.get("numero_serie"),
-        equipo=head.get("equipo")
+        equipo=head.get("equipo"),remito = head.get("remito_ingreso"),
     )
 
+    y -= 5
     if head.get("informe_preliminar"):
         y = _draw_block(c, ml, y, "Info. preliminar", head["informe_preliminar"], W-2*ml) - 6
     if head.get("accesorios"):
         y = _draw_block(c, ml, y, "Accesorios", head["accesorios"], W-2*ml) - 6
-    if head.get("remito_ingreso"):
-        c.setFont("Helvetica-Bold", 10); c.drawString(ml, y, "Remito Ingreso")
-        c.setFont("Helvetica", 10); c.drawString(ml+95, y, str(head["remito_ingreso"]))
-        y -= 16
 
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(ml, y, "PRESUPUESTO Nº")
-    y -= 16
+
+
+    y -= 15
 
     mats = []
     seen = set()
@@ -305,6 +307,27 @@ def render_quote_pdf(ingreso_id: int):
     c.drawString(ml, y, "Atte. Serv.Técnico"); y -= 14
     c.setFont("Helvetica-Oblique", 9)
     c.drawString(ml, y, "Ante cualquier duda esperamos su llamado")
+
+    # --- Pie de página con datos de contacto (sin alterar layout superior) ---
+    try:
+        footer_email = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
+        footer_web = getattr(settings, "COMPANY_FOOTER_WEB", None)
+        footer_wa = getattr(settings, "COMPANY_FOOTER_WHATSAPP", None)
+        parts = []
+        if footer_email:
+            parts.append(footer_email)
+        if footer_web:
+            parts.append(footer_web)
+        if footer_wa:
+            parts.append(f"WhatsApp: {footer_wa}")
+        if parts:
+            c.setFont("Helvetica", 8)
+            c.setFillColor(colors.grey)
+            c.drawCentredString(W/2, 10*mm, " | ".join(parts))
+            c.setFillColor(colors.black)
+    except Exception:
+        # Nunca romper el render del PDF por el pie de página
+        pass
 
     c.showPage()
     c.save()

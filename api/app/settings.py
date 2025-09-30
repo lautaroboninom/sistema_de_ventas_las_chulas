@@ -29,6 +29,11 @@ FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 PUBLIC_WEB_URL = os.getenv("PUBLIC_WEB_URL", FRONTEND_ORIGIN)
 LOGO_PATH = os.getenv("LOGO_PATH", "/code/service/static/logo.png")  # usado por PDF
 
+# Datos de contacto para pie de página del presupuesto (pueden cambiar vía entorno)
+COMPANY_FOOTER_EMAIL = os.getenv("COMPANY_FOOTER_EMAIL", "tecnica@sepid.com.ar")
+COMPANY_FOOTER_WEB = os.getenv("COMPANY_FOOTER_WEB", "https://sepid.com.ar")
+COMPANY_FOOTER_WHATSAPP = os.getenv("COMPANY_FOOTER_WHATSAPP", "+54 9 11 6675-4115")
+
 # Directorio opcional donde guardar copias de PDFs de presupuestos
 # Si existe, se escriben allí además de devolverse al cliente
 QUOTES_SAVE_DIR = os.getenv(
@@ -80,6 +85,18 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "app.urls"
 WSGI_APPLICATION = "app.wsgi.application"
+
+# Templates (habilita carga de plantillas por app_dir)
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [],
+        },
+    }
+]
 
 # --- Base de datos por defecto: MySQL 8 ---
 # Variables esperadas: MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_HOST, MYSQL_PORT
@@ -155,3 +172,18 @@ INGRESO_MEDIA_MAX_FILES = int(os.getenv('INGRESO_MEDIA_MAX_FILES', '50'))
 INGRESO_MEDIA_THUMB_MAX = int(os.getenv('INGRESO_MEDIA_THUMB_MAX', '512'))
 INGRESO_MEDIA_ALLOWED_MIME = [m.strip() for m in os.getenv('INGRESO_MEDIA_ALLOWED_MIME', 'image/jpeg,image/png').split(',') if m.strip()]
 INGRESO_MEDIA_STORAGE_PREFIX = os.getenv('INGRESO_MEDIA_STORAGE_PREFIX', 'ingresos')
+
+# --- Seguridad / Autenticación (vistas) ---
+# TTL de tokens de restablecimiento (minutos)
+TOKEN_TTL_MIN = int(os.getenv("TOKEN_TTL_MIN", "30"))
+
+# Cooldown para envío de correos repetidos (minutos)
+EMAIL_COOLDOWN_MIN = int(os.getenv("EMAIL_COOLDOWN_MIN", "1"))
+
+# Intentos máximos de login y bloqueo temporal
+LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
+LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
+
+# Requisito mínimo local de longitud de contraseña (además de validators si aplica)
+PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))

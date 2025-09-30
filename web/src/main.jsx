@@ -36,6 +36,8 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Depositos from "./pages/Depositos.jsx";
 import Derivados from "./pages/Derivados.jsx";
+import Metricas from "./pages/Metricas.jsx";
+import MetricasClientes from "./pages/MetricasClientes.jsx";
 
 function NotFound() {
   return (
@@ -206,6 +208,22 @@ const router = createBrowserRouter([
       },
 
       // Sistema
+      {
+        path: "metricas",
+        element: (
+          <ProtectedRoute roles={["jefe"]}>
+            <Metricas />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "metricas/clientes",
+        element: (
+          <ProtectedRoute roles={["jefe"]}>
+            <MetricasClientes />
+          </ProtectedRoute>
+        ),
+      },
       {
         path: "usuarios",
         element: (

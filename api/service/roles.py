@@ -1,0 +1,13 @@
+# roles.py
+# Definiciones de roles visibles en la API/Front.
+
+ROLE_CHOICES = [
+    ("tecnico", "Técnico"),
+    ("admin", "Administración"),
+    ("jefe", "Jefe"),
+    ("jefe_veedor", "Jefe veedor"),
+    ("recepcion", "Recepción"),
+]
+
+ROLE_KEYS = [r for r, _ in ROLE_CHOICES]
+

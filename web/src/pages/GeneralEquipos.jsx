@@ -28,6 +28,8 @@ export default function GeneralEquipos() {
         const db = new Date(resolveFechaCreacion(b) ?? 0).getTime();
         return db - da; // más recientes primero
       });
+      // Reordenar por OS descendente (mayor a menor)
+      safe.sort((a, b) => Number(ingresoIdOf(b) ?? 0) - Number(ingresoIdOf(a) ?? 0));
       setRows(safe);
     } catch (e) {
       setErr(e?.message || "No se pudo cargar el histórico de equipos");

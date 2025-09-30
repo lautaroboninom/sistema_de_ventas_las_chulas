@@ -21,7 +21,7 @@ from .views import (
     
 
     # catÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡logos
-    CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView, CatalogoMotivosView,
+    CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
     CatalogoMarcasView, CatalogoModelosView,
@@ -54,7 +54,9 @@ from .views import (
 
     QuoteDetailView, QuoteItemsView, QuoteItemDetailView, QuoteResumenView, AnularPresupuestoView,
     RemitoSalidaPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
+    MetricasResumenView, MetricasSeriesView, MetricasCalibracionView, FeriadosView,
 )
+from .motivos_view import CatalogoMotivosView
 
 urlpatterns = [
     # salud y login
@@ -197,6 +199,11 @@ urlpatterns = [
 
     # historial de cambios por ingreso
     path("ingresos/<int:ingreso_id>/historial/", IngresoHistorialView.as_view()),
+    # métricas
+    path("metricas/resumen/", MetricasResumenView.as_view()),
+    path("metricas/series/", MetricasSeriesView.as_view()),
+    path("metricas/calibracion/", MetricasCalibracionView.as_view()),
+    path("metricas/feriados/", FeriadosView.as_view()),
 ]
 
 
