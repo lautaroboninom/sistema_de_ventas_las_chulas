@@ -824,6 +824,13 @@ def _ensure_quote(ingreso_id: int):
         rid = last_insert_id()
         return rid or q("SELECT id FROM quotes WHERE ingreso_id=%s", [ingreso_id], one=True)["id"]
 
+def os_label(_id: int) -> str:
+    """Etiqueta legible para Orden de Servicio."""
+    try:
+        return f"OS {str(int(_id)).zfill(6)}"
+    except Exception:
+        return f"OS {str(_id)}"
+
 class NuevoIngresoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -842,6 +849,10 @@ class NuevoIngresoView(APIView):
             valid_motivos = _get_motivo_enum_values()
             return Response({"detail": "motivo inválido", "valid_values": valid_motivos}, status=400)
         motivo = motivo_label_raw
+        # Número interno (MG): normalizar prefijo
+        numero_interno = (equipo.get("numero_interno") or "").strip()
+        if numero_interno and not numero_interno.upper().startswith("MG"):
+            numero_interno = "MG " + numero_interno
         # Ubicación: si no viene, buscar 'Taller'
         ubicacion_id = data.get("ubicacion_id")
         if not ubicacion_id:
@@ -3878,6 +3889,7 @@ class TiposEquipoView(APIView):
         exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(TRIM(nombre))=UPPER(TRIM(%s))", [nombre])
         exec_void("UPDATE models SET tipo_equipo=NULL WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))", [nombre])
         return Response({"ok": True})
+
 
 
 
