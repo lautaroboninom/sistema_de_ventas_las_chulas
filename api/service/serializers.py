@@ -123,6 +123,9 @@ class IngresoDetailSerializer(serializers.Serializer):
     marca = serializers.CharField()
     model_id = serializers.IntegerField()
     modelo = serializers.CharField()
+    # Tipo de equipo (opcional)
+    tipo_equipo = serializers.CharField(allow_blank=True, required=False)
+    tipo_equipo_nombre = serializers.CharField(allow_blank=True, required=False)
 
     # Cliente
     customer_id = serializers.IntegerField()

@@ -51,15 +51,13 @@ PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
 LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 
 # Salud básica (ping)
-# Salud básica (ping)
 @api_view(["GET"])  # público
 @permission_classes([AllowAny])
 def ping(request):
     return Response({"ok": True})
-def _normalize_role(s: str) -> str:
-    """Normaliza nombres de rol a snake_case en minúsculas."""
     s = (s or "").strip().lower().replace(" ", "_").replace("-", "_")
     return s
+
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
     authentication_classes = []
@@ -71,7 +69,7 @@ class LoginView(APIView):
         if not email or not password:
             raise AuthenticationFailed("Email y contraseña requeridos.")
 
-        ip = get_client_ip(request.META) or ""
+        ip = get_client_ip(request) or ""
         key = _login_rate_key(email, ip)
         if _is_login_locked(key):
             raise AuthenticationFailed("Demasiados intentos. Probá más tarde.")
@@ -108,7 +106,7 @@ class ForgotPasswordView(APIView):
     def post(self, request):
         email = (request.data.get("email") or "").strip().lower()
         ua = request.META.get("HTTP_USER_AGENT", "")
-        ip = get_client_ip(request.META) or ""
+        ip = get_client_ip(request) or ""
 
         ok_response = Response({"ok": True})
         if not email:
@@ -197,705 +195,8 @@ class SessionView(APIView):
 class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request):
-        return Response({"pong": True, "time": timezone.now().isoformat()})
-
-# =============================================================
-# Complementos restaurados: presupuestos, listas y métricas
-# =============================================================
-
-def _load_quote_payload(ingreso_id: int):
-    """Carga cabecera + items de presupuesto y calcula totales."""
-    head = q(
-        """
-        SELECT q.id AS quote_id, q.estado, q.moneda, q.subtotal, q.iva_21, q.total
-        FROM quotes q
-        WHERE q.ingreso_id=%s
-        """,
-        [ingreso_id],
-        one=True,
-    )
-
-    if not head:
-        qid = _ensure_quote(ingreso_id)
-        head = q(
-            """
-            SELECT q.id AS quote_id, q.estado, q.moneda, q.subtotal, q.iva_21, q.total
-            FROM quotes q WHERE q.id=%s
-            """,
-            [qid],
-            one=True,
-        )
-
-    items = q(
-        """
-        SELECT
-          qi.id, qi.tipo, qi.repuesto_id, qi.descripcion, qi.qty, qi.precio_u,
-          ROUND(qi.qty * qi.precio_u, 2) AS subtotal
-        FROM quote_items qi
-        JOIN quotes q ON q.id = qi.quote_id
-        WHERE q.ingreso_id=%s
-        ORDER BY qi.id ASC
-        """,
-        [ingreso_id],
-    ) or []
-
-    tot_rep = q(
-        """
-        SELECT COALESCE(SUM(qi.qty*qi.precio_u),0) AS x
-        FROM quote_items qi
-        JOIN quotes q ON q.id=qi.quote_id
-        WHERE q.ingreso_id=%s AND qi.tipo='repuesto'
-        """,
-        [ingreso_id],
-        one=True,
-    )["x"]
-
-    mano_obra = q(
-        """
-        SELECT COALESCE(SUM(qi.qty*qi.precio_u),0) AS x
-        FROM quote_items qi
-        JOIN quotes q ON q.id=qi.quote_id
-        WHERE q.ingreso_id=%s AND qi.tipo='mano_obra'
-        """,
-        [ingreso_id],
-        one=True,
-    )["x"]
-
-    subtotal_calc = sum((it.get("subtotal") or Decimal("0.00")) for it in items)
-    subtotal_calc = money(subtotal_calc)
-
-    IVA = Decimal("0.21")
-    iva21_calc = money(subtotal_calc * IVA)
-    total_calc = money(subtotal_calc + iva21_calc)
-
-    return {
-        "ingreso_id": ingreso_id,
-        "quote_id": head["quote_id"],
-        "estado": head["estado"],
-        "moneda": head["moneda"],
-        "items": items,
-        "tot_repuestos": tot_rep,
-        "mano_obra": mano_obra,
-        "subtotal": subtotal_calc,
-        "iva_21": iva21_calc,
-        "total": total_calc,
-    }
-
-
-class CatalogoTecnicosView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        rows = q(
-            """
-            SELECT id, nombre
-            FROM users
-            WHERE activo=true AND rol IN ('tecnico','jefe','jefe_veedor')
-            ORDER BY nombre
-            """
-        ) or []
-        return Response(rows)
-
-
-class MisPendientesView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        require_roles(request, ["jefe", "tecnico", "jefe_veedor"])
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute(
-                """
-                SELECT t.id,
-                       t.estado,
-                       t.presupuesto_estado,
-                       t.motivo,
-                       c.razon_social,
-                       d.numero_serie,
-                       COALESCE(b.nombre,'') AS marca,
-                       COALESCE(m.nombre,'') AS modelo,
-                       COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                       t.fecha_ingreso,
-                       CASE WHEN ed.estado = 'devuelto' THEN true ELSE false END AS derivado_devuelto
-                FROM ingresos t
-                JOIN devices d ON d.id=t.device_id
-                JOIN customers c ON c.id=d.customer_id
-                LEFT JOIN marcas b ON b.id=d.marca_id
-                LEFT JOIN models m ON m.id=d.model_id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                LEFT JOIN (
-                  SELECT e.*, ROW_NUMBER() OVER (
-                    PARTITION BY e.ingreso_id ORDER BY e.fecha_deriv DESC, e.id DESC
-                  ) AS rn
-                  FROM equipos_derivados e
-                ) ed ON ed.ingreso_id = t.id AND ed.rn = 1
-                WHERE t.asignado_a = %s
-                  AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado','liberado')
-                ORDER BY
-                   (CASE WHEN ed.estado = 'devuelto' THEN 1 ELSE 0 END) DESC,
-                   (t.motivo = 'urgente control') DESC,
-                   t.fecha_ingreso ASC;
-                """,
-                [
-                    getattr(getattr(request, "user", None), "id", None)
-                    or getattr(request, "user_id", None),
-                    "taller",
-                ],
-            )
-            data = _fetchall_dicts(cur)
-        return Response(IngresoListItemSerializer(data, many=True).data)
-
-
-class QuoteDetailView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
-        _ensure_quote(ingreso_id)
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class QuoteItemsView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
-        d = request.data or {}
-        tipo = (d.get("tipo") or "").strip()
-        if tipo not in ("repuesto", "mano_obra", "servicio"):
-            raise ValidationError("tipo inválido")
-        desc = (d.get("descripcion") or "").strip()
-        if not desc:
-            raise ValidationError("descripcion requerida")
-
-        try:
-            qty = money(d.get("qty"))
-            precio = money(d.get("precio_u"))
-        except (TypeError, ValueError):
-            raise ValidationError("qty y precio_u deben ser numéricos")
-        if qty < 0 or precio < 0:
-            raise ValidationError("qty y precio_u no pueden ser negativos")
-        repuesto_id = d.get("repuesto_id")
-
-        qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        exec_void(
-            """
-            INSERT INTO quote_items(quote_id, tipo, descripcion, qty, precio_u, repuesto_id)
-            VALUES (%s,%s,%s,%s,%s,%s)
-            """,
-            [qid, tipo, desc, qty, precio, repuesto_id],
-        )
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data, status=201)
-
-
-class QuoteItemDetailView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def patch(self, request, ingreso_id: int, item_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
-        d = request.data or {}
-        sets, params = [], []
-        if "tipo" in d:
-            t = (d.get("tipo") or "").strip()
-            if t not in ("repuesto", "mano_obra", "servicio"):
-                raise ValidationError("tipo inválido")
-            sets.append("tipo=%s"); params.append(t)
-        if "descripcion" in d:
-            sets.append("descripcion=%s"); params.append((d.get("descripcion") or "").strip())
-        if "qty" in d:
-            try:
-                qv = float(d.get("qty"))
-            except (TypeError, ValueError):
-                raise ValidationError("qty debe ser numérico")
-            if qv < 0:
-                raise ValidationError("qty no puede ser negativo")
-            sets.append("qty=%s"); params.append(qv)
-        if "precio_u" in d:
-            try:
-                pv = float(d.get("precio_u"))
-            except (TypeError, ValueError):
-                raise ValidationError("precio_u debe ser numérico")
-            if pv < 0:
-                raise ValidationError("precio_u no puede ser negativo")
-            sets.append("precio_u=%s"); params.append(pv)
-        if "repuesto_id" in d:
-            sets.append("repuesto_id=%s"); params.append(d.get("repuesto_id"))
-
-        if sets:
-            _set_audit_user(request)
-            params += [ingreso_id, item_id]
-            exec_void(
-                f"""
-                UPDATE quote_items qi
-                   SET {', '.join(sets)}
-                FROM quotes q
-                WHERE qi.quote_id=q.id AND q.ingreso_id=%s AND qi.id=%s
-                """,
-                params,
-            )
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-    def delete(self, request, ingreso_id: int, item_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
-        _set_audit_user(request)
-        exec_void(
-            """
-            DELETE FROM quote_items qi
-            USING quotes q
-            WHERE qi.quote_id=q.id AND q.ingreso_id=%s AND qi.id=%s
-            """,
-            [ingreso_id, item_id],
-        )
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class QuoteResumenView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def patch(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
-        mo = request.data.get("mano_obra")
-        if mo is None:
-            raise ValidationError("mano_obra requerido")
-        try:
-            mo = float(mo)
-        except (TypeError, ValueError):
-            raise ValidationError("mano_obra debe ser numérico")
-        if mo < 0:
-            raise ValidationError("mano_obra no puede ser negativo")
-
-        qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        row = q(
-            "SELECT id FROM quote_items WHERE quote_id=%s AND tipo='mano_obra' ORDER BY id LIMIT 1",
-            [qid],
-            one=True,
-        )
-        if row:
-            exec_void(
-                "UPDATE quote_items SET qty=1, precio_u=%s, descripcion='Mano de obra' WHERE id=%s",
-                [mo, row["id"]],
-            )
-        else:
-            exec_void(
-                "INSERT INTO quote_items(quote_id, tipo, descripcion, qty, precio_u) VALUES (%s,'mano_obra','Mano de obra',1,%s)",
-                [qid, mo],
-            )
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class EmitirPresupuestoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
-        autorizado_por = (request.data.get("autorizado_por") or "Cliente").strip()
-        forma_pago = (request.data.get("forma_pago") or "A definir").strip()
-        qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        exec_void(
-            """
-            UPDATE quotes
-               SET estado='presupuestado',
-                   autorizado_por=%s,
-                   forma_pago=%s,
-                   fecha_emitido=now()
-             WHERE id=%s
-            """,
-            [autorizado_por, forma_pago, qid],
-        )
-        exec_void("UPDATE ingresos SET presupuesto_estado='presupuestado' WHERE id=%s", [ingreso_id])
-
-        fname, pdf = render_quote_pdf(ingreso_id)
-        try:
-            save_dir = getattr(settings, "QUOTES_SAVE_DIR", None)
-            if save_dir and pdf:
-                os.makedirs(save_dir, exist_ok=True)
-                dest = os.path.join(save_dir, fname)
-                with open(dest, "wb") as f:
-                    f.write(pdf)
-        except Exception:
-            pass
-        pdf_url = f"/api/quotes/{ingreso_id}/pdf/"
-        exec_void("UPDATE quotes SET pdf_url=%s WHERE id=%s", [pdf_url, qid])
-        data = _load_quote_payload(ingreso_id); data["pdf_url"] = pdf_url
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class QuotePdfView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
-        fname, pdf = render_quote_pdf(ingreso_id)
-        if not pdf:
-            raise ValidationError("Ingreso no encontrado o sin presupuesto")
-        resp = HttpResponse(pdf, content_type="application/pdf")
-        resp["Content-Disposition"] = f'inline; filename="{fname}"'
-        return resp
-
-
-class AprobarPresupuestoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
-        qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        exec_void(
-            """
-            UPDATE quotes
-               SET estado='aprobado',
-                   fecha_aprobado=now()
-             WHERE id=%s
-            """,
-            [qid],
-        )
-        exec_void(
-            """
-            UPDATE ingresos
-               SET presupuesto_estado='aprobado',
-                   estado = CASE
-                              WHEN estado IN ('ingresado','diagnosticado','presupuestado')
-                              THEN 'reparar'
-                              ELSE estado
-                            END
-             WHERE id=%s
-            """,
-            [ingreso_id],
-        )
-
-        try:
-            row = q(
-                """
-                SELECT
-                  u.email, COALESCE(u.nombre,'') AS tecnico_nombre,
-                  c.razon_social AS cliente,
-                  COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  COALESCE(d.numero_serie,'') AS numero_serie
-                FROM ingresos t
-                LEFT JOIN users   u ON u.id = t.asignado_a
-                JOIN devices      d ON d.id = t.device_id
-                JOIN customers    c ON c.id = d.customer_id
-                LEFT JOIN marcas  b ON b.id = d.marca_id
-                LEFT JOIN models  m ON m.id = d.model_id
-                WHERE t.id=%s
-                """,
-                [ingreso_id],
-                one=True,
-            ) or {}
-            to_email = (row.get("email") or "").strip()
-            if to_email:
-                os_label = f"OS {str(ingreso_id).zfill(6)}"
-                link = _frontend_url(request, f"/ingresos/{ingreso_id}")
-                subject = f"{os_label} - Presupuesto aprobado"
-                body_lines = [
-                    f"Hola {row.get('tecnico_nombre') or ''},",
-                    "",
-                    f"El presupuesto de la {os_label} fue Aprobado.",
-                    "",
-                    "Detalle del equipo:",
-                    f"- Cliente: {row.get('cliente') or '-'}",
-                    f"- Marca/Modelo: {row.get('marca') or '-'} / {row.get('modelo') or '-'}",
-                    f"- Tipo: {row.get('tipo_equipo') or '-'}",
-                    f"- N° de serie: {row.get('numero_serie') or '-'}",
-                    "",
-                    f"Abrir hoja de servicio: {link}",
-                    "",
-                    "Aviso automático — no responder a este correo.",
-                ]
-                body = "\n".join(body_lines)
-                send_mail(subject, body, getattr(settings, 'DEFAULT_FROM_EMAIL', None), [to_email], fail_silently=True)
-        except Exception:
-            pass
-
-        try:
-            fname, pdf = render_quote_pdf(ingreso_id)
-            save_dir = getattr(settings, "QUOTES_SAVE_DIR", None)
-            if save_dir and pdf:
-                os.makedirs(save_dir, exist_ok=True)
-                dest = os.path.join(save_dir, fname)
-                with open(dest, "wb") as f:
-                    f.write(pdf)
-        except Exception:
-            pass
-
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class AnularPresupuestoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin"])
-        row = q("SELECT presupuesto_estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
-        if not row:
-            raise ValidationError("Ingreso no encontrado")
-        if (row.get("presupuesto_estado") or "").strip() != "presupuestado":
-            raise ValidationError("Solo se puede anular cuando el presupuesto está 'presupuestado'.")
-
-        qid = _ensure_quote(ingreso_id)
-        exec_void(
-            """
-            UPDATE quotes
-               SET estado='pendiente',
-                   fecha_emitido=NULL,
-                   fecha_aprobado=NULL,
-                   pdf_url=NULL
-             WHERE id=%s
-            """,
-            [qid],
-        )
-        exec_void("UPDATE ingresos SET presupuesto_estado='pendiente' WHERE id=%s", [ingreso_id])
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class PendientesPresupuestoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute(
-                """
-                SELECT t.id, t.estado, t.presupuesto_estado,
-                       c.razon_social,
-                       d.numero_serie,
-                       COALESCE(b.nombre,'') AS marca,
-                       COALESCE(m.nombre,'') AS modelo,
-                       COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                       t.fecha_ingreso,
-                       t.fecha_servicio,
-                       q.fecha_emitido AS presupuesto_fecha_emision
-                FROM ingresos t
-                JOIN devices d ON d.id=t.device_id
-                JOIN customers c ON c.id=d.customer_id
-                LEFT JOIN marcas b ON b.id=d.marca_id
-                LEFT JOIN models m ON m.id=d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE t.presupuesto_estado = 'pendiente'
-                  AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado = 'diagnosticado'
-                ORDER BY t.fecha_servicio ASC;
-                """,
-                ["taller"],
-            )
-            data = _fetchall_dicts(cur)
-        return Response(IngresoListItemSerializer(data, many=True).data)
-
-
-class PresupuestadosView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute(
-                """
-                SELECT
-                  t.id,
-                  t.estado,
-                  CASE
-                    WHEN t.presupuesto_estado IS NOT NULL THEN t.presupuesto_estado 
-                    WHEN q.estado IN ('emitido','enviado','presupuestado') THEN 'presupuestado' 
-                    ELSE q.estado 
-                  END AS presupuesto_estado,
-                  c.razon_social,
-                  d.numero_serie,
-                  COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  t.fecha_ingreso,
-                  q.id AS presupuesto_id,
-                  q.id AS presupuesto_numero,
-                  q.subtotal AS presupuesto_monto,
-                  'ARS' AS presupuesto_moneda,
-                  q.fecha_emitido AS presupuesto_fecha_emision,
-                  NULL AS presupuesto_fecha_envio 
-                FROM ingresos t
-                JOIN devices d ON d.id = t.device_id
-                JOIN customers c ON c.id = d.customer_id
-                LEFT JOIN marcas b ON b.id = d.marca_id
-                LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE (
-                        q.estado IN ('emitido','enviado','presupuestado') 
-                        OR t.presupuesto_estado = 'presupuestado'
-                      )
-                  AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado','liberado', 'alquilado')
-                ORDER BY COALESCE(q.fecha_emitido, t.fecha_ingreso) ASC;
-                """,
-                ["taller"],
-            )
-            return Response(_fetchall_dicts(cur))
-
-
-class MarcarReparadoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["tecnico", "jefe", "jefe_veedor"])
-        _set_audit_user(request)
-        exec_void("UPDATE ingresos SET estado='reparado' WHERE id=%s", [ingreso_id])
         return Response({"ok": True})
-
-
-class EntregarIngresoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "jefe_veedor", "admin", "recepcion"])
-        data = request.data or {}
-        remito = (data.get("remito_salida") or "").strip()
-        if not remito:
-            return Response({"detail": "remito_salida requerido"}, status=400)
-        factura = (data.get("factura_numero") or "").strip() or None
-        fecha_entrega = data.get("fecha_entrega") or None
-        _set_audit_user(request)
-        with transaction.atomic():
-            with connection.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE ingresos
-                       SET estado='entregado',
-                           remito_salida=%s,
-                           factura_numero=%s,
-                           fecha_entrega=COALESCE(%s, now())
-                     WHERE id=%s
-                    """,
-                    [remito, factura, fecha_entrega, ingreso_id],
-                )
-        return Response({"ok": True})
-
-
-class ListosParaRetiroView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute("SELECT * FROM vw_listos_para_retiro ORDER BY id DESC;")
-            return Response(_fetchall_dicts(cur))
-
-
-class CustomersListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute("SELECT id, razon_social FROM customers ORDER BY razon_social;")
-            return Response(_fetchall_dicts(cur))
-
-
-class GeneralPorClienteView(APIView):
-    permission_classes = [IsAuthenticated]
-    def get(self, request, customer_id):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute(
-                """
-                SELECT
-                  t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
-                  q.fecha_emitido AS presupuesto_fecha_emision,
-                  COALESCE(loc.nombre,'') AS ubicacion_nombre,
-                  c.id AS customer_id, c.razon_social,
-                  d.numero_serie,
-                  COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo
-                FROM ingresos t
-                JOIN devices   d ON d.id = t.device_id
-                JOIN customers c ON c.id = d.customer_id
-                LEFT JOIN marcas b ON b.id = d.marca_id
-                LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE c.id = %s
-                  AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado', 'alquilado')
-                ORDER BY t.fecha_ingreso DESC;
-                """,
-                [customer_id, "taller"],
-            )
-            return Response(_fetchall_dicts(cur))
-
-
-# --------- Métricas (implementación mínima para compatibilidad) ---------
-
-class MetricasResumenView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        # Resumen vacío por defecto para no romper el front
-        return Response({})
-
-
-class MetricasSeriesView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        payload = {
-            "yearly": [],
-            "monthly": [],
-            "by_tecnico_monthly": [],
-            "facturacion_tecnico_monthly": [],
-            "mo_tecnico_monthly": [],
-            "repuestos_tecnico_monthly": [],
-            "by_marca_monthly": [],
-            "facturacion_marca_monthly": [],
-            "mo_marca_monthly": [],
-            "repuestos_marca_monthly": [],
-        }
-        return Response(payload)
-
-
-class MetricasCalibracionView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        return Response({})
-
-
-class FeriadosView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        try:
-            rows = q("SELECT fecha, nombre FROM feriados ORDER BY fecha") or []
-            return Response(rows)
-        except Exception:
-            return Response([])
-
-    def post(self, request):
-        d = request.data or {}
-        fecha = (d.get("fecha") or "").strip()
-        nombre = (d.get("nombre") or "").strip()
-        if not fecha:
-            return Response({"detail": "fecha requerida"}, status=400)
-        try:
-            exec_void(
-                "INSERT INTO feriados(fecha, nombre) VALUES (%s,%s)",
-                [fecha, nombre or None],
-            )
-            return Response({"ok": True}, status=201)
-        except Exception:
-            return Response({"detail": "no se pudo guardar"}, status=400)
-
-    def delete(self, request):
-        fecha = (request.GET.get("fecha") or "").strip()
-        if not fecha:
-            return Response({"detail": "fecha requerida"}, status=400)
-        try:
-            exec_void("DELETE FROM feriados WHERE fecha=%s", [fecha])
-            return Response({"ok": True})
-        except Exception:
-            return Response({"detail": "no se pudo eliminar"}, status=400)
-
-
-class MetricasConfigView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        # Config mínima; extender según necesidades reales
-        return Response({
-            "sla_diag_hrs": 24,
-            "sla_excluir_derivados_default": True,
-        })
-    
+    return Response({"pong": True, "time": timezone.now().isoformat()})
 
 # Pie legal para correos (solo emails, no en el sitio)
 EMAIL_LEGAL_FOOTER = getattr(settings, "EMAIL_LEGAL_FOOTER", (
@@ -1695,23 +996,7 @@ class NuevoIngresoView(APIView):
         if not motivo_label_raw:
             valid_motivos = _get_motivo_enum_values()
             return Response({"detail": "motivo inválido", "valid_values": valid_motivos}, status=400)
-        # Forzar que el valor a insertar sea EXACTAMENTE uno de los labels RAW del ENUM
-        # (evita problemas de encoding/diacríticos con MySQL ENUM)
-        raw_vals = _get_motivo_enum_values_raw() or []
-        if raw_vals:
-            # buscar coincidencia por normalización; si no, usar 'otros' si existe; si no, el primero
-            target = None
-            norm_target = _norm_txt(motivo_label_raw)
-            for rv in raw_vals:
-                if _norm_txt(rv) == norm_target:
-                    target = rv
-                    break
-            if not target:
-                # fallback seguro
-                target = next((x for x in raw_vals if _norm_txt(x) == _norm_txt('otros')), raw_vals[0])
-            motivo = target
-        else:
-            motivo = motivo_label_raw
+        motivo = motivo_label_raw
         # Número interno (MG): normalizar prefijo
         numero_interno = (equipo.get("numero_interno") or "").strip()
         if numero_interno and not numero_interno.upper().startswith("MG"):
@@ -1914,16 +1199,6 @@ class NuevoIngresoView(APIView):
             return Response({"detail": "Usuario no autenticado"}, status=401)
         _set_audit_user(request)
         
-        # Validar definitivamente 'motivo' contra ENUM en MySQL para evitar 1265
-        if connection.vendor == "mysql":
-            raw_enum_vals = _get_motivo_enum_values_raw() or []
-            if raw_enum_vals and motivo not in raw_enum_vals:
-                return Response({
-                    "detail": "motivo inválido para la base actual",
-                    "sent": motivo,
-                    "valid_values": raw_enum_vals,
-                }, status=400)
-
         # Ingreso (usa DEFAULT 'ingresado')
         equipo_variante = (request.data.get("equipo_variante") or "").strip() or None
         if connection.vendor == "postgresql":
@@ -1947,17 +1222,6 @@ class NuevoIngresoView(APIView):
                  garantia_rep_final]
             )
         else:
-            # MySQL: si la columna es ENUM, insertar por índice evita problemas de encoding
-            motivo_param = motivo
-            try:
-                raw_enum_vals = _get_motivo_enum_values_raw() or []
-                if raw_enum_vals:
-                    # índice 1-based según orden de definición en ENUM
-                    enum_idx = next((i+1 for i,v in enumerate(raw_enum_vals) if _norm_txt(v) == _norm_txt(motivo)), None)
-                    if enum_idx is not None:
-                        motivo_param = int(enum_idx)
-            except Exception:
-                pass
             exec_void(
                 """
                 INSERT INTO ingresos (
@@ -1971,7 +1235,7 @@ class NuevoIngresoView(APIView):
                         NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
                         %s)
                 """,
-                [device_id, motivo_param, ubicacion_id, uid, tecnico_id,
+                [device_id, motivo, ubicacion_id, uid, tecnico_id,
                  informe_preliminar, accesorios_text, equipo_variante,
                  prop_nombre, prop_contacto, prop_doc,
                  garantia_rep_final]
@@ -1986,10 +1250,6 @@ class NuevoIngresoView(APIView):
         if fecha_ingreso_dt is not None:
             sets.append("fecha_ingreso = %s")
             params.append(fecha_ingreso_dt)
-        # Si no vino fecha_ingreso, aplicar NOW() por defecto (evita nulls)
-        if fecha_ingreso_dt is None:
-            sets.append("fecha_ingreso = COALESCE(fecha_ingreso, NOW())")
-
         if sets:
             params.append(ingreso_id)
             exec_void(
@@ -4222,21 +3482,7 @@ class IngresoDetalleView(APIView):
         """, [ingreso_id], one=True)
         if not row:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
-        row["os"] = os_label(row["id"])
-        # Compat front: si no hay fecha_creacion, usar fecha_ingreso
-        if not row.get("fecha_creacion"):
-            row["fecha_creacion"] = row.get("fecha_ingreso")
-        # Compat front: exponer tipo_equipo_nombre si no viene
-        if "tipo_equipo_nombre" not in row:
-            row["tipo_equipo_nombre"] = row.get("tipo_equipo") or ""
-        # Normalizar fecha_servicio: si vino como DATE, convertir a datetime para el serializer
-        try:
-            from datetime import date as _date, datetime as _dt
-            fs = row.get("fecha_servicio")
-            if fs and isinstance(fs, _date) and not isinstance(fs, _dt):
-                row["fecha_servicio"] = _dt(fs.year, fs.month, fs.day, 0, 0, 0, tzinfo=None)
-        except Exception:
-            pass
+        row["os"] = os_label(row["id"]])
         accs = q("""
           SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
           FROM ingreso_accesorios ia
@@ -4791,6 +4037,7 @@ class TiposEquipoView(APIView):
         exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(TRIM(nombre))=UPPER(TRIM(%s))", [nombre])
         exec_void("UPDATE models SET tipo_equipo=NULL WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))", [nombre])
         return Response({"ok": True})
+
 
 
 

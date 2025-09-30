@@ -1,4 +1,4 @@
-Ôªø# service/views.py
+# service/views.py
 
 
 # service/views.py
@@ -44,20 +44,20 @@ from .constants import DEFAULT_LOCATION_NAMES, LOCATION_NAME_REMAPS
 logger = logging.getLogger(__name__)
 
 TOKEN_TTL_MIN = 30       # vence en 30 minutos
-COOLDOWN_MIN  = 1       # m√°x 1 mail cada 1 minutos por usuario
+COOLDOWN_MIN  = 1       # m·x 1 mail cada 1 minutos por usuario
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
 LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 
-# Salud b√°sica (ping)
-# Salud b√°sica (ping)
-@api_view(["GET"])  # p√∫blico
+# Salud b·sica (ping)
+# Salud b·sica (ping)
+@api_view(["GET"])  # p˙blico
 @permission_classes([AllowAny])
 def ping(request):
     return Response({"ok": True})
 def _normalize_role(s: str) -> str:
-    """Normaliza nombres de rol a snake_case en min√∫sculas."""
+    """Normaliza nombres de rol a snake_case en min˙sculas."""
     s = (s or "").strip().lower().replace(" ", "_").replace("-", "_")
     return s
 class LoginView(APIView):
@@ -69,25 +69,25 @@ class LoginView(APIView):
         password = (request.data.get("password") or "")
 
         if not email or not password:
-            raise AuthenticationFailed("Email y contrase√±a requeridos.")
+            raise AuthenticationFailed("Email y contraseÒa requeridos.")
 
-        ip = get_client_ip(request.META) or ""
+        ip = get_client_ip(request) or ""
         key = _login_rate_key(email, ip)
         if _is_login_locked(key):
-            raise AuthenticationFailed("Demasiados intentos. Prob√° m√°s tarde.")
+            raise AuthenticationFailed("Demasiados intentos. Prob· m·s tarde.")
 
         try:
             user = User.objects.get(email=email, activo=True)
         except User.DoesNotExist:
             _register_login_failure(key)
-            raise AuthenticationFailed("Usuario o contrase√±a inv√°lidos.")
+            raise AuthenticationFailed("Usuario o contraseÒa inv·lidos.")
 
         if not getattr(user, "hash_pw", ""):
-            raise AuthenticationFailed("El usuario a√∫n no tiene contrase√±a. Us√° \"Olvid√© mi contrase√±a\" para inicializarla.")
+            raise AuthenticationFailed("El usuario a˙n no tiene contraseÒa. Us· \"OlvidÈ mi contraseÒa\" para inicializarla.")
 
         if not verify_hash(password, user.hash_pw):
             _register_login_failure(key)
-            raise AuthenticationFailed("Usuario o contrase√±a inv√°lidos.")
+            raise AuthenticationFailed("Usuario o contraseÒa inv·lidos.")
 
         _reset_login_failure(key)
         token = issue_token(user)
@@ -108,7 +108,7 @@ class ForgotPasswordView(APIView):
     def post(self, request):
         email = (request.data.get("email") or "").strip().lower()
         ua = request.META.get("HTTP_USER_AGENT", "")
-        ip = get_client_ip(request.META) or ""
+        ip = get_client_ip(request) or ""
 
         ok_response = Response({"ok": True})
         if not email:
@@ -138,17 +138,17 @@ class ForgotPasswordView(APIView):
 
         origin = getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
         url = f"{origin}/restablecer?t={token}"
-        subj = "Recuperaci√≥n de contrase√±a"
+        subj = "RecuperaciÛn de contraseÒa"
         txt = (
             f"Hola {user['nombre']},\n\n"
-            f"Us√° este enlace para restablecer tu contrase√±a (v√°lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
-            "Si no fuiste vos, ignor√° este correo."
+            f"Us· este enlace para restablecer tu contraseÒa (v·lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+            "Si no fuiste vos, ignor· este correo."
         )
         html = (
             f"<p>Hola {user['nombre']},</p>"
-            f"<p>Us√° este enlace para restablecer tu contrase√±a (v√°lido {TOKEN_TTL_MIN} minutos):</p>"
+            f"<p>Us· este enlace para restablecer tu contraseÒa (v·lido {TOKEN_TTL_MIN} minutos):</p>"
             f"<p><a href=\"{url}\">{url}</a></p>"
-            "<p>Si no fuiste vos, ignor√° este correo.</p>"
+            "<p>Si no fuiste vos, ignor· este correo.</p>"
         )
         try:
             send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [email], html_message=html, fail_silently=True)
@@ -173,7 +173,7 @@ class ResetPasswordView(APIView):
              WHERE prt.token_hash=%s AND prt.used_at IS NULL AND prt.expires_at>NOW()
             """, [token_hash], one=True)
         if not row:
-            return Response({"detail": "Token inv√°lido o vencido"}, status=400)
+            return Response({"detail": "Token inv·lido o vencido"}, status=400)
 
         hashed = make_password(password)
         exec_void("UPDATE users SET hash_pw=%s WHERE id=%s", [hashed, row["user_id"]])
@@ -198,712 +198,15 @@ class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request):
         return Response({"pong": True, "time": timezone.now().isoformat()})
-
-# =============================================================
-# Complementos restaurados: presupuestos, listas y m√©tricas
-# =============================================================
-
-def _load_quote_payload(ingreso_id: int):
-    """Carga cabecera + items de presupuesto y calcula totales."""
-    head = q(
-        """
-        SELECT q.id AS quote_id, q.estado, q.moneda, q.subtotal, q.iva_21, q.total
-        FROM quotes q
-        WHERE q.ingreso_id=%s
-        """,
-        [ingreso_id],
-        one=True,
-    )
-
-    if not head:
-        qid = _ensure_quote(ingreso_id)
-        head = q(
-            """
-            SELECT q.id AS quote_id, q.estado, q.moneda, q.subtotal, q.iva_21, q.total
-            FROM quotes q WHERE q.id=%s
-            """,
-            [qid],
-            one=True,
-        )
-
-    items = q(
-        """
-        SELECT
-          qi.id, qi.tipo, qi.repuesto_id, qi.descripcion, qi.qty, qi.precio_u,
-          ROUND(qi.qty * qi.precio_u, 2) AS subtotal
-        FROM quote_items qi
-        JOIN quotes q ON q.id = qi.quote_id
-        WHERE q.ingreso_id=%s
-        ORDER BY qi.id ASC
-        """,
-        [ingreso_id],
-    ) or []
-
-    tot_rep = q(
-        """
-        SELECT COALESCE(SUM(qi.qty*qi.precio_u),0) AS x
-        FROM quote_items qi
-        JOIN quotes q ON q.id=qi.quote_id
-        WHERE q.ingreso_id=%s AND qi.tipo='repuesto'
-        """,
-        [ingreso_id],
-        one=True,
-    )["x"]
-
-    mano_obra = q(
-        """
-        SELECT COALESCE(SUM(qi.qty*qi.precio_u),0) AS x
-        FROM quote_items qi
-        JOIN quotes q ON q.id=qi.quote_id
-        WHERE q.ingreso_id=%s AND qi.tipo='mano_obra'
-        """,
-        [ingreso_id],
-        one=True,
-    )["x"]
-
-    subtotal_calc = sum((it.get("subtotal") or Decimal("0.00")) for it in items)
-    subtotal_calc = money(subtotal_calc)
-
-    IVA = Decimal("0.21")
-    iva21_calc = money(subtotal_calc * IVA)
-    total_calc = money(subtotal_calc + iva21_calc)
-
-    return {
-        "ingreso_id": ingreso_id,
-        "quote_id": head["quote_id"],
-        "estado": head["estado"],
-        "moneda": head["moneda"],
-        "items": items,
-        "tot_repuestos": tot_rep,
-        "mano_obra": mano_obra,
-        "subtotal": subtotal_calc,
-        "iva_21": iva21_calc,
-        "total": total_calc,
-    }
-
-
-class CatalogoTecnicosView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        rows = q(
-            """
-            SELECT id, nombre
-            FROM users
-            WHERE activo=true AND rol IN ('tecnico','jefe','jefe_veedor')
-            ORDER BY nombre
-            """
-        ) or []
-        return Response(rows)
-
-
-class MisPendientesView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        require_roles(request, ["jefe", "tecnico", "jefe_veedor"])
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute(
-                """
-                SELECT t.id,
-                       t.estado,
-                       t.presupuesto_estado,
-                       t.motivo,
-                       c.razon_social,
-                       d.numero_serie,
-                       COALESCE(b.nombre,'') AS marca,
-                       COALESCE(m.nombre,'') AS modelo,
-                       COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                       t.fecha_ingreso,
-                       CASE WHEN ed.estado = 'devuelto' THEN true ELSE false END AS derivado_devuelto
-                FROM ingresos t
-                JOIN devices d ON d.id=t.device_id
-                JOIN customers c ON c.id=d.customer_id
-                LEFT JOIN marcas b ON b.id=d.marca_id
-                LEFT JOIN models m ON m.id=d.model_id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                LEFT JOIN (
-                  SELECT e.*, ROW_NUMBER() OVER (
-                    PARTITION BY e.ingreso_id ORDER BY e.fecha_deriv DESC, e.id DESC
-                  ) AS rn
-                  FROM equipos_derivados e
-                ) ed ON ed.ingreso_id = t.id AND ed.rn = 1
-                WHERE t.asignado_a = %s
-                  AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado','liberado')
-                ORDER BY
-                   (CASE WHEN ed.estado = 'devuelto' THEN 1 ELSE 0 END) DESC,
-                   (t.motivo = 'urgente control') DESC,
-                   t.fecha_ingreso ASC;
-                """,
-                [
-                    getattr(getattr(request, "user", None), "id", None)
-                    or getattr(request, "user_id", None),
-                    "taller",
-                ],
-            )
-            data = _fetchall_dicts(cur)
-        return Response(IngresoListItemSerializer(data, many=True).data)
-
-
-class QuoteDetailView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
-        _ensure_quote(ingreso_id)
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class QuoteItemsView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
-        d = request.data or {}
-        tipo = (d.get("tipo") or "").strip()
-        if tipo not in ("repuesto", "mano_obra", "servicio"):
-            raise ValidationError("tipo inv√°lido")
-        desc = (d.get("descripcion") or "").strip()
-        if not desc:
-            raise ValidationError("descripcion requerida")
-
-        try:
-            qty = money(d.get("qty"))
-            precio = money(d.get("precio_u"))
-        except (TypeError, ValueError):
-            raise ValidationError("qty y precio_u deben ser num√©ricos")
-        if qty < 0 or precio < 0:
-            raise ValidationError("qty y precio_u no pueden ser negativos")
-        repuesto_id = d.get("repuesto_id")
-
-        qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        exec_void(
-            """
-            INSERT INTO quote_items(quote_id, tipo, descripcion, qty, precio_u, repuesto_id)
-            VALUES (%s,%s,%s,%s,%s,%s)
-            """,
-            [qid, tipo, desc, qty, precio, repuesto_id],
-        )
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data, status=201)
-
-
-class QuoteItemDetailView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def patch(self, request, ingreso_id: int, item_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
-        d = request.data or {}
-        sets, params = [], []
-        if "tipo" in d:
-            t = (d.get("tipo") or "").strip()
-            if t not in ("repuesto", "mano_obra", "servicio"):
-                raise ValidationError("tipo inv√°lido")
-            sets.append("tipo=%s"); params.append(t)
-        if "descripcion" in d:
-            sets.append("descripcion=%s"); params.append((d.get("descripcion") or "").strip())
-        if "qty" in d:
-            try:
-                qv = float(d.get("qty"))
-            except (TypeError, ValueError):
-                raise ValidationError("qty debe ser num√©rico")
-            if qv < 0:
-                raise ValidationError("qty no puede ser negativo")
-            sets.append("qty=%s"); params.append(qv)
-        if "precio_u" in d:
-            try:
-                pv = float(d.get("precio_u"))
-            except (TypeError, ValueError):
-                raise ValidationError("precio_u debe ser num√©rico")
-            if pv < 0:
-                raise ValidationError("precio_u no puede ser negativo")
-            sets.append("precio_u=%s"); params.append(pv)
-        if "repuesto_id" in d:
-            sets.append("repuesto_id=%s"); params.append(d.get("repuesto_id"))
-
-        if sets:
-            _set_audit_user(request)
-            params += [ingreso_id, item_id]
-            exec_void(
-                f"""
-                UPDATE quote_items qi
-                   SET {', '.join(sets)}
-                FROM quotes q
-                WHERE qi.quote_id=q.id AND q.ingreso_id=%s AND qi.id=%s
-                """,
-                params,
-            )
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-    def delete(self, request, ingreso_id: int, item_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
-        _set_audit_user(request)
-        exec_void(
-            """
-            DELETE FROM quote_items qi
-            USING quotes q
-            WHERE qi.quote_id=q.id AND q.ingreso_id=%s AND qi.id=%s
-            """,
-            [ingreso_id, item_id],
-        )
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class QuoteResumenView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def patch(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
-        mo = request.data.get("mano_obra")
-        if mo is None:
-            raise ValidationError("mano_obra requerido")
-        try:
-            mo = float(mo)
-        except (TypeError, ValueError):
-            raise ValidationError("mano_obra debe ser num√©rico")
-        if mo < 0:
-            raise ValidationError("mano_obra no puede ser negativo")
-
-        qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        row = q(
-            "SELECT id FROM quote_items WHERE quote_id=%s AND tipo='mano_obra' ORDER BY id LIMIT 1",
-            [qid],
-            one=True,
-        )
-        if row:
-            exec_void(
-                "UPDATE quote_items SET qty=1, precio_u=%s, descripcion='Mano de obra' WHERE id=%s",
-                [mo, row["id"]],
-            )
-        else:
-            exec_void(
-                "INSERT INTO quote_items(quote_id, tipo, descripcion, qty, precio_u) VALUES (%s,'mano_obra','Mano de obra',1,%s)",
-                [qid, mo],
-            )
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class EmitirPresupuestoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
-        autorizado_por = (request.data.get("autorizado_por") or "Cliente").strip()
-        forma_pago = (request.data.get("forma_pago") or "A definir").strip()
-        qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        exec_void(
-            """
-            UPDATE quotes
-               SET estado='presupuestado',
-                   autorizado_por=%s,
-                   forma_pago=%s,
-                   fecha_emitido=now()
-             WHERE id=%s
-            """,
-            [autorizado_por, forma_pago, qid],
-        )
-        exec_void("UPDATE ingresos SET presupuesto_estado='presupuestado' WHERE id=%s", [ingreso_id])
-
-        fname, pdf = render_quote_pdf(ingreso_id)
-        try:
-            save_dir = getattr(settings, "QUOTES_SAVE_DIR", None)
-            if save_dir and pdf:
-                os.makedirs(save_dir, exist_ok=True)
-                dest = os.path.join(save_dir, fname)
-                with open(dest, "wb") as f:
-                    f.write(pdf)
-        except Exception:
-            pass
-        pdf_url = f"/api/quotes/{ingreso_id}/pdf/"
-        exec_void("UPDATE quotes SET pdf_url=%s WHERE id=%s", [pdf_url, qid])
-        data = _load_quote_payload(ingreso_id); data["pdf_url"] = pdf_url
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class QuotePdfView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
-        fname, pdf = render_quote_pdf(ingreso_id)
-        if not pdf:
-            raise ValidationError("Ingreso no encontrado o sin presupuesto")
-        resp = HttpResponse(pdf, content_type="application/pdf")
-        resp["Content-Disposition"] = f'inline; filename="{fname}"'
-        return resp
-
-
-class AprobarPresupuestoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
-        qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        exec_void(
-            """
-            UPDATE quotes
-               SET estado='aprobado',
-                   fecha_aprobado=now()
-             WHERE id=%s
-            """,
-            [qid],
-        )
-        exec_void(
-            """
-            UPDATE ingresos
-               SET presupuesto_estado='aprobado',
-                   estado = CASE
-                              WHEN estado IN ('ingresado','diagnosticado','presupuestado')
-                              THEN 'reparar'
-                              ELSE estado
-                            END
-             WHERE id=%s
-            """,
-            [ingreso_id],
-        )
-
-        try:
-            row = q(
-                """
-                SELECT
-                  u.email, COALESCE(u.nombre,'') AS tecnico_nombre,
-                  c.razon_social AS cliente,
-                  COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  COALESCE(d.numero_serie,'') AS numero_serie
-                FROM ingresos t
-                LEFT JOIN users   u ON u.id = t.asignado_a
-                JOIN devices      d ON d.id = t.device_id
-                JOIN customers    c ON c.id = d.customer_id
-                LEFT JOIN marcas  b ON b.id = d.marca_id
-                LEFT JOIN models  m ON m.id = d.model_id
-                WHERE t.id=%s
-                """,
-                [ingreso_id],
-                one=True,
-            ) or {}
-            to_email = (row.get("email") or "").strip()
-            if to_email:
-                os_label = f"OS {str(ingreso_id).zfill(6)}"
-                link = _frontend_url(request, f"/ingresos/{ingreso_id}")
-                subject = f"{os_label} - Presupuesto aprobado"
-                body_lines = [
-                    f"Hola {row.get('tecnico_nombre') or ''},",
-                    "",
-                    f"El presupuesto de la {os_label} fue Aprobado.",
-                    "",
-                    "Detalle del equipo:",
-                    f"- Cliente: {row.get('cliente') or '-'}",
-                    f"- Marca/Modelo: {row.get('marca') or '-'} / {row.get('modelo') or '-'}",
-                    f"- Tipo: {row.get('tipo_equipo') or '-'}",
-                    f"- N¬∞ de serie: {row.get('numero_serie') or '-'}",
-                    "",
-                    f"Abrir hoja de servicio: {link}",
-                    "",
-                    "Aviso autom√°tico ‚Äî no responder a este correo.",
-                ]
-                body = "\n".join(body_lines)
-                send_mail(subject, body, getattr(settings, 'DEFAULT_FROM_EMAIL', None), [to_email], fail_silently=True)
-        except Exception:
-            pass
-
-        try:
-            fname, pdf = render_quote_pdf(ingreso_id)
-            save_dir = getattr(settings, "QUOTES_SAVE_DIR", None)
-            if save_dir and pdf:
-                os.makedirs(save_dir, exist_ok=True)
-                dest = os.path.join(save_dir, fname)
-                with open(dest, "wb") as f:
-                    f.write(pdf)
-        except Exception:
-            pass
-
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class AnularPresupuestoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin"])
-        row = q("SELECT presupuesto_estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
-        if not row:
-            raise ValidationError("Ingreso no encontrado")
-        if (row.get("presupuesto_estado") or "").strip() != "presupuestado":
-            raise ValidationError("Solo se puede anular cuando el presupuesto est√° 'presupuestado'.")
-
-        qid = _ensure_quote(ingreso_id)
-        exec_void(
-            """
-            UPDATE quotes
-               SET estado='pendiente',
-                   fecha_emitido=NULL,
-                   fecha_aprobado=NULL,
-                   pdf_url=NULL
-             WHERE id=%s
-            """,
-            [qid],
-        )
-        exec_void("UPDATE ingresos SET presupuesto_estado='pendiente' WHERE id=%s", [ingreso_id])
-        data = _load_quote_payload(ingreso_id)
-        return Response(QuoteDetailSerializer(data).data)
-
-
-class PendientesPresupuestoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute(
-                """
-                SELECT t.id, t.estado, t.presupuesto_estado,
-                       c.razon_social,
-                       d.numero_serie,
-                       COALESCE(b.nombre,'') AS marca,
-                       COALESCE(m.nombre,'') AS modelo,
-                       COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                       t.fecha_ingreso,
-                       t.fecha_servicio,
-                       q.fecha_emitido AS presupuesto_fecha_emision
-                FROM ingresos t
-                JOIN devices d ON d.id=t.device_id
-                JOIN customers c ON c.id=d.customer_id
-                LEFT JOIN marcas b ON b.id=d.marca_id
-                LEFT JOIN models m ON m.id=d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE t.presupuesto_estado = 'pendiente'
-                  AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado = 'diagnosticado'
-                ORDER BY t.fecha_servicio ASC;
-                """,
-                ["taller"],
-            )
-            data = _fetchall_dicts(cur)
-        return Response(IngresoListItemSerializer(data, many=True).data)
-
-
-class PresupuestadosView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute(
-                """
-                SELECT
-                  t.id,
-                  t.estado,
-                  CASE
-                    WHEN t.presupuesto_estado IS NOT NULL THEN t.presupuesto_estado 
-                    WHEN q.estado IN ('emitido','enviado','presupuestado') THEN 'presupuestado' 
-                    ELSE q.estado 
-                  END AS presupuesto_estado,
-                  c.razon_social,
-                  d.numero_serie,
-                  COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  t.fecha_ingreso,
-                  q.id AS presupuesto_id,
-                  q.id AS presupuesto_numero,
-                  q.subtotal AS presupuesto_monto,
-                  'ARS' AS presupuesto_moneda,
-                  q.fecha_emitido AS presupuesto_fecha_emision,
-                  NULL AS presupuesto_fecha_envio 
-                FROM ingresos t
-                JOIN devices d ON d.id = t.device_id
-                JOIN customers c ON c.id = d.customer_id
-                LEFT JOIN marcas b ON b.id = d.marca_id
-                LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE (
-                        q.estado IN ('emitido','enviado','presupuestado') 
-                        OR t.presupuesto_estado = 'presupuestado'
-                      )
-                  AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado','liberado', 'alquilado')
-                ORDER BY COALESCE(q.fecha_emitido, t.fecha_ingreso) ASC;
-                """,
-                ["taller"],
-            )
-            return Response(_fetchall_dicts(cur))
-
-
-class MarcarReparadoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["tecnico", "jefe", "jefe_veedor"])
-        _set_audit_user(request)
-        exec_void("UPDATE ingresos SET estado='reparado' WHERE id=%s", [ingreso_id])
-        return Response({"ok": True})
-
-
-class EntregarIngresoView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "jefe_veedor", "admin", "recepcion"])
-        data = request.data or {}
-        remito = (data.get("remito_salida") or "").strip()
-        if not remito:
-            return Response({"detail": "remito_salida requerido"}, status=400)
-        factura = (data.get("factura_numero") or "").strip() or None
-        fecha_entrega = data.get("fecha_entrega") or None
-        _set_audit_user(request)
-        with transaction.atomic():
-            with connection.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE ingresos
-                       SET estado='entregado',
-                           remito_salida=%s,
-                           factura_numero=%s,
-                           fecha_entrega=COALESCE(%s, now())
-                     WHERE id=%s
-                    """,
-                    [remito, factura, fecha_entrega, ingreso_id],
-                )
-        return Response({"ok": True})
-
-
-class ListosParaRetiroView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute("SELECT * FROM vw_listos_para_retiro ORDER BY id DESC;")
-            return Response(_fetchall_dicts(cur))
-
-
-class CustomersListView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute("SELECT id, razon_social FROM customers ORDER BY razon_social;")
-            return Response(_fetchall_dicts(cur))
-
-
-class GeneralPorClienteView(APIView):
-    permission_classes = [IsAuthenticated]
-    def get(self, request, customer_id):
-        with connection.cursor() as cur:
-            _set_audit_user(request)
-            cur.execute(
-                """
-                SELECT
-                  t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.ubicacion_id,
-                  q.fecha_emitido AS presupuesto_fecha_emision,
-                  COALESCE(loc.nombre,'') AS ubicacion_nombre,
-                  c.id AS customer_id, c.razon_social,
-                  d.numero_serie,
-                  COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo
-                FROM ingresos t
-                JOIN devices   d ON d.id = t.device_id
-                JOIN customers c ON c.id = d.customer_id
-                LEFT JOIN marcas b ON b.id = d.marca_id
-                LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE c.id = %s
-                  AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado', 'alquilado')
-                ORDER BY t.fecha_ingreso DESC;
-                """,
-                [customer_id, "taller"],
-            )
-            return Response(_fetchall_dicts(cur))
-
-
-# --------- M√©tricas (implementaci√≥n m√≠nima para compatibilidad) ---------
-
-class MetricasResumenView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        # Resumen vac√≠o por defecto para no romper el front
-        return Response({})
-
-
-class MetricasSeriesView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        payload = {
-            "yearly": [],
-            "monthly": [],
-            "by_tecnico_monthly": [],
-            "facturacion_tecnico_monthly": [],
-            "mo_tecnico_monthly": [],
-            "repuestos_tecnico_monthly": [],
-            "by_marca_monthly": [],
-            "facturacion_marca_monthly": [],
-            "mo_marca_monthly": [],
-            "repuestos_marca_monthly": [],
-        }
-        return Response(payload)
-
-
-class MetricasCalibracionView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        return Response({})
-
-
-class FeriadosView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        try:
-            rows = q("SELECT fecha, nombre FROM feriados ORDER BY fecha") or []
-            return Response(rows)
-        except Exception:
-            return Response([])
-
-    def post(self, request):
-        d = request.data or {}
-        fecha = (d.get("fecha") or "").strip()
-        nombre = (d.get("nombre") or "").strip()
-        if not fecha:
-            return Response({"detail": "fecha requerida"}, status=400)
-        try:
-            exec_void(
-                "INSERT INTO feriados(fecha, nombre) VALUES (%s,%s)",
-                [fecha, nombre or None],
-            )
-            return Response({"ok": True}, status=201)
-        except Exception:
-            return Response({"detail": "no se pudo guardar"}, status=400)
-
-    def delete(self, request):
-        fecha = (request.GET.get("fecha") or "").strip()
-        if not fecha:
-            return Response({"detail": "fecha requerida"}, status=400)
-        try:
-            exec_void("DELETE FROM feriados WHERE fecha=%s", [fecha])
-            return Response({"ok": True})
-        except Exception:
-            return Response({"detail": "no se pudo eliminar"}, status=400)
-
-
-class MetricasConfigView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-    def get(self, request):
-        # Config m√≠nima; extender seg√∫n necesidades reales
-        return Response({
-            "sla_diag_hrs": 24,
-            "sla_excluir_derivados_default": True,
-        })
     
 
 # Pie legal para correos (solo emails, no en el sitio)
 EMAIL_LEGAL_FOOTER = getattr(settings, "EMAIL_LEGAL_FOOTER", (
-    "La informaci√≥n de este correo es confidencial y concierne √∫nicamente a la persona a la que est√° dirigida. "
-    "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los t√©rminos que autoriza el art. 318 del CCyCN. "
-    "Si este mensaje no est√° dirigido a usted, por favor tenga presente que no tiene autorizaci√≥n para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que est√° dirigido, como as√≠¬≠ tampoco valerse del mismo. "
+    "La informaciÛn de este correo es confidencial y concierne ˙nicamente a la persona a la que est· dirigida. "
+    "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los tÈrminos que autoriza el art. 318 del CCyCN. "
+    "Si este mensaje no est· dirigido a usted, por favor tenga presente que no tiene autorizaciÛn para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que est· dirigido, como asÌ≠ tampoco valerse del mismo. "
     "Si recibe este correo por error, por favor, avise al remitente, luego de lo cual rogamos a usted destruya el mensaje original. "
-    "No se puede responsabilizar al remitente de ninguna forma por/o en relaci√≥n con alguna consecuencia y/o da√±o que resulte del apropiado y completo env√≠¬≠o y recepci√≥n del contenido de este correo."
+    "No se puede responsabilizar al remitente de ninguna forma por/o en relaciÛn con alguna consecuencia y/o daÒo que resulte del apropiado y completo envÌ≠o y recepciÛn del contenido de este correo."
 ))
 
 def _load_email_footer_text() -> str:
@@ -940,7 +243,7 @@ def _email_append_footer_text(txt: str) -> str:
 
 def _email_append_footer_html(html: str) -> str:
     try:
-        # Cargar HTML dedicado si est√° disponible
+        # Cargar HTML dedicado si est· disponible
         try:
             tpl = get_template("email/_legal_footer.html")
             footer_html = (tpl.render({}) or "").strip()
@@ -1000,11 +303,11 @@ def _validate_password_strength(password: str) -> None:
         raise ValidationError('La contrasena debe combinar mayusculas, minusculas, numeros o simbolos.')
 
 _DEPRECATED_ROLE_CHOICES = [
-    ("tecnico", "T√©cnico"),
-    ("admin", "Administraci√≥n"),
+    ("tecnico", "TÈcnico"),
+    ("admin", "AdministraciÛn"),
     ("jefe", "Jefe"),
     ("jefe_veedor", "Jefe veedor"),
-    ("recepcion", "Recepci√≥n"),
+    ("recepcion", "RecepciÛn"),
 ]
 _DEPRECATED_ROLE_KEYS = [r for r, _ in _DEPRECATED_ROLE_CHOICES]
 TWO = Decimal("0.01")
@@ -1025,12 +328,12 @@ def _set_audit_user(request):
         uid = str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", ""))
         role = getattr(request, "user_role", "")
         with connection.cursor() as cur:
-            # SET (no LOCAL) para compatibilidad fuera de transacciones expl√≠¬≠citas
+            # SET (no LOCAL) para compatibilidad fuera de transacciones explÌ≠citas
             cur.execute("SET app.user_id = %s;", [uid])
             cur.execute("SET app.user_role = %s;", [role])
 # ---------------------------------------
 # Utilidades DB
-_SUSPECT_UTF8 = ("√≠∆í", "√≠‚Äö", "√Ç¬§", "√Ç¬¢", "\ufffd")
+_SUSPECT_UTF8 = ("ÌÉ", "ÌÇ", "¬§", "¬¢", "\ufffd")
 
 
 def _fix_text_value(val):
@@ -1050,8 +353,8 @@ def _fix_text_value(val):
                 return val.encode("latin1").decode("utf-8")
             except Exception:
                 return val
-        # Fix common mojibake: strings containing '√É' or '√Ç'
-        if ("√É" in val) or ("√Ç" in val):
+        # Fix common mojibake: strings containing '√' or '¬'
+        if ("√" in val) or ("¬" in val):
             try:
                 fixed = val.encode("latin1").decode("utf-8")
                 return fixed
@@ -1085,7 +388,7 @@ def exec_returning(sql, params=None):
         return row[0] if row else None
 
 def last_insert_id():
-    """Devuelve el √∫ltimo ID autoincremental seg√∫n el motor actual."""
+    """Devuelve el ˙ltimo ID autoincremental seg˙n el motor actual."""
     if connection.vendor == "postgresql":
         row = q("SELECT LASTVAL() AS id", one=True)
     else:
@@ -1093,7 +396,7 @@ def last_insert_id():
     return row and row.get("id")
 
 # ------------------------------
-# Cat√°logo 'motivo' (ENUM) utils
+# Cat·logo 'motivo' (ENUM) utils
 # ------------------------------
 def _norm_txt(val: str) -> str:
     """Lowercase + remove diacritics; also runs through _fix_text_value."""
@@ -1108,8 +411,8 @@ def _norm_txt(val: str) -> str:
         return (val or "").strip().lower()
 
 def _get_motivo_enum_values() -> list:
-    """Obtiene los valores v√°lidos del ENUM ingresos.motivo para el motor actual.
-    Fallback defensivo si falla la introspecci√≥n.
+    """Obtiene los valores v·lidos del ENUM ingresos.motivo para el motor actual.
+    Fallback defensivo si falla la introspecciÛn.
     """
     try:
         if connection.vendor == "postgresql":
@@ -1148,16 +451,16 @@ def _get_motivo_enum_values() -> list:
     # Fallback estable (incluye acentos correctos)
     return [
         "urgente control",
-        "reparaci√≥n",
+        "reparaciÛn",
         "service preventivo",
         "baja alquiler",
-        "reparaci√≥n alquiler",
-        "devoluci√≥n demo",
+        "reparaciÛn alquiler",
+        "devoluciÛn demo",
         "otros",
     ]
 
 def _get_motivo_enum_values_raw() -> list:
-    """Devuelve las etiquetas del ENUM exactamente como est√°n en DB (sin correcci√≥n)."""
+    """Devuelve las etiquetas del ENUM exactamente como est·n en DB (sin correcciÛn)."""
     try:
         if connection.vendor == "postgresql":
             rows = q(
@@ -1315,7 +618,7 @@ def _frontend_url(request, path: str) -> str:
         return path
 
 # ======================================
-# M√©tricas helpers (business hours, fechas)
+# MÈtricas helpers (business hours, fechas)
 # ======================================
 
 WORKDAY_START_HOUR = int(os.getenv("WORKDAY_START_HOUR", "9"))
@@ -1571,29 +874,29 @@ def _calc_percentiles(values, percent_list=(50, 75, 90, 95)):
 
 _DEPRECATED_DEFAULT_LOCATION_NAMES = [
     "Taller",
-    "Estanter√≠¬≠a de Alquiler",
+    "EstanterÌ≠a de Alquiler",
     "Sarmiento",
-    "Dep√≥sito SEPID",
+    "DepÛsito SEPID",
     "Desguace",
 ]
 
 
 
 def ensure_default_locations():
-    # Usar nombres can√≥nicos corregidos (evita duplicados por encoding)
+    # Usar nombres canÛnicos corregidos (evita duplicados por encoding)
     
     NAMES = [
         "Taller",
-        "Estanter√≠¬≠a de Alquiler",
+        "EstanterÌ≠a de Alquiler",
         "Sarmiento",
-        "Dep√≥sito SEPID",
+        "DepÛsito SEPID",
         "Desguace",
     ]
     REMAPS = {
-        "estanteria alquileres": "Estanter√≠¬≠a de Alquiler",
-        "estanteria de alquiler": "Estanter√≠¬≠a de Alquiler",
-        "estanter√≠¬≠a de aluiler": "Estanter√≠¬≠a de Alquiler",
-        "estanteria de aluiler": "Estanter√≠¬≠a de Alquiler",
+        "estanteria alquileres": "EstanterÌ≠a de Alquiler",
+        "estanteria de alquiler": "EstanterÌ≠a de Alquiler",
+        "estanterÌ≠a de aluiler": "EstanterÌ≠a de Alquiler",
+        "estanteria de aluiler": "EstanterÌ≠a de Alquiler",
     }
     with connection.cursor() as cur:
         for alias, target in LOCATION_NAME_REMAPS.items():
@@ -1623,7 +926,7 @@ def _rol(request):
 def require_roles(request, roles):
     r = _rol(request)
     expanded = set(roles)
-    # Si el endpoint acepta "jefe", tambi√©n aceptar "jefe_veedor"
+    # Si el endpoint acepta "jefe", tambiÈn aceptar "jefe_veedor"
     if "jefe" in expanded:
         expanded.add("jefe_veedor")
     if r not in expanded:
@@ -1653,7 +956,7 @@ def _ensure_quote(ingreso_id: int):
             )
             return new_id
         except Exception:
-            # Si ya existe por condici√≥n de carrera, recuperar id existente
+            # Si ya existe por condiciÛn de carrera, recuperar id existente
             row2 = q("SELECT id FROM quotes WHERE ingreso_id=%s", [ingreso_id], one=True)
             if row2:
                 return row2["id"]
@@ -1694,29 +997,13 @@ class NuevoIngresoView(APIView):
         motivo_label_raw = _map_motivo_to_db_label(motivo_raw)
         if not motivo_label_raw:
             valid_motivos = _get_motivo_enum_values()
-            return Response({"detail": "motivo inv√°lido", "valid_values": valid_motivos}, status=400)
-        # Forzar que el valor a insertar sea EXACTAMENTE uno de los labels RAW del ENUM
-        # (evita problemas de encoding/diacr√≠ticos con MySQL ENUM)
-        raw_vals = _get_motivo_enum_values_raw() or []
-        if raw_vals:
-            # buscar coincidencia por normalizaci√≥n; si no, usar 'otros' si existe; si no, el primero
-            target = None
-            norm_target = _norm_txt(motivo_label_raw)
-            for rv in raw_vals:
-                if _norm_txt(rv) == norm_target:
-                    target = rv
-                    break
-            if not target:
-                # fallback seguro
-                target = next((x for x in raw_vals if _norm_txt(x) == _norm_txt('otros')), raw_vals[0])
-            motivo = target
-        else:
-            motivo = motivo_label_raw
-        # N√∫mero interno (MG): normalizar prefijo
+            return Response({"detail": "motivo inv·lido", "valid_values": valid_motivos}, status=400)
+        motivo = motivo_label_raw
+        # N˙mero interno (MG): normalizar prefijo
         numero_interno = (equipo.get("numero_interno") or "").strip()
         if numero_interno and not numero_interno.upper().startswith("MG"):
             numero_interno = "MG " + numero_interno
-        # Ubicaci√≥n: si no viene, buscar 'Taller'
+        # UbicaciÛn: si no viene, buscar 'Taller'
         ubicacion_id = data.get("ubicacion_id")
         if not ubicacion_id:
             t = q(
@@ -1725,7 +1012,7 @@ class NuevoIngresoView(APIView):
             )
             if not t:
                 return Response(
-                    {"detail": "No se encontr√≥ la ubicaci√≥n 'Taller' en el cat√°logo. Creala en 'locations'."},
+                    {"detail": "No se encontrÛ la ubicaciÛn 'Taller' en el cat·logo. Creala en 'locations'."},
                     status=400
                 )
             ubicacion_id = t["id"]
@@ -1771,9 +1058,9 @@ class NuevoIngresoView(APIView):
             return Response({"detail": "Cliente inexistente"}, status=400)
 
         if cliente.get("cod_empresa") and c["cod_empresa"] != cliente["cod_empresa"]:
-            return Response({"detail": "El c√≥digo no corresponde a la raz√≥n social seleccionada."}, status=400)
+            return Response({"detail": "El cÛdigo no corresponde a la razÛn social seleccionada."}, status=400)
         if cliente.get("razon_social") and c["razon_social"].lower() != cliente["razon_social"].lower():
-            return Response({"detail": "La raz√≥n social no corresponde al c√≥digo seleccionado."}, status=400)
+            return Response({"detail": "La razÛn social no corresponde al cÛdigo seleccionado."}, status=400)
 
         customer_id = c["id"]
 
@@ -1813,7 +1100,7 @@ class NuevoIngresoView(APIView):
                 existing_id = dup["id"]
                 return Response({"ok": True, "ingreso_id": existing_id, "os": os_label(existing_id), "existing": True})
 
-        # Importante: no reutilizar un equipo por n¬∞ de serie si pertenece a otro cliente.
+        # Importante: no reutilizar un equipo por n∞ de serie si pertenece a otro cliente.
         # Solo se reutiliza si coincide el numero_serie Y el customer_id resuelto arriba.
         dev = None
         if numero_serie:
@@ -1847,11 +1134,11 @@ class NuevoIngresoView(APIView):
         if numero_interno:
             exec_void("UPDATE devices SET n_de_control = NULLIF(%s,'') WHERE id=%s", [numero_interno, device_id])
 
-        # --- Garant√≠¬≠a de reparaci√≥n por N/S o N¬∞ interno (MG): √∫ltima fecha_entrega < 90 d√≠¬≠as ---
+        # --- GarantÌ≠a de reparaciÛn por N/S o N∞ interno (MG): ˙ltima fecha_entrega < 90 dÌ≠as ---
         
         auto_gar_rep = False
         last_out_candidates = []
-        # Por n√∫mero de serie
+        # Por n˙mero de serie
         if numero_serie:
             row_last_ns = q(
                 """
@@ -1867,7 +1154,7 @@ class NuevoIngresoView(APIView):
             last_out_ns = row_last_ns and row_last_ns.get("last_out")
             if last_out_ns:
                 last_out_candidates.append(last_out_ns)
-        # Por n√∫mero interno (MG)
+        # Por n˙mero interno (MG)
         if numero_interno:
             row_last_mg = q(
                 """
@@ -1889,24 +1176,24 @@ class NuevoIngresoView(APIView):
         garantia_rep_payload = bool(data.get("garantia_reparacion"))
         garantia_rep_final = garantia_rep_payload or auto_gar_rep
 
-        # ---- T√©cnico asignado ----
+        # ---- TÈcnico asignado ----
         # 1) viene en payload -> ok; 2) default por modelo -> ok
         tecnico_id = data.get("tecnico_id")
         if not tecnico_id:
             tdef = q("SELECT tecnico_id FROM models WHERE id=%s", [equipo["modelo_id"]], one=True)
             tecnico_id = tdef["tecnico_id"] if tdef else None
 
-        # √≠¬¢√Ç≈ì√Ç‚Ä¶ 3) fallback por marca si el modelo no tiene
+        # Ì¢¬ú¬Ö 3) fallback por marca si el modelo no tiene
         if not tecnico_id:
             tmarca = q("SELECT tecnico_id FROM marcas WHERE id=%s", [equipo["marca_id"]], one=True)
             tecnico_id = (tmarca or {}).get("tecnico_id")
 
-        # Validaci√≥n
+        # ValidaciÛn
         if tecnico_id:
             tech = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
          [tecnico_id], one=True)
             if not tech:
-                return Response({"detail": "T√©cnico inv√°lido o inactivo"}, status=400)
+                return Response({"detail": "TÈcnico inv·lido o inactivo"}, status=400)
 
         # Usuario
         uid = getattr(request.user, "id", None) or getattr(request, "user_id", None)
@@ -1914,16 +1201,6 @@ class NuevoIngresoView(APIView):
             return Response({"detail": "Usuario no autenticado"}, status=401)
         _set_audit_user(request)
         
-        # Validar definitivamente 'motivo' contra ENUM en MySQL para evitar 1265
-        if connection.vendor == "mysql":
-            raw_enum_vals = _get_motivo_enum_values_raw() or []
-            if raw_enum_vals and motivo not in raw_enum_vals:
-                return Response({
-                    "detail": "motivo inv√°lido para la base actual",
-                    "sent": motivo,
-                    "valid_values": raw_enum_vals,
-                }, status=400)
-
         # Ingreso (usa DEFAULT 'ingresado')
         equipo_variante = (request.data.get("equipo_variante") or "").strip() or None
         if connection.vendor == "postgresql":
@@ -1947,17 +1224,6 @@ class NuevoIngresoView(APIView):
                  garantia_rep_final]
             )
         else:
-            # MySQL: si la columna es ENUM, insertar por √≠ndice evita problemas de encoding
-            motivo_param = motivo
-            try:
-                raw_enum_vals = _get_motivo_enum_values_raw() or []
-                if raw_enum_vals:
-                    # √≠ndice 1-based seg√∫n orden de definici√≥n en ENUM
-                    enum_idx = next((i+1 for i,v in enumerate(raw_enum_vals) if _norm_txt(v) == _norm_txt(motivo)), None)
-                    if enum_idx is not None:
-                        motivo_param = int(enum_idx)
-            except Exception:
-                pass
             exec_void(
                 """
                 INSERT INTO ingresos (
@@ -1971,7 +1237,7 @@ class NuevoIngresoView(APIView):
                         NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''),
                         %s)
                 """,
-                [device_id, motivo_param, ubicacion_id, uid, tecnico_id,
+                [device_id, motivo, ubicacion_id, uid, tecnico_id,
                  informe_preliminar, accesorios_text, equipo_variante,
                  prop_nombre, prop_contacto, prop_doc,
                  garantia_rep_final]
@@ -1986,10 +1252,6 @@ class NuevoIngresoView(APIView):
         if fecha_ingreso_dt is not None:
             sets.append("fecha_ingreso = %s")
             params.append(fecha_ingreso_dt)
-        # Si no vino fecha_ingreso, aplicar NOW() por defecto (evita nulls)
-        if fecha_ingreso_dt is None:
-            sets.append("fecha_ingreso = COALESCE(fecha_ingreso, NOW())")
-
         if sets:
             params.append(ingreso_id)
             exec_void(
@@ -2023,7 +1285,7 @@ class GarantiaReparacionCheckView(APIView):
             return Response({"within_90_days": False, "last_ingreso": None})
 
         last_out_candidates = []
-        # Buscar por n√∫mero de serie
+        # Buscar por n˙mero de serie
         if ns:
             row_ns = q(
                 """
@@ -2040,7 +1302,7 @@ class GarantiaReparacionCheckView(APIView):
             if last_ns:
                 last_out_candidates.append(last_ns)
 
-        # Buscar por n√∫mero interno (MG)
+        # Buscar por n˙mero interno (MG)
         if mg:
             row_mg = q(
                 """
@@ -2066,7 +1328,7 @@ class GarantiaReparacionCheckView(APIView):
         # Mantenemos la clave last_ingreso por compatibilidad (aunque es fecha_entrega)
         return Response({"within_90_days": within, "last_ingreso": last_out})
 # ---------------------------------------
-# Cat√°logos
+# Cat·logos
 class CatalogoMarcasView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -2094,7 +1356,7 @@ class CatalogoMarcasView(APIView):
             try:
                 tecnico_id = int(tecnico_raw)
             except (TypeError, ValueError):
-                raise ValidationError("tecnico_id inv√°lido")
+                raise ValidationError("tecnico_id inv·lido")
 
         existing = q(
             "SELECT id FROM marcas WHERE LOWER(nombre)=LOWER(%s)",
@@ -2637,7 +1899,7 @@ class TiposEquipoView(APIView):
                 ) or []
                 return Response(rows)
 
-        # Fallback: tipos desde models.tipo_equipo + cat√°logo extendido suministrado
+        # Fallback: tipos desde models.tipo_equipo + cat·logo extendido suministrado
         internos = []
         try:
             internos = q(
@@ -2654,7 +1916,7 @@ class TiposEquipoView(APIView):
         usados_set = set()
 
         catalogo_fijo = []
-        # Combinar usados + cat√°logo fijo
+        # Combinar usados + cat·logo fijo
         internos_set = { (r.get('nombre') or '').strip().upper() for r in (internos or []) }
         nombres = sorted(internos_set)
         rows = [{ "id": i+1, "nombre": n } for i, n in enumerate(nombres)]
@@ -2688,7 +1950,7 @@ class ModeloTipoEquipoView(APIView):
              WHERE id=%s AND marca_id=%s
         """, [tipo_nombre, modelo_id, marca_id])
 
-        # Asegurar presencia del tipo en el cat√°logo por marca para evitar
+        # Asegurar presencia del tipo en el cat·logo por marca para evitar
         # inconsistencias en el front (series/variantes esperan esta fila)
         if tipo_nombre:
             # Buscar coincidencia case/acentos-insensitive y normalizar el nombre exacto
@@ -2703,7 +1965,7 @@ class ModeloTipoEquipoView(APIView):
                 one=True,
             )
             if row:
-                # Si existe con diferencias de acentuaci√≥n/espacios, actualizamos al texto elegido
+                # Si existe con diferencias de acentuaciÛn/espacios, actualizamos al texto elegido
                 if (row.get("nombre") or "").strip() != tipo_nombre:
                     exec_void("UPDATE marca_tipos_equipo SET nombre=%s WHERE id=%s", [tipo_nombre, row["id"]])
             else:
@@ -2750,7 +2012,7 @@ class CatalogoUbicacionesView(APIView):
         ensure_default_locations()
         return Response(q("SELECT id, nombre FROM locations ORDER BY id"))
 
-# Accesorios: cat√°logo y por ingreso
+# Accesorios: cat·logo y por ingreso
 class CatalogoAccesoriosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
@@ -2797,14 +2059,14 @@ class IngresoAccesoriosView(APIView):
                 one=True,
             )
             if not exists or not exists.get("n"):
-                raise ValidationError("Cat√°logo de accesorios no disponible en este entorno")
+                raise ValidationError("Cat·logo de accesorios no disponible en este entorno")
         try:
             acc_id = int(d.get("accesorio_id"))
         except (TypeError, ValueError):
             return Response({"detail": "accesorio_id requerido"}, status=400)
         acc = q("SELECT id FROM catalogo_accesorios WHERE id=%s AND activo", [acc_id], one=True)
         if not acc:
-            return Response({"detail": "accesorio inv√°lido"}, status=400)
+            return Response({"detail": "accesorio inv·lido"}, status=400)
         ref = (d.get("referencia") or "").strip() or None
         desc = (d.get("descripcion") or "").strip() or None
         _set_audit_user(request)
@@ -3112,13 +2374,13 @@ class IngresoMediaThumbnailView(APIView):
         return response
 
 
-# Derivaci√≥n a servicio externo
+# DerivaciÛn a servicio externo
 class DerivarIngresoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @transaction.atomic
     def post(self, request, ingreso_id: int):
-        # Auditor√≠¬≠a y control de permisos
+        # AuditorÌ≠a y control de permisos
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
         _set_audit_user(request)
 
@@ -3134,7 +2396,7 @@ class DerivarIngresoView(APIView):
 
         prov = q("SELECT id FROM proveedores_externos WHERE id=%s", [proveedor_id], one=True)
         if not prov:
-            return Response({"detail": "Proveedor externo inv√°lido"}, status=400)
+            return Response({"detail": "Proveedor externo inv·lido"}, status=400)
 
         # Insertar en el nuevo log
         exec_void(""" 
@@ -3163,12 +2425,12 @@ class DevolverDerivacionView(APIView):
             one=True,
         )
         if not row:
-            return Response({"detail": "Derivaci√≥n no encontrada"}, status=404)
+            return Response({"detail": "DerivaciÛn no encontrada"}, status=404)
 
         data = request.data or {}
         fecha = data.get("fecha_entrega") or None
 
-        # Marcar fecha de devoluci√≥n y estado
+        # Marcar fecha de devoluciÛn y estado
         exec_void(
             """
             UPDATE equipos_derivados
@@ -3179,13 +2441,13 @@ class DevolverDerivacionView(APIView):
             [fecha, deriv_id],
         )
 
-        # Tambi√©n reencolar el ingreso como 'ingresado' (solo si cambia)
+        # TambiÈn reencolar el ingreso como 'ingresado' (solo si cambia)
         exec_void("UPDATE ingresos SET estado='ingresado' WHERE id=%s AND estado <> 'ingresado'", [ingreso_id])
-        # Actualizar comentario del √∫ltimo evento de estado para dejar trazabilidad clara
+        # Actualizar comentario del ˙ltimo evento de estado para dejar trazabilidad clara
         try:
             exec_void(
                 """
-                UPDATE ingreso_events SET comentario='Devoluci√≥n de externo'
+                UPDATE ingreso_events SET comentario='DevoluciÛn de externo'
                 WHERE id = (
                   SELECT id FROM ingreso_events
                    WHERE ingreso_id=%s AND a_estado='ingresado'
@@ -3198,7 +2460,7 @@ class DevolverDerivacionView(APIView):
         except Exception:
             pass
 
-        # Enviar aviso al t√©cnico asignado (si tiene email)
+        # Enviar aviso al tÈcnico asignado (si tiene email)
         try:
             info = q(
                 """
@@ -3221,13 +2483,13 @@ class DevolverDerivacionView(APIView):
             )
             email = (info or {}).get("tech_email")
             if email:
-                subj = f"Aviso: equipo devuelto de externo ‚Äî OS #{ingreso_id}"
+                subj = f"Aviso: equipo devuelto de externo ó OS #{ingreso_id}"
                 txt = (
                     f"Hola {info.get('tech_nombre','')},\n\n"
-                    f"El equipo derivado fue devuelto del servicio externo y se reencol√≥ como 'ingresado'.\n\n"
+                    f"El equipo derivado fue devuelto del servicio externo y se reencolÛ como 'ingresado'.\n\n"
                     f"Cliente: {info.get('razon_social','')}\n"
                     f"Equipo: {info.get('marca','')} {info.get('modelo','')}\n"
-                    f"N√∫mero de serie: {info.get('numero_serie','')}\n\n"
+                    f"N˙mero de serie: {info.get('numero_serie','')}\n\n"
                     f"Hoja de servicio: /ingresos/{ingreso_id}\n"
                 )
                 try:
@@ -3268,7 +2530,7 @@ class UsuariosView(APIView):
         if not nombre or not email:
             raise ValidationError("Nombre y email son requeridos")
         if rol not in ROLE_KEYS:
-            raise ValidationError("Rol inv√°lido")
+            raise ValidationError("Rol inv·lido")
 
         existed = q("SELECT id FROM users WHERE email=%s", [email], one=True)
         if connection.vendor == "postgresql":
@@ -3289,12 +2551,12 @@ class UsuariosView(APIView):
                 [nombre, email, rol],
             )
 
-        # Enviar invitaci√≥n de bienvenida si es nuevo
+        # Enviar invitaciÛn de bienvenida si es nuevo
         if not existed:
             try:
                 user = q("SELECT id, nombre, email FROM users WHERE email=%s", [email], one=True)
                 if user:
-                    # Generar token y enviar correo de bienvenida con link para setear contrase√±a
+                    # Generar token y enviar correo de bienvenida con link para setear contraseÒa
                     token = secrets.token_urlsafe(32)
                     token_hash = hashlib.sha256(token.encode()).hexdigest()
                     exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
@@ -3309,17 +2571,17 @@ class UsuariosView(APIView):
                     )
                     base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
                     url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-                    subj = "Bienvenido a SEPID ‚Äî Configur√° tu contrase√±a"
+                    subj = "Bienvenido a SEPID ó Configur· tu contraseÒa"
                     txt  = (
                         f"Hola {user['nombre']},\n\n"
                         f"Te damos la bienvenida al sistema de reparaciones de SEPID. "
-                        f"Us√° este enlace para establecer tu contrase√±a (v√°lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+                        f"Us· este enlace para establecer tu contraseÒa (v·lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
                         f"Si no esperabas este correo, ignoralo."
                     )
                     html = f"""
                         <p>Hola {user['nombre']},</p>
                         <p>Bienvenido al sistema de reparaciones de <strong>SEPID</strong>.</p>
-                        <p>Us√° este enlace para establecer tu contrase√±a (v√°lido {TOKEN_TTL_MIN} minutos):</p>
+                        <p>Us· este enlace para establecer tu contraseÒa (v·lido {TOKEN_TTL_MIN} minutos):</p>
                         <p><a href="{url}">{url}</a></p>
                         <p>Si no esperabas este correo, ignoralo.</p>
                     """
@@ -3346,14 +2608,14 @@ class UsuarioActivoView(APIView):
 class UsuarioResetPassView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, uid):
-        # Nuevo comportamiento m√°s seguro: env√≠¬≠a un enlace por email para que el usuario
-        # establezca (o reestablezca) su contrase√±a. No se permite fijarla directamente.
+        # Nuevo comportamiento m·s seguro: envÌ≠a un enlace por email para que el usuario
+        # establezca (o reestablezca) su contraseÒa. No se permite fijarla directamente.
         require_jefe(request)
         user = q("SELECT id, email, nombre, activo FROM users WHERE id=%s", [uid], one=True)
         if not user or not user.get("activo"):
             return Response({"detail": "Usuario inexistente o inactivo"}, status=404)
 
-        # Generar token v√°lido y enviarlo por mail
+        # Generar token v·lido y enviarlo por mail
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
@@ -3368,19 +2630,19 @@ class UsuarioResetPassView(APIView):
         )
         base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
         url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-        subj = "SEPID ‚Äî Enlace para establecer tu contrase√±a"
+        subj = "SEPID ó Enlace para establecer tu contraseÒa"
         txt  = (
             f"Hola {user['nombre']},\n\n"
-            f"Solicitaron un enlace para establecer o restablecer tu contrase√±a. "
-            f"Us√° este enlace (v√°lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
-            f"Si no fuiste vos, ignor√° este correo."
+            f"Solicitaron un enlace para establecer o restablecer tu contraseÒa. "
+            f"Us· este enlace (v·lido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+            f"Si no fuiste vos, ignor· este correo."
         )
         html = f"""
             <p>Hola {user['nombre']},</p>
-            <p>Solicitaron un enlace para establecer o restablecer tu contrase√±a.</p>
-            <p>Us√° este enlace (v√°lido {TOKEN_TTL_MIN} minutos):</p>
+            <p>Solicitaron un enlace para establecer o restablecer tu contraseÒa.</p>
+            <p>Us· este enlace (v·lido {TOKEN_TTL_MIN} minutos):</p>
             <p><a href="{url}">{url}</a></p>
-            <p>Si no fuiste vos, ignor√° este correo.</p>
+            <p>Si no fuiste vos, ignor· este correo.</p>
         """
         try:
             txt = _email_append_footer_text(txt)
@@ -3402,7 +2664,7 @@ class UsuarioRolePermView(APIView):
         if rol is not None:
             r = (rol or "").strip().lower()
             if r not in ROLE_KEYS:
-                raise ValidationError("Rol inv√°lido")
+                raise ValidationError("Rol inv·lido")
             sets.append("rol = %(rol)s")
             params["rol"] = r
         if perm_ing is not None:
@@ -3431,10 +2693,10 @@ class UsuarioDeleteView(APIView):
                 # Borrar el usuario
                 exec_void("DELETE FROM users WHERE id = %s", [uid])
         except IntegrityError:
-            # A√∫n queda alguna referencia (otra FK en otra tabla)
+            # A˙n queda alguna referencia (otra FK en otra tabla)
             return Response(
-                {"detail": "No se pudo eliminar: el usuario est√° referenciado por otros registros. "
-                           "Reasign√°/desasign√° esas referencias o desactiv√° el usuario."},
+                {"detail": "No se pudo eliminar: el usuario est· referenciado por otros registros. "
+                           "Reasign·/desasign· esas referencias o desactiv· el usuario."},
                 status=409,
             )
         return Response({"ok": True})
@@ -3445,7 +2707,7 @@ class ClientesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor", "recepcion"])
-        # Compatibilidad: usar SELECT * para no romper si la DB a√∫n no tiene columnas nuevas (telefono_2, email)
+        # Compatibilidad: usar SELECT * para no romper si la DB a˙n no tiene columnas nuevas (telefono_2, email)
         return Response(q("SELECT * FROM customers ORDER BY razon_social"))
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
@@ -3509,7 +2771,7 @@ class ModeloTecnicoView(APIView):
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
 
-            if not ok: raise ValidationError("T√©cnico inv√°lido")
+            if not ok: raise ValidationError("TÈcnico inv·lido")
         q("UPDATE models SET tecnico_id=%s WHERE id=%s AND marca_id=%s", [tecnico_id, mid, bid])
         return Response({"ok": True, "tecnico_id": tecnico_id})
 
@@ -3522,7 +2784,7 @@ class MarcaTecnicoView(APIView):
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
 
-            if not ok: raise ValidationError("T√©cnico inv√°lido")
+            if not ok: raise ValidationError("TÈcnico inv·lido")
         q("UPDATE marcas SET tecnico_id=%s WHERE id=%s", [tecnico_id, bid])
         return Response({"ok": True, "tecnico_id": tecnico_id})
 
@@ -3565,7 +2827,7 @@ class IngresoAsignarTecnicoView(APIView):
         ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
         if not ok:
-            return Response({"detail": "T√©cnico inv√°lido"}, status=400)
+            return Response({"detail": "TÈcnico inv·lido"}, status=400)
         q("UPDATE ingresos SET asignado_a=%s WHERE id=%s", [tecnico_id, ingreso_id])
         return Response({"ok": True, "asignado_a": tecnico_id})
 
@@ -3582,7 +2844,7 @@ class MarcaDeleteView(APIView):
                     "detail": "No se puede eliminar la marca: tiene modelos asociados. Elimine o reasigne los modelos primero.",
                     "models_count": int(row.get("cnt") or 0),
                 }, status=409)
-            # Intento de borrado (protecci√≥n ante condiciones de carrera)
+            # Intento de borrado (protecciÛn ante condiciones de carrera)
             exec_void("DELETE FROM marcas WHERE id = %s", [bid])
             return Response({"ok": True})
         except IntegrityError:
@@ -3639,7 +2901,7 @@ class ModelosPorMarcaView(APIView):
                 one=True,
             )
             if not ok:
-                raise ValidationError("T√©cnico inv√°lido")
+                raise ValidationError("TÈcnico inv·lido")
 
         if connection.vendor == "postgresql":
             q("""
@@ -3663,7 +2925,7 @@ class ModelosPorMarcaView(APIView):
                 [bid, n, tecnico_id, tipo_equipo, variante],
             )
 
-        # Si se carg√≥ tipo_equipo al crear/actualizar, asegurarlo en marca_tipos_equipo
+        # Si se cargÛ tipo_equipo al crear/actualizar, asegurarlo en marca_tipos_equipo
         if tipo_equipo:
             if connection.vendor == "postgresql":
                 q(
@@ -3740,16 +3002,16 @@ class ModelMergeView(APIView):
         if src["marca_id"] != dst["marca_id"]:
             return Response({"detail": "Solo se puede unificar dentro de la misma marca"}, status=409)
 
-        # Reglas: unificar solo si ambos tienen mismo tipo_equipo no vac√≠¬≠o
+        # Reglas: unificar solo si ambos tienen mismo tipo_equipo no vacÌ≠o
         tipo_a = (src.get("tipo") or "").strip()
         tipo_b = (dst.get("tipo") or "").strip()
         if not tipo_a or not tipo_b or tipo_a.lower() != tipo_b.lower():
-            return Response({"detail": "No se puede unificar: los tipos de equipo no coinciden o est√°n vac√≠¬≠os"}, status=409)
+            return Response({"detail": "No se puede unificar: los tipos de equipo no coinciden o est·n vacÌ≠os"}, status=409)
 
         with transaction.atomic():
             # mover devices al target
             exec_void("UPDATE devices SET model_id=%s WHERE model_id=%s", [target_id, source_id])
-            # eliminar modelo source (cascadear√° en model_hierarchy si corresponde)
+            # eliminar modelo source (cascadear· en model_hierarchy si corresponde)
             exec_void("DELETE FROM models WHERE id=%s", [source_id])
 
         moved = q("SELECT COUNT(*) AS cnt FROM devices WHERE model_id=%s", [target_id], one=True)
@@ -3776,7 +3038,7 @@ class MarcaMergeView(APIView):
             return Response({"detail": "marca source/target inexistente"}, status=404)
 
         with transaction.atomic():
-            # Para cada modelo de la marca source, si existe un hom√≥nimo en target, unificar devices y borrar; si no, mover el modelo a target.
+            # Para cada modelo de la marca source, si existe un homÛnimo en target, unificar devices y borrar; si no, mover el modelo a target.
             modelos = q("SELECT id, nombre, COALESCE(TRIM(tipo_equipo),'' ) AS tipo FROM models WHERE marca_id=%s", [source_id]) or []
             for mm in modelos:
                 dup = q(
@@ -3793,7 +3055,7 @@ class MarcaMergeView(APIView):
             # Mover devices con marca_id directo
             exec_void("UPDATE devices SET marca_id=%s WHERE marca_id=%s", [target_id, source_id])
 
-            # Borrar marca source (cascada en tablas jer√°rquicas si aplica)
+            # Borrar marca source (cascada en tablas jer·rquicas si aplica)
             exec_void("DELETE FROM marcas WHERE id=%s", [source_id])
 
         return Response({"ok": True, "target_id": target_id})
@@ -3819,7 +3081,7 @@ class MarcaDeleteCascadeView(APIView):
                 # Borrar modelos de la marca
                 exec_void("DELETE FROM models WHERE marca_id = %s", [bid])
 
-                # Las tablas jer√°rquicas tienen ON DELETE CASCADE por marca/modelo
+                # Las tablas jer·rquicas tienen ON DELETE CASCADE por marca/modelo
                 # Borrar marca
                 exec_void("DELETE FROM marcas WHERE id = %s", [bid])
             return Response({"ok": True})
@@ -4223,20 +3485,6 @@ class IngresoDetalleView(APIView):
         if not row:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
         row["os"] = os_label(row["id"])
-        # Compat front: si no hay fecha_creacion, usar fecha_ingreso
-        if not row.get("fecha_creacion"):
-            row["fecha_creacion"] = row.get("fecha_ingreso")
-        # Compat front: exponer tipo_equipo_nombre si no viene
-        if "tipo_equipo_nombre" not in row:
-            row["tipo_equipo_nombre"] = row.get("tipo_equipo") or ""
-        # Normalizar fecha_servicio: si vino como DATE, convertir a datetime para el serializer
-        try:
-            from datetime import date as _date, datetime as _dt
-            fs = row.get("fecha_servicio")
-            if fs and isinstance(fs, _date) and not isinstance(fs, _dt):
-                row["fecha_servicio"] = _dt(fs.year, fs.month, fs.day, 0, 0, 0, tzinfo=None)
-        except Exception:
-            pass
         accs = q("""
           SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
           FROM ingreso_accesorios ia
@@ -4251,17 +3499,17 @@ class IngresoDetalleView(APIView):
         # Roles con acceso
         ROL_EDIT_DIAG = {"tecnico", "jefe", "jefe_veedor", "admin"}
         ROL_EDIT_UBIC = {"tecnico", "jefe", "jefe_veedor", "admin", "recepcion"}
-        ROL_EDIT_BASICS = {"jefe", "jefe_veedor"}  # edici√≥n de datos de cliente/equipo
+        ROL_EDIT_BASICS = {"jefe", "jefe_veedor"}  # ediciÛn de datos de cliente/equipo
 
         rol = _rol(request)
         d = request.data or {}
 
-        # Setear variables de auditor√≠¬≠a en la sesi√≥n DB (para triggers audit.*)
+        # Setear variables de auditorÌ≠a en la sesiÛn DB (para triggers audit.*)
         _set_audit_user(request)
         if connection.vendor == "postgresql":
             exec_void("SET LOCAL app.ingreso_id = %s", [ingreso_id])
 
-        # Estado y asignaci√≥n actuales
+        # Estado y asignaciÛn actuales
         row_est = q("SELECT estado, asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row_est:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
@@ -4270,30 +3518,30 @@ class IngresoDetalleView(APIView):
 
         sets_no_estado, params_no_estado = [], []
 
-        # --- Ubicaci√≥n ---
+        # --- UbicaciÛn ---
         if "ubicacion_id" in d:
             if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado para modificar ubicaci√≥n")
+                raise PermissionDenied("No autorizado para modificar ubicaciÛn")
             ubicacion_id = d.get("ubicacion_id")
             if not ubicacion_id:
                 raise ValidationError("ubicacion_id requerido")
             u = q("SELECT id FROM locations WHERE id=%s", [ubicacion_id], one=True)
             if not u:
-                raise ValidationError("Ubicaci√≥n inexistente")
+                raise ValidationError("UbicaciÛn inexistente")
             sets_no_estado.append("ubicacion_id=%s")
             params_no_estado.append(ubicacion_id)
 
-        # --- Diagn√≥stico (texto y se√±ales asociadas) ---
-        # diag_present ser√° verdadero si el t√©cnico carg√≥ al menos uno de:
-        #   - descripci√≥n del problema (no vac√≠¬≠a)
-        #   - trabajos realizados (no vac√≠¬≠o)
-        #   - fecha de servicio (v√°lida y no vac√≠¬≠a)
+        # --- DiagnÛstico (texto y seÒales asociadas) ---
+        # diag_present ser· verdadero si el tÈcnico cargÛ al menos uno de:
+        #   - descripciÛn del problema (no vacÌ≠a)
+        #   - trabajos realizados (no vacÌ≠o)
+        #   - fecha de servicio (v·lida y no vacÌ≠a)
         desc_present = False
         trab_present = False
         fecha_present = False
         if "descripcion_problema" in d:
             if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado para modificar diagn√≥stico")
+                raise PermissionDenied("No autorizado para modificar diagnÛstico")
             desc = (d.get("descripcion_problema") or "").strip()
             desc_present = bool(desc)
             sets_no_estado.append("descripcion_problema=%s")
@@ -4324,7 +3572,7 @@ class IngresoDetalleView(APIView):
             else:
                 dt = parse_datetime(val)
                 if not dt:
-                    raise ValidationError("fecha_servicio inv√°lida")
+                    raise ValidationError("fecha_servicio inv·lida")
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
                 sets_no_estado.append("fecha_servicio=%s")
@@ -4348,28 +3596,28 @@ class IngresoDetalleView(APIView):
                 else:
                     dt = parse_datetime(val)
                     if not dt:
-                        raise ValidationError("fecha_entrega inv√°lida")
+                        raise ValidationError("fecha_entrega inv·lida")
                     if timezone.is_naive(dt):
                         dt = timezone.make_aware(dt, timezone.get_current_timezone())
                     sets_no_estado.append("fecha_entrega=%s")
                     params_no_estado.append(dt)
 
         # --- NUEVOS CAMPOS ---
-        # Garant√≠¬≠a de reparaci√≥n
+        # GarantÌ≠a de reparaciÛn
         if "garantia_reparacion" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("garantia_reparacion=%s")
             params_no_estado.append(bool(d.get("garantia_reparacion")))
 
-        # Faja de garant√≠¬≠a
+        # Faja de garantÌ≠a
         if "faja_garantia" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("faja_garantia = NULLIF(%s,'')")
             params_no_estado.append((d.get("faja_garantia") or "").strip())
 
-        # N√∫mero interno MG -> devices.n_de_control
+        # N˙mero interno MG -> devices.n_de_control
         if "numero_interno" in d:
             if rol not in ROL_EDIT_DIAG:
                 raise PermissionDenied("No autorizado")
@@ -4427,7 +3675,7 @@ class IngresoDetalleView(APIView):
                     params,
                 )
 
-        # Equipo: N¬∞ de serie
+        # Equipo: N∞ de serie
         if "numero_serie" in d:
             if rol not in ROL_EDIT_BASICS:
                 raise PermissionDenied("No autorizado para editar N/S")
@@ -4457,7 +3705,7 @@ class IngresoDetalleView(APIView):
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("alquilado=%s")
             params_no_estado.append(bool(d.get("alquilado")))
-            # Si se marc√≥ como alquilado, reflejar en el estado del equipo
+            # Si se marcÛ como alquilado, reflejar en el estado del equipo
             try:
                 if bool(d.get("alquilado")):
                     sets_no_estado.append("estado='alquilado'")
@@ -4479,15 +3727,15 @@ class IngresoDetalleView(APIView):
             sets_no_estado.append("alquiler_fecha=%s")
             params_no_estado.append(d.get("alquiler_fecha") or None)
 
-        # --- Transici√≥n de estado ---
-        # Antes solo se promov√≠¬≠a con descripci√≥n. Ahora tambi√©n con trabajos o fecha de servicio.
+        # --- TransiciÛn de estado ---
+        # Antes solo se promovÌ≠a con descripciÛn. Ahora tambiÈn con trabajos o fecha de servicio.
         diag_present = desc_present or trab_present or fecha_present
         promote_from_ingresado = diag_present and estado_actual == "ingresado"
         promote_from_asignado  = diag_present and estado_actual == "asignado"
 
         if promote_from_ingresado:
             if not asignado_a:
-                raise ValidationError("Antes de diagnosticar, asign√° un t√©cnico al ingreso.")
+                raise ValidationError("Antes de diagnosticar, asign· un tÈcnico al ingreso.")
             with transaction.atomic():
                 if sets_no_estado:
                     params_tmp = list(params_no_estado) + [ingreso_id]
@@ -4566,7 +3814,7 @@ class CerrarReparacionView(APIView):
         require_roles(request, ["jefe","jefe_veedor","admin"])
         r = (request.data or {}).get("resolucion")
         if r not in ("reparado","no_reparado","no_se_encontro_falla","presupuesto_rechazado"):
-            return Response({"detail": "resoluci√≥n inv√°lida"}, status=400)
+            return Response({"detail": "resoluciÛn inv·lida"}, status=400)
 
         with connection.cursor() as cur:
             _set_audit_user(request)
@@ -4587,7 +3835,7 @@ class RemitoSalidaPdfView(APIView):
         if not cur_row:
             return Response(status=404)
         if not cur_row["resolucion"] and cur_row["estado"] != 'liberado':
-            return Response({"detail": "No se puede liberar sin resoluci√≥n"}, status=409)
+            return Response({"detail": "No se puede liberar sin resoluciÛn"}, status=409)
 
         exec_void("""
           UPDATE ingresos
@@ -4603,7 +3851,7 @@ class RemitoSalidaPdfView(APIView):
 class IngresoHistorialView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
-        # Solo lectura para roles de supervisi√≥n/administraci√≥n
+        # Solo lectura para roles de supervisiÛn/administraciÛn
         require_roles(request, ["jefe", "jefe_veedor", "admin"])
         if connection.vendor == "postgresql":
             rows = q(
@@ -4791,6 +4039,7 @@ class TiposEquipoView(APIView):
         exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(TRIM(nombre))=UPPER(TRIM(%s))", [nombre])
         exec_void("UPDATE models SET tipo_equipo=NULL WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))", [nombre])
         return Response({"ok": True})
+
 
 
 

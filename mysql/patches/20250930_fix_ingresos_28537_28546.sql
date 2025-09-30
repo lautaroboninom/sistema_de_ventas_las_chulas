@@ -33,3 +33,4 @@ UPDATE ingresos SET accesorios = 'TARJETA SD, SIN CAMARA HUMIDIFICADORA' WHERE i
 UPDATE ingresos SET accesorios = 'FUENTE DE ALIMENTACION NS: 22500204056' WHERE id = 28541 AND (accesorios IS NULL OR TRIM(accesorios) = '');
 
 COMMIT;
+
