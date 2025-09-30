@@ -4,7 +4,7 @@ from .views import (
     # salud / login
     ping, LoginView, LogoutView, SessionView, ForgotPasswordView, ResetPasswordView,
 
-    # flujo ingresos / tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©cnico
+    # flujo ingresos / técnico
     MisPendientesView,
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     PendientesPresupuestoView, PresupuestadosView,
@@ -16,17 +16,17 @@ from .views import (
     AprobadosParaRepararView, AprobadosYReparadosView, LiberadosView,
     GeneralEquiposView, GeneralPorClienteView,
 
-    # ingresos nuevos + derivaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n
+    # ingresos nuevos + derivación
     NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView, DevolverDerivacionView,
     
 
-    # catÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡logos
+    # catálogos
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
     CatalogoMarcasView, CatalogoModelosView,
     ModeloVarianteView,
-    # catÃƒÆ’Ã‚Â¡logo jerÃƒÆ’Ã‚Â¡rquico marca/tipo/modelo/variante
+    # catálogo jerárquico marca/tipo/modelo/variante
     CatalogoTiposView, CatalogoModelosDeTipoView, CatalogoVariantesView, CatalogoMarcasPorTipoView,
     # Tipos equipo general (ABM)
     TiposEquipoView,  # tipos equipo (sugerencias + ABM)
@@ -35,7 +35,7 @@ from .views import (
     CatalogoTiposCreateView, CatalogoTipoDetailView,
     CatalogoModelosCreateView, CatalogoModeloDetailView, CatalogoVariantesCreateView, CatalogoVarianteDetailView,
 
-    # administraciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de usuarios
+    # administración de usuarios
     UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
     CatalogoRolesView, CerrarReparacionView,
 
@@ -68,7 +68,7 @@ urlpatterns = [
     path("auth/forgot/", ForgotPasswordView.as_view()),
     path("auth/reset/", ResetPasswordView.as_view()),
 
-    # tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©cnico / ingresos (acciones)
+    # técnico / ingresos (acciones)
     path("tecnico/mis-pendientes/", MisPendientesView.as_view()),
     path("ingresos/<int:ingreso_id>/reparado/", MarcarReparadoView.as_view()),
     path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
@@ -87,7 +87,7 @@ urlpatterns = [
     path("ingresos/liberados/", LiberadosView.as_view()),
     path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
 
-    # ALIAS de compatibilidad con el front (si existÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­an)
+    # ALIAS de compatibilidad con el front (si existían)
     path("ingresos/aprobados/", AprobadosParaRepararView.as_view()),
     path("ingresos/reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
@@ -99,7 +99,7 @@ urlpatterns = [
     # utilidades
     path("equipos/garantia-reparacion/", GarantiaReparacionCheckView.as_view()),
 
-    # ingresos nuevos / derivaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n
+    # ingresos nuevos / derivación
     path("ingresos/nuevo/", NuevoIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivar/", DerivarIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/", DerivacionesPorIngresoView.as_view()),
@@ -158,7 +158,7 @@ urlpatterns = [
 
 
 
-    # (si usÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s los endpoints para asignar tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©cnico y setear tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©cnico de marca/modelo)
+    # (si usás los endpoints para asignar técnico y setear técnico de marca/modelo)
     path('catalogos/marcas/<int:bid>/tecnico/', MarcaTecnicoView.as_view()),
     path('catalogos/marcas/<int:bid>/tecnico/aplicar-a-modelos/', MarcaAplicarTecnicoAModelosView.as_view()),
     path('catalogos/marcas/<int:bid>/modelos/<int:mid>/tecnico/', ModeloTecnicoView.as_view()),
@@ -172,18 +172,18 @@ urlpatterns = [
     path("quotes/<int:ingreso_id>/pdf/", QuotePdfView.as_view()),
     path("quotes/<int:ingreso_id>/anular/", AnularPresupuestoView.as_view()),
 
-    # tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©cnico / ingresos (acciones)
+    # técnico / ingresos (acciones)
 
 
-    path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‹Å“Ãƒâ€¹Ã¢â‚¬Â  nuevo
+    path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # remito de salida (nuevo)
     path("ingresos/<int:ingreso_id>/cerrar/", CerrarReparacionView.as_view()),
 
     # tipos de equipo
-    # - listado general (sugerencias para asignaciÃƒÆ’Ã‚Â³n): plural "catalogos"
-    path("catalogos/tipos-equipo/", TiposEquipoView.as_view()),
+    # tipos de equipo
+    # - listado general (sugerencias para asignación): plural "catalogos"
 
     # - ABM catÃƒÂ¡logo general (no por marca)
-    # - ABM por marca (tabla marca_tipos_equipo)
+    # - ABM catálogo general (no por marca)
     path("catalogo/tipos-equipo/", CatalogoTiposCreateView.as_view()),
     path("catalogo/tipos-equipo/<int:tipo_id>/", CatalogoTipoDetailView.as_view()),
     # - ABM de series/modelos y variantes
@@ -191,7 +191,7 @@ urlpatterns = [
     path("catalogo/modelos/<int:serie_id>/", CatalogoModeloDetailView.as_view()),
     path("catalogo/variantes/", CatalogoVariantesCreateView.as_view()),
     path("catalogo/variantes/<int:variante_id>/", CatalogoVarianteDetailView.as_view()),
-    # asignaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de tipo de equipo al modelo (alias singular/plural por compat)
+    # asignación de tipo de equipo al modelo (alias singular/plural por compat)
     path("catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
     path("catalogo/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
 
@@ -199,8 +199,8 @@ urlpatterns = [
 
     # historial de cambios por ingreso
     path("ingresos/<int:ingreso_id>/historial/", IngresoHistorialView.as_view()),
+    # historial de cambios por ingreso
     # métricas
-    path("metricas/resumen/", MetricasResumenView.as_view()),
     path("metricas/series/", MetricasSeriesView.as_view()),
     path("metricas/calibracion/", MetricasCalibracionView.as_view()),
     path("metricas/feriados/", FeriadosView.as_view()),
