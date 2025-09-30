@@ -54,7 +54,7 @@ from .views import (
 
     QuoteDetailView, QuoteItemsView, QuoteItemDetailView, QuoteResumenView, AnularPresupuestoView,
     RemitoSalidaPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
-    MetricasResumenView, MetricasSeriesView, MetricasCalibracionView, FeriadosView,
+    MetricasResumenView, MetricasSeriesView, MetricasCalibracionView, FeriadosView, MetricasConfigView,
 )
 from .motivos_view import CatalogoMotivosView
 
@@ -204,6 +204,7 @@ urlpatterns = [
     path("metricas/series/", MetricasSeriesView.as_view()),
     path("metricas/calibracion/", MetricasCalibracionView.as_view()),
     path("metricas/feriados/", FeriadosView.as_view()),
+    path("metricas/config/", MetricasConfigView.as_view()),
 ]
 
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { getMetricasResumen, getMetricasSeries, getTecnicos, getMarcas, getTiposEquipo } from "../lib/api";
+import { getMetricasResumen, getMetricasSeries, getTecnicos, getMarcas, getTiposEquipo, getMetricasCalibracion } from "../lib/api";
 
 function formatPct(n) {
   if (n == null || isNaN(n)) return "-";
@@ -357,6 +357,7 @@ export default function Metricas() {
           <button onClick={exportDetalleTecnicoMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por técnico</button>
           <button onClick={exportDetalleMarcaMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por marca</button>
           <button onClick={exportDetalleTipoMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por tipo</button>
+          <button onClick={exportCalibracionCSV} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar calibración (CSV)</button>
         </div>
       </div>
 

@@ -4,6 +4,8 @@ import unicodedata
 import os
 import secrets, hashlib, datetime as dt
 import logging
+import json
+from urllib import request as urlrequest
 from urllib.parse import quote
 from django.conf import settings
 from django.core.cache import cache
@@ -460,24 +462,92 @@ def _clamp_to_work_window_backward(ts: dt.datetime) -> dt.datetime:
     return d
 
 
+def _holidays_country():
+    try:
+        return getattr(settings, 'HOLIDAYS_COUNTRY', None) or os.getenv('HOLIDAYS_COUNTRY', 'AR')
+    except Exception:
+        return 'AR'
+
+
+def _parse_extra_holidays_env():
+    s = os.getenv('HOLIDAYS_EXTRA_DATES', '')
+    out = set()
+    if not s:
+        return out
+    for part in s.split(','):
+        part = (part or '').strip()
+        if not part:
+            continue
+        date_s = part.split(':', 1)[0].strip()
+        try:
+            y, m, d = [int(x) for x in date_s.split('-')]
+            out.add(dt.date(y, m, d))
+        except Exception:
+            continue
+    return out
+
+
+def _fetch_nager_year(country: str, year: int):
+    url = f"https://date.nager.at/api/v3/PublicHolidays/{year}/{country}"
+    try:
+        with urlrequest.urlopen(url, timeout=8) as resp:
+            if getattr(resp, 'status', 200) != 200:
+                return []
+            data = json.loads(resp.read().decode('utf-8'))
+            dates = []
+            for it in data or []:
+                ds = (it.get('date') or '').strip()  # 'YYYY-MM-DD'
+                try:
+                    y, m, d = [int(x) for x in ds.split('-')]
+                    dates.append(dt.date(y, m, d))
+                except Exception:
+                    continue
+            return dates
+    except Exception:
+        return []
+
+
+def _get_year_holidays(country: str, year: int):
+    ck = f"holidays:year:{country}:{year}"
+    cached = cache.get(ck)
+    if cached is not None:
+        return cached
+    dates = set(_fetch_nager_year(country, year))
+    # Fallback/overlay con DB local (si existe)
+    try:
+        rows = q("SELECT fecha FROM feriados WHERE YEAR(fecha)=%s", [year]) or []
+        dates |= {r.get('fecha') for r in rows if r.get('fecha')}
+    except Exception:
+        pass
+    # Extras por ENV
+    dates |= _parse_extra_holidays_env()
+    cache.set(ck, dates, 12 * 3600)
+    return dates
+
+
 def _holidays_between(d1: dt.date, d2: dt.date):
     try:
-        k = f"holidays:{d1.isoformat()}:{d2.isoformat()}"
+        country = _holidays_country()
+        k = f"holidays:{country}:{d1.isoformat()}:{d2.isoformat()}"
         cached = cache.get(k)
         if cached is not None:
             return cached
-        rows = q(
-            "SELECT fecha FROM feriados WHERE fecha BETWEEN %s AND %s",
-            [d1, d2],
-        ) or []
-        s = {r.get("fecha") for r in rows if r.get("fecha")}
-        cache.set(k, s, 3600)
-        return s
+        cur = d1
+        out = set()
+        seen_years = set()
+        while cur <= d2:
+            if cur.year not in seen_years:
+                out |= _get_year_holidays(country, cur.year)
+                seen_years.add(cur.year)
+            cur += dt.timedelta(days=1)
+        out = {d for d in out if d1 <= d <= d2}
+        cache.set(k, out, 6 * 3600)
+        return out
     except Exception:
         return set()
 
 
-def business_minutes_between(start: dt.datetime, end: dt.datetime, holidays: set | None = None) -> int:
+def business_minutes_between(start, end, holidays=None):
     if not start or not end:
         return 0
     s = _clamp_to_work_window_forward(_tz_aware(start))
@@ -1978,6 +2048,28 @@ class FeriadosView(APIView):
             pass
         return Response({"ok": True})
 
+
+class MetricasConfigView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        require_roles(request, ["jefe"])  # solo Jefe
+        try:
+            work_start = int(os.getenv("WORKDAY_START_HOUR", "9"))
+            work_end = int(os.getenv("WORKDAY_END_HOUR", "17"))
+            workdays_env = os.getenv("WORKDAYS", "0,1,2,3,4")
+            workdays = [int(x) for x in workdays_env.split(",") if (x or "").strip() != ""]
+            cfg = {
+                "holidays_country": os.getenv("HOLIDAYS_COUNTRY", "AR"),
+                "workday_start_hour": work_start,
+                "workday_end_hour": work_end,
+                "workdays": workdays,
+                "sla_excluir_derivados_default": True,
+                "source": "env+nager",  # informativo
+            }
+            return Response(cfg)
+        except Exception as ex:
+            return Response({"detail": str(ex)}, status=500)
 
 class MetricasCalibracionView(APIView):
     permission_classes = [permissions.IsAuthenticated]

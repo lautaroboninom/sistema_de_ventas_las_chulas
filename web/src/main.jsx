@@ -38,6 +38,7 @@ import Depositos from "./pages/Depositos.jsx";
 import Derivados from "./pages/Derivados.jsx";
 import Metricas from "./pages/Metricas.jsx";
 import MetricasClientes from "./pages/MetricasClientes.jsx";
+import ConfigMetricas from "./pages/ConfigMetricas.jsx";
 
 function NotFound() {
   return (
@@ -221,6 +222,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute roles={["jefe"]}>
             <MetricasClientes />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "metricas/config",
+        element: (
+          <ProtectedRoute roles={["jefe"]}>
+            <ConfigMetricas />
           </ProtectedRoute>
         ),
       },

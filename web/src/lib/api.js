@@ -465,3 +465,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/metricas/calibracion/${qs ? `?${qs}` : ""}`);
   };
+  export const getMetricasConfig = () => api.get(`/api/metricas/config/`);
+  export const getFeriados = () => api.get(`/api/metricas/feriados/`);
+  export const postFeriado = (fecha, nombre) => api.post(`/api/metricas/feriados/`, { fecha, nombre });
+  export const deleteFeriado = (fecha) => api.del(`/api/metricas/feriados/?fecha=${encodeURIComponent(fecha||"")}`);
