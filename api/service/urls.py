@@ -181,10 +181,10 @@ urlpatterns = [
     # tipos de equipo
     # tipos de equipo
     # - listado general (sugerencias para asignación): plural "catalogos"
-
-    # - ABM catÃƒÂ¡logo general (no por marca)
+    # - listado general (sugerencias): plural "catalogos"
+    path("catalogos/tipos-equipo/", TiposEquipoView.as_view()),
     # - ABM catálogo general (no por marca)
-    path("catalogo/tipos-equipo/", CatalogoTiposCreateView.as_view()),
+    # - ABM por marca (tabla marca_tipos_equipo)
     path("catalogo/tipos-equipo/<int:tipo_id>/", CatalogoTipoDetailView.as_view()),
     # - ABM de series/modelos y variantes
     path("catalogo/modelos/", CatalogoModelosCreateView.as_view()),
