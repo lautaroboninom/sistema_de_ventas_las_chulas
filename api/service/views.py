@@ -54,6 +54,148 @@ LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 @api_view(["GET"])  # público
 @permission_classes([AllowAny])
 def ping(request):
+def _normalize_role(s: str) -> str:
+    s = (s or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return s
+
+class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        email = (request.data.get("email") or "").strip().lower()
+        password = (request.data.get("password") or "")
+
+        if not email or not password:
+            raise AuthenticationFailed("Email y contraseña requeridos.")
+
+        ip = get_client_ip(request) or ""
+        key = _login_rate_key(email, ip)
+        if _is_login_locked(key):
+            raise AuthenticationFailed("Demasiados intentos. Probá más tarde.")
+
+        try:
+            user = User.objects.get(email=email, activo=True)
+        except User.DoesNotExist:
+            _register_login_failure(key)
+            raise AuthenticationFailed("Usuario o contraseña inválidos.")
+
+        if not getattr(user, "hash_pw", ""):
+            raise AuthenticationFailed("El usuario aún no tiene contraseña. Usá \"Olvidé mi contraseña\" para inicializarla.")
+
+        if not verify_hash(password, user.hash_pw):
+            _register_login_failure(key)
+            raise AuthenticationFailed("Usuario o contraseña inválidos.")
+
+        _reset_login_failure(key)
+        token = issue_token(user)
+        return Response({
+            "token": token,
+            "user": {
+                "id": user.id,
+                "nombre": user.nombre,
+                "rol": _normalize_role(user.rol),
+                "perm_ingresar": getattr(user, "perm_ingresar", False),
+            },
+        })
+
+class ForgotPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        email = (request.data.get("email") or "").strip().lower()
+        ua = request.META.get("HTTP_USER_AGENT", "")
+        ip = get_client_ip(request) or ""
+
+        ok_response = Response({"ok": True})
+        if not email:
+            return ok_response
+
+        user = q("SELECT id, email, nombre, activo FROM users WHERE LOWER(email)=%s", [email], one=True)
+        if not user or not user.get("activo"):
+            return ok_response
+
+        recent = q("""
+            SELECT id FROM password_reset_tokens
+             WHERE user_id=%s AND used_at IS NULL AND expires_at>NOW()
+               AND created_at > NOW() - INTERVAL %s MINUTE
+             ORDER BY id DESC LIMIT 1
+            """, [user["id"], COOLDOWN_MIN], one=True)
+        if recent:
+            return ok_response
+
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
+
+        exec_void("""
+            INSERT INTO password_reset_tokens(user_id, token_hash, expires_at, ip, user_agent)
+            VALUES (%s,%s,%s,%s,%s)
+            """, [user["id"], token_hash, exp, ip, ua])
+
+        origin = getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
+        url = f"{origin}/restablecer?t={token}"
+        subj = "Recuperación de contraseña"
+        txt = (
+            f"Hola {user['nombre']},\n\n"
+            f"Usá este enlace para restablecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+            "Si no fuiste vos, ignorá este correo."
+        )
+        html = (
+            f"<p>Hola {user['nombre']},</p>"
+            f"<p>Usá este enlace para restablecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):</p>"
+            f"<p><a href=\"{url}\">{url}</a></p>"
+            "<p>Si no fuiste vos, ignorá este correo.</p>"
+        )
+        try:
+            send_mail(subj, txt, settings.DEFAULT_FROM_EMAIL, [email], html_message=html, fail_silently=True)
+        except Exception:
+            pass
+        return ok_response
+
+class ResetPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        token = (request.data.get("token") or "").strip()
+        password = (request.data.get("password") or "").strip()
+        if not token or not password:
+            return Response({"detail": "token y password requeridos"}, status=400)
+
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        row = q("""
+            SELECT prt.id, prt.user_id
+              FROM password_reset_tokens prt
+             WHERE prt.token_hash=%s AND prt.used_at IS NULL AND prt.expires_at>NOW()
+            """, [token_hash], one=True)
+        if not row:
+            return Response({"detail": "Token inválido o vencido"}, status=400)
+
+        hashed = make_password(password)
+        exec_void("UPDATE users SET hash_pw=%s WHERE id=%s", [hashed, row["user_id"])
+        exec_void("UPDATE password_reset_tokens SET used_at=NOW() WHERE id=%s", [row["id"])
+        return Response({"ok": True})
+
+class SessionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        u = getattr(request, "user", None)
+        if not getattr(u, "id", None):
+            return Response({"detail": "no autenticado"}, status=401)
+        return Response({
+            "id": u.id,
+            "nombre": getattr(u, "nombre", ""),
+            "rol": _normalize_role(getattr(u, "rol", "")), 
+            "perm_ingresar": getattr(u, "perm_ingresar", False),
+            "email": getattr(u, "email", ""),
+        })
+
+class LogoutView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def post(self, request):
+        return Response({"ok": True})
     return Response({"pong": True, "time": timezone.now().isoformat()})
 
 # Pie legal para correos (solo emails, no en el sitio)
