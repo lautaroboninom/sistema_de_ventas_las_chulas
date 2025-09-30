@@ -754,7 +754,62 @@ def _ensure_quote(ingreso_id: int):
     else:
         # MySQL upsert + obtener id: ON DUPLICATE KEY + LAST_INSERT_ID
         exec_void(
-            "INSERT INTO quotes(ingreso_id) VALUES (%s)\n"
+            "INSERT INTO quotes(ingreso_id) VALUES (%s)\
+def _get_motivo_enum_values_raw() -> list:
+    """Devuelve las etiquetas del ENUM exactamente como están en DB (sin corrección)."""
+    try:
+        if connection.vendor == "postgresql":
+            rows = q(
+                """
+                SELECT e.enumlabel AS v
+                  FROM pg_type t
+                  JOIN pg_enum e ON e.enumtypid = t.oid
+                 WHERE t.typname = 'motivo_ingreso'
+                """
+            ) or []
+            return [r.get("v") for r in rows if r.get("v")]
+        else:
+            row = q(
+                """
+                SELECT COLUMN_TYPE AS ct
+                  FROM information_schema.columns
+                 WHERE table_schema = DATABASE()
+                   AND table_name = 'ingresos'
+                   AND column_name = 'motivo'
+                """,
+                one=True,
+            )
+            vals = []
+            if row and (row.get("ct") or "").lower().startswith("enum("):
+                ct = row["ct"][5:-1]
+                for p in ct.split(","):
+                    v = p.strip().strip("'")
+                    if v:
+                        vals.append(v)
+            return vals
+    except Exception:
+        return []
+
+
+def _map_motivo_to_db_label(user_value: str):
+    """Mapea el valor recibido a la etiqueta RAW del ENUM en DB, tolerando tildes/caso."""
+    user_value = (user_value or "").strip()
+    if not user_value:
+        return None
+    raw_vals = _get_motivo_enum_values_raw()
+    if not raw_vals:
+        return None
+    by_key = {}
+    for raw in raw_vals:
+        disp = _fix_text_value(raw)
+        for cand in (raw, disp):
+            k1 = (cand or "").strip().lower()
+            k2 = _norm_txt(cand)
+            if k1 and (-not by_key.ContainsKey(k1)):
+                by_key[k1] = raw
+            if k2 and (-not by_key.ContainsKey(k2)):
+                by_key[k2] = raw
+    $null = $by_keyn"
             "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)",
             [ingreso_id]
         )
@@ -1037,7 +1092,7 @@ class CatalogoTecnicosView(APIView):
         rows = q("""
           SELECT id, nombre
           FROM users
-          WHERE activo=true AND rol IN ('tecnico','jefe','jefe_veedor')
+          WHERE activo=true AND rol IN ('tecnico','jefe')
           ORDER BY nombre
         """)
         return Response(rows)
@@ -2271,7 +2326,7 @@ class QuoteItemsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
+        require_roles(request, ["jefe", "admin", "tecnico"])
         d = request.data or {}
         tipo = (d.get("tipo") or "").strip()
         if tipo not in ("repuesto", "mano_obra", "servicio"):
@@ -2305,7 +2360,7 @@ class QuoteItemDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, ingreso_id: int, item_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
+        require_roles(request, ["jefe", "admin", "tecnico"])
         d = request.data or {}
         sets, params = [], []
         if "tipo" in d:
@@ -2355,7 +2410,7 @@ class QuoteItemDetailView(APIView):
         return Response(QuoteDetailSerializer(data).data)
 
     def delete(self, request, ingreso_id: int, item_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
+        require_roles(request, ["jefe", "admin", "tecnico"])
         _set_audit_user(request)
         if connection.vendor == "postgresql":
             exec_void("""
@@ -2383,7 +2438,7 @@ class QuoteResumenView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
+        require_roles(request, ["jefe", "admin", "tecnico"])
         mo = request.data.get("mano_obra")
         if mo is None:
             raise ValidationError("mano_obra requerido")
@@ -2409,7 +2464,7 @@ class QuoteResumenView(APIView):
 class EmitirPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        require_roles(request, ["jefe", "admin"])
 
         autorizado_por = (request.data.get("autorizado_por") or "Cliente").strip()
         forma_pago     = (request.data.get("forma_pago") or "A definir").strip()
@@ -2487,7 +2542,7 @@ class QuotePdfView(APIView):
 class AprobarPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        require_roles(request, ["jefe", "admin"])
         qid = _ensure_quote(ingreso_id)
         _set_audit_user(request)
 
@@ -4665,7 +4720,7 @@ class MarcaAplicarTecnicoAModelosView(APIView):
 class IngresoAsignarTecnicoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, ingreso_id):
-        require_roles(request, ["jefe", "admin","jefe_veedor"]) 
+        require_roles(request, ["jefe", "admin"]) 
         tecnico_id = request.data.get("tecnico_id")
         if tecnico_id is None:
             return Response({"detail": "tecnico_id requerido"}, status=400)
@@ -5884,6 +5939,7 @@ class TiposEquipoView(APIView):
         exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(TRIM(nombre))=UPPER(TRIM(%s))", [nombre])
         exec_void("UPDATE models SET tipo_equipo=NULL WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))", [nombre])
         return Response({"ok": True})
+
 
 
 
