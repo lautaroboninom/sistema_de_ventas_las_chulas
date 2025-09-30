@@ -18,7 +18,7 @@ const Input  = (p) => <input  {...p} className="border rounded p-2 w-full" />;
 const Select = (p) => <select {...p} className="border rounded p-2 w-full" />;
 
 export default function CatalogoMarcas() {
-  // Canonicalizador general: minÃºsculas, sin acentos y con espacios colapsados
+  // Canonicalizador general: minúsculas, sin acentos y con espacios colapsados
   const canon   = (v) => norm(v).replace(/\s+/g, " ").trim();
   const typeKey = (v) => (v ?? "").toString().toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -43,7 +43,7 @@ export default function CatalogoMarcas() {
   const [marcaQuery, setMarcaQuery] = useState("");
   const listRef = useRef(null);
 
-  // Catálogo (v2) para variantes mÃºltiples
+  // Catálogo (v2) para variantes múltiples
   const [hierLoading, setHierLoading] = useState(false);
   const [catalogTipos, setCatalogTipos] = useState([]);
   const [catalogModelos, setCatalogModelos] = useState([]);
