@@ -54,7 +54,7 @@ LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 @api_view(["GET"])  # público
 @permission_classes([AllowAny])
 def ping(request):
-def _normalize_role(s: str) -> str:
+    return Response({"ok": True})
     s = (s or "").strip().lower().replace(" ", "_").replace("-", "_")
     return s
 
@@ -174,8 +174,8 @@ class ResetPasswordView(APIView):
             return Response({"detail": "Token inválido o vencido"}, status=400)
 
         hashed = make_password(password)
-        exec_void("UPDATE users SET hash_pw=%s WHERE id=%s", [hashed, row["user_id"])
-        exec_void("UPDATE password_reset_tokens SET used_at=NOW() WHERE id=%s", [row["id"])
+        exec_void("UPDATE users SET hash_pw=%s WHERE id=%s", [hashed, row["user_id"]])
+        exec_void("UPDATE password_reset_tokens SET used_at=NOW() WHERE id=%s", [row["id"]])
         return Response({"ok": True})
 
 class SessionView(APIView):
@@ -3482,7 +3482,7 @@ class IngresoDetalleView(APIView):
         """, [ingreso_id], one=True)
         if not row:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
-        row["os"] = os_label(row["id"])
+        row["os"] = os_label(row["id"]])
         accs = q("""
           SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
           FROM ingreso_accesorios ia
@@ -4037,6 +4037,7 @@ class TiposEquipoView(APIView):
         exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(TRIM(nombre))=UPPER(TRIM(%s))", [nombre])
         exec_void("UPDATE models SET tipo_equipo=NULL WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))", [nombre])
         return Response({"ok": True})
+
 
 
 
