@@ -4,6 +4,8 @@ import {
   uploadIngresoFotos,
   patchIngresoFoto,
   deleteIngresoFoto,
+  fetchBlobAuth,
+  downloadAuth,
 } from "../lib/api";
 import { formatDateTime } from "../lib/ui-helpers";
 
@@ -35,6 +37,11 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
   const fileInputRef = useRef(null);
 
   const [viewer, setViewer] = useState({ open: false, index: 0, zoom: 1, rotation: 0 });
+  // Blob URLs para miniaturas y archivos completos
+  const thumbUrlsRef = useRef(new Map()); // id -> objectURL
+  const fullUrlsRef = useRef(new Map());  // id -> objectURL
+  const [thumbSrc, setThumbSrc] = useState({}); // id -> objectURL
+  const [fullSrc, setFullSrc] = useState({});   // id -> objectURL
 
   const currentPhoto = useMemo(() => (viewer.open ? photos[viewer.index] : null), [viewer, photos]);
 
@@ -52,6 +59,25 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
       setPhotos((prev) => (append ? [...prev, ...list] : list));
       setPage(data?.page || targetPage);
       setHasMore(Boolean(data?.has_next));
+      // Pre-cargar miniaturas autenticadas como blob URLs
+      if (!append) {
+        thumbUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+        thumbUrlsRef.current.clear();
+        setThumbSrc({});
+      }
+      const promises = list.map(async (p) => {
+        try {
+          const { blob } = await fetchBlobAuth(p.thumbnail_url);
+          const url = URL.createObjectURL(blob);
+          const prevUrl = thumbUrlsRef.current.get(p.id);
+          if (prevUrl) URL.revokeObjectURL(prevUrl);
+          thumbUrlsRef.current.set(p.id, url);
+          setThumbSrc((prev) => ({ ...prev, [p.id]: url }));
+        } catch (_) {
+          // ignorar errores individuales
+        }
+      });
+      Promise.allSettled(promises);
     } catch (err) {
       setError(err?.message || "No se pudieron cargar las fotos");
     } finally {
@@ -73,6 +99,29 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
       }
     }
   }, [photos, viewer, resetViewer]);
+
+  // Asegurar carga de imagen completa (hoisted declaration to avoid TDZ in effects)
+  function ensureFullLoaded(photo) {
+    if (!photo) return;
+    const id = photo.id;
+    if (fullUrlsRef.current.has(id)) return;
+    fetchBlobAuth(photo.url)
+      .then(({ blob }) => {
+        const url = URL.createObjectURL(blob);
+        fullUrlsRef.current.set(id, url);
+        setFullSrc((prev) => ({ ...prev, [id]: url }));
+      })
+      .catch(() => {
+        // fallback: se verá la miniatura
+      });
+  }
+
+  // Cargar imagen completa al navegar en el visor
+  useEffect(() => {
+    if (!viewer.open) return;
+    const p = photos[viewer.index];
+    if (p) ensureFullLoaded(p);
+  }, [viewer.open, viewer.index, photos, ensureFullLoaded]);
 
   const handleUpload = async (fileList) => {
     const files = Array.from(fileList || []).filter((f) => f && f.size);
@@ -141,13 +190,37 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
       await deleteIngresoFoto(ingresoId, photoId);
       setPhotos((prev) => prev.filter((p) => p.id !== photoId));
       setStatusMessage("Foto eliminada");
+      // Revocar y limpiar URLs asociadas a la foto eliminada
+      const t = thumbUrlsRef.current.get(photoId);
+      if (t) {
+        URL.revokeObjectURL(t);
+        thumbUrlsRef.current.delete(photoId);
+      }
+      const f = fullUrlsRef.current.get(photoId);
+      if (f) {
+        URL.revokeObjectURL(f);
+        fullUrlsRef.current.delete(photoId);
+      }
+      setThumbSrc((prev) => {
+        const next = { ...prev };
+        delete next[photoId];
+        return next;
+      });
+      setFullSrc((prev) => {
+        const next = { ...prev };
+        delete next[photoId];
+        return next;
+      });
     } catch (err) {
       setUploadErrors([err?.message || "No se pudo eliminar la foto"]);
     }
   };
 
+
   const openViewer = (index) => {
     setViewer({ open: true, index, zoom: 1, rotation: 0 });
+    const p = photos[index];
+    if (p) ensureFullLoaded(p);
   };
 
   const changeViewerIndex = (delta) => {
@@ -168,6 +241,28 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
   const rotate = () => {
     setViewer((prev) => ({ ...prev, rotation: (prev.rotation + 90) % 360 }));
   };
+
+  const handleDownload = async (photo) => {
+    if (!photo) return;
+    try {
+      await downloadAuth(photo.url, photo.original_name || `ingreso-${ingresoId}-foto-${photo.id}`);
+    } catch (err) {
+      setUploadErrors([err?.message || "No se pudo descargar la foto"]);
+    }
+  };
+
+  // Limpiar todos los Object URLs al desmontar
+  useEffect(() => {
+    return () => {
+      try {
+        thumbUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+        fullUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      } finally {
+        thumbUrlsRef.current.clear();
+        fullUrlsRef.current.clear();
+      }
+    };
+  }, []);
 
   return (
     <div className="border rounded p-4 mt-6">
@@ -204,9 +299,9 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
             className="hidden"
             onChange={onFileChange}
           />
-          <p className="font-medium">Arrastrá y soltá fotos aquí o usá el botón "Cargar fotos".</p>
+          <p className="font-medium">Arrastrá y soltá fotos acá o usá el botón "Cargar fotos".</p>
           <p className="mt-1 text-xs text-gray-500">
-            Formatos permitidos: JPG/PNG (máx. 10 MB por archivo, hasta 50 fotos por Ingreso).
+            Formatos permitidos: JPG/PNG (máx. 10 MB por archivo, hasta 50 fotos por ingreso).
           </p>
         </div>
       )}
@@ -238,11 +333,12 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
         {!loading && photos.length === 0 && (
           <div className="text-sm text-gray-500">Aún no hay fotos asociadas a este ingreso.</div>
         )}
+          
         {photos.map((photo, idx) => (
           <div key={photo.id} className="flex flex-col md:flex-row gap-3 border rounded p-3 bg-white">
             <div className="w-full md:w-28 md:h-28 flex-shrink-0 flex items-center justify-center bg-gray-100 rounded cursor-pointer overflow-hidden">
               <img
-                src={photo.thumbnail_url}
+                src={thumbSrc[photo.id] || ""}
                 alt={photo.original_name || `Foto ${photo.id}`}
                 className="object-cover w-full h-full"
                 onClick={() => openViewer(idx)}
@@ -294,14 +390,9 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
                   <button className="text-red-600" onClick={() => confirmDelete(photo.id)} type="button">
                     Eliminar
                   </button>
-                  <a
-                    href={photo.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-gray-600"
-                  >
+                  <button className="text-gray-600" onClick={() => handleDownload(photo)} type="button">
                     Descargar
-                  </a>
+                  </button>
                 </div>
               )}
             </div>
@@ -333,15 +424,15 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
               <button className="px-3 py-1 bg-gray-700 rounded" onClick={() => adjustZoom(0.25)} type="button">Zoom +</button>
               <button className="px-3 py-1 bg-gray-700 rounded" onClick={() => adjustZoom(-0.25)} type="button">Zoom -</button>
               <button className="px-3 py-1 bg-gray-700 rounded" onClick={rotate} type="button">Rotar</button>
-              <a className="px-3 py-1 bg-gray-700 rounded" href={currentPhoto.url} target="_blank" rel="noopener noreferrer">
+              <button className="px-3 py-1 bg-gray-700 rounded" onClick={() => handleDownload(currentPhoto)} type="button">
                 Descargar
-              </a>
+              </button>
               <button className="px-3 py-1 bg-red-600 rounded" onClick={resetViewer} type="button">Cerrar</button>
             </div>
           </div>
           <div className="relative max-w-4xl max-h-[70vh] overflow-auto bg-black/40 rounded">
             <img
-              src={currentPhoto.url}
+              src={fullSrc[currentPhoto.id] || thumbSrc[currentPhoto.id] || ""}
               alt={currentPhoto.original_name || `Foto ${currentPhoto.id}`}
               style={{ transform: `scale(${viewer.zoom}) rotate(${viewer.rotation}deg)` }}
               className="max-w-full max-h-[70vh] object-contain transition-transform duration-200"
@@ -370,3 +461,7 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
     </div>
   );
 }
+
+
+
+

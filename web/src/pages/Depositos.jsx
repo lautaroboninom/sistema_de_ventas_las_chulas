@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getUbicaciones, getGeneralEquipos } from "../lib/api";
-import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, nsPreferInternoOf } from "../lib/ui-helpers";
 import { useNavigate } from "react-router-dom";
 
 export default function Depositos() {
@@ -63,7 +63,7 @@ export default function Depositos() {
                   <td className="p-2">{r.marca}</td>
                   <td className="p-2">{r.modelo}</td>
                   <td className="p-2">{tipoEquipoOf(r)}</td>
-                  <td className="p-2">{r.numero_serie}</td>
+                  <td className="p-2">{nsPreferInternoOf(r)}</td>
                   <td className="p-2">{r.estado}</td>
                   <td className="p-2">{formatDateTime(r.fecha_ingreso)}</td>
                 </tr>

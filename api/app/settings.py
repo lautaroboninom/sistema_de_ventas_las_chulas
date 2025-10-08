@@ -29,10 +29,22 @@ FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 PUBLIC_WEB_URL = os.getenv("PUBLIC_WEB_URL", FRONTEND_ORIGIN)
 LOGO_PATH = os.getenv("LOGO_PATH", "/code/service/static/logo.png")  # usado por PDF
 
+# Company header for PDFs (static across companies)
+COMPANY_HEADER_L1 = os.getenv("COMPANY_HEADER_L1", "Valdenegro 4578 C.A.B.A (1430)")
+COMPANY_HEADER_L2 = os.getenv("COMPANY_HEADER_L2", "IMPORTADORES DE EQUIPOS")
+COMPANY_HEADER_L3 = os.getenv("COMPANY_HEADER_L3", "MEDICOS Y REPARACIONES")
+
 # Datos de contacto para pie de página del presupuesto (pueden cambiar vía entorno)
 COMPANY_FOOTER_EMAIL = os.getenv("COMPANY_FOOTER_EMAIL", "tecnica@sepid.com.ar")
+COMPANY_FOOTER_CUIT = os.getenv("COMPANY_FOOTER_CUIT", "30-71006956-1")
 COMPANY_FOOTER_WEB = os.getenv("COMPANY_FOOTER_WEB", "https://sepid.com.ar")
 COMPANY_FOOTER_WHATSAPP = os.getenv("COMPANY_FOOTER_WHATSAPP", "+54 9 11 6675-4115")
+
+COMPANY_FOOTER_EMAIL_2 = os.getenv("COMPANY_FOOTER_EMAIL_2", "serviciotecnicomgbio@gmail.com")
+COMPANY_FOOTER_CUIT_2 = os.getenv("COMPANY_FOOTER_CUIT_2", "30-71227174-0")
+COMPANY_FOOTER_WEB_2 = os.getenv("COMPANY_FOOTER_WEB_2", "https://sepid.com.ar")
+COMPANY_FOOTER_WHATSAPP_2 = os.getenv("COMPANY_FOOTER_WHATSAPP_2", "+54 9 11 6675-4115")
+
 
 # Directorio opcional donde guardar copias de PDFs de presupuestos
 # Si existe, se escriben allí además de devolverse al cliente
@@ -98,22 +110,17 @@ TEMPLATES = [
     }
 ]
 
-# --- Base de datos por defecto: MySQL 8 ---
-# Variables esperadas: MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_HOST, MYSQL_PORT
+# --- Base de datos: solo PostgreSQL ---
+# Variables esperadas: POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST, POSTGRES_PORT
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": os.getenv("MYSQL_DATABASE", "servicio_tecnico"),
-        "USER": os.getenv("MYSQL_USER", "sepid"),
-        "PASSWORD": os.getenv("MYSQL_PASSWORD", "supersegura"),
-        "HOST": os.getenv("MYSQL_HOST", "mysql"),
-        "PORT": os.getenv("MYSQL_PORT", "3306"),
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("POSTGRES_DB", os.getenv("PGDATABASE", "servicio_tecnico")),
+        "USER": os.getenv("POSTGRES_USER", os.getenv("PGUSER", "sepid")),
+        "PASSWORD": os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "supersegura")),
+        "HOST": os.getenv("POSTGRES_HOST", os.getenv("PGHOST", "postgres")),
+        "PORT": os.getenv("POSTGRES_PORT", os.getenv("PGPORT", "5432")),
         "ATOMIC_REQUESTS": True,
-        "OPTIONS": {
-            # modo estricto y charset
-            "init_command": "SET sql_mode='STRICT_ALL_TABLES'",
-            "charset": "utf8mb4",
-        },
         # Reutilización de conexiones
         "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
     }
@@ -171,6 +178,13 @@ INGRESO_MEDIA_MAX_SIZE_MB = int(os.getenv('INGRESO_MEDIA_MAX_SIZE_MB', '10'))
 INGRESO_MEDIA_MAX_FILES = int(os.getenv('INGRESO_MEDIA_MAX_FILES', '50'))
 INGRESO_MEDIA_THUMB_MAX = int(os.getenv('INGRESO_MEDIA_THUMB_MAX', '512'))
 INGRESO_MEDIA_ALLOWED_MIME = [m.strip() for m in os.getenv('INGRESO_MEDIA_ALLOWED_MIME', 'image/jpeg,image/png').split(',') if m.strip()]
+
+# Ruta al repositorio de trazabilidad (Excels con ventas)
+# Se puede sobreescribir con la variable de entorno TRAZABILIDAD_ROOT
+TRAZABILIDAD_ROOT = os.getenv(
+    "TRAZABILIDAD_ROOT",
+    r"\\SERVERDATA\Datos\MG BIO\TRAZABILIDAD"
+)
 INGRESO_MEDIA_STORAGE_PREFIX = os.getenv('INGRESO_MEDIA_STORAGE_PREFIX', 'ingresos')
 
 # --- Seguridad / Autenticación (vistas) ---
@@ -187,3 +201,13 @@ LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 
 # Requisito mínimo local de longitud de contraseña (además de validators si aplica)
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
+
+# Cookies de autenticación (para JWT en cookie)
+# Por default el login devuelve token en el body y TAMBIÉN lo setea en cookie
+# Si el front consume por cross-origin, usar: AUTH_COOKIE_SAMESITE=None y AUTH_COOKIE_SECURE=True (requiere HTTPS)
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "auth_token")
+AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "Lax")  # Lax | Strict | None
+# Si no se define, se toma según DEBUG
+_cookie_secure_env = os.getenv("AUTH_COOKIE_SECURE", "")
+AUTH_COOKIE_SECURE = (not DEBUG) if _cookie_secure_env == "" else (_cookie_secure_env.lower() in ("1","true","yes"))
+AUTH_COOKIE_DOMAIN = os.getenv("AUTH_COOKIE_DOMAIN", "") or None

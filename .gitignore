@@ -34,6 +34,7 @@ coverage/
 # --- Generated data / outputs
 etl/out/
 tmp/
+outputs/
 
 # --- Avoid committing PDFs accidentally from api/
 api/**/*.pdf

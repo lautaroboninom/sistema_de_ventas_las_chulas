@@ -4,11 +4,11 @@ from .views import (
     # salud / login
     ping, LoginView, LogoutView, SessionView, ForgotPasswordView, ResetPasswordView,
 
-    # flujo ingresos / técnico
+    # flujo ingresos / tï¿½cnico
     MisPendientesView,
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     PendientesPresupuestoView, PresupuestadosView,
-    MarcarReparadoView, EntregarIngresoView, GarantiaReparacionCheckView,
+    MarcarReparadoView, EntregarIngresoView, GarantiaReparacionCheckView, GarantiaFabricaCheckView,
     ListosParaRetiroView,
 
     # listados / generales
@@ -16,17 +16,17 @@ from .views import (
     AprobadosParaRepararView, AprobadosYReparadosView, LiberadosView,
     GeneralEquiposView, GeneralPorClienteView,
 
-    # ingresos nuevos + derivación
+    # ingresos nuevos + derivaciï¿½n
     NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView, DevolverDerivacionView,
     
 
-    # catálogos
+    # catï¿½logos
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
     CatalogoMarcasView, CatalogoModelosView,
     ModeloVarianteView,
-    # catálogo jerárquico marca/tipo/modelo/variante
+    # catï¿½logo jerï¿½rquico marca/tipo/modelo/variante
     CatalogoTiposView, CatalogoModelosDeTipoView, CatalogoVariantesView, CatalogoMarcasPorTipoView,
     # Tipos equipo general (ABM)
     TiposEquipoView,  # tipos equipo (sugerencias + ABM)
@@ -35,7 +35,7 @@ from .views import (
     CatalogoTiposCreateView, CatalogoTipoDetailView,
     CatalogoModelosCreateView, CatalogoModeloDetailView, CatalogoVariantesCreateView, CatalogoVarianteDetailView,
 
-    # administración de usuarios
+    # administraciï¿½n de usuarios
     UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
     CatalogoRolesView, CerrarReparacionView,
 
@@ -55,9 +55,9 @@ from .views import (
     QuoteDetailView, QuoteItemsView, QuoteItemDetailView, QuoteResumenView, AnularPresupuestoView,
     RemitoSalidaPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
     MetricasResumenView, MetricasSeriesView, MetricasCalibracionView, FeriadosView, MetricasConfigView,
+    CatalogoMotivosView,
 )
 
-from .motivos_view import CatalogoMotivosView
 
 urlpatterns = [
     # salud y login
@@ -69,7 +69,7 @@ urlpatterns = [
     path("auth/forgot/", ForgotPasswordView.as_view()),
     path("auth/reset/", ResetPasswordView.as_view()),
 
-    # técnico / ingresos (acciones)
+    # tï¿½cnico / ingresos (acciones)
     path("tecnico/mis-pendientes/", MisPendientesView.as_view()),
     path("ingresos/<int:ingreso_id>/reparado/", MarcarReparadoView.as_view()),
     path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
@@ -88,7 +88,7 @@ urlpatterns = [
     path("ingresos/liberados/", LiberadosView.as_view()),
     path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
 
-    # ALIAS de compatibilidad con el front (si existían)
+    # ALIAS de compatibilidad con el front (si existï¿½an)
     path("ingresos/aprobados/", AprobadosParaRepararView.as_view()),
     path("ingresos/reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
@@ -99,8 +99,9 @@ urlpatterns = [
     path("clientes/<int:customer_id>/general/", GeneralPorClienteView.as_view()),
     # utilidades
     path("equipos/garantia-reparacion/", GarantiaReparacionCheckView.as_view()),
+    path("equipos/garantia-fabrica/", GarantiaFabricaCheckView.as_view()),
 
-    # ingresos nuevos / derivación
+    # ingresos nuevos / derivaciï¿½n
     path("ingresos/nuevo/", NuevoIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivar/", DerivarIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/", DerivacionesPorIngresoView.as_view()),
@@ -117,7 +118,7 @@ urlpatterns = [
     # variante simple por modelo (v1)
     path('catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/variante/', ModeloVarianteView.as_view()),
 
-    # catÃƒÆ’Ã‚Â¡logo jerÃƒÆ’Ã‚Â¡rquico (marca -> tipo -> modelo -> variante)
+    # catÃ¡logo jerÃ¡rquico (marca -> tipo -> modelo -> variante)
     path("catalogo/marcas/", CatalogoMarcasView.as_view()),
     path("catalogo/marcas/<int:bid>/tipos/", CatalogoTiposView.as_view()),
     path("catalogo/marcas/<int:bid>/tipos/<int:tid>/modelos/", CatalogoModelosDeTipoView.as_view()),
@@ -125,7 +126,7 @@ urlpatterns = [
     path("catalogo/tipos/<str:tipo_nombre>/marcas/", CatalogoMarcasPorTipoView.as_view()),
     
 
-    # administraciÃƒÆ’Ã‚Â³n de clientes / marcas / modelos
+    # administraciÃ³n de clientes / marcas / modelos
     path("catalogos/clientes/", ClientesView.as_view()),                         # GET/POST
     path("catalogos/clientes/<int:cid>/", ClienteDeleteView.as_view()),          # DELETE
     path("catalogos/marcas/<int:bid>/", MarcaDeleteView.as_view()),              # DELETE
@@ -159,7 +160,7 @@ urlpatterns = [
 
 
 
-    # (si usás los endpoints para asignar técnico y setear técnico de marca/modelo)
+    # (si usï¿½s los endpoints para asignar tï¿½cnico y setear tï¿½cnico de marca/modelo)
     path('catalogos/marcas/<int:bid>/tecnico/', MarcaTecnicoView.as_view()),
     path('catalogos/marcas/<int:bid>/tecnico/aplicar-a-modelos/', MarcaAplicarTecnicoAModelosView.as_view()),
     path('catalogos/marcas/<int:bid>/modelos/<int:mid>/tecnico/', ModeloTecnicoView.as_view()),
@@ -173,7 +174,7 @@ urlpatterns = [
     path("quotes/<int:ingreso_id>/pdf/", QuotePdfView.as_view()),
     path("quotes/<int:ingreso_id>/anular/", AnularPresupuestoView.as_view()),
 
-    # técnico / ingresos (acciones)
+    # tï¿½cnico / ingresos (acciones)
 
 
     path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # remito de salida (nuevo)
@@ -181,10 +182,10 @@ urlpatterns = [
 
     # tipos de equipo
     # tipos de equipo
-    # - listado general (sugerencias para asignación): plural "catalogos"
+    # - listado general (sugerencias para asignaciï¿½n): plural "catalogos"
     # - listado general (sugerencias): plural "catalogos"
     path("catalogos/tipos-equipo/", TiposEquipoView.as_view()),
-    # - ABM catálogo general (no por marca)
+    # - ABM catï¿½logo general (no por marca)
     # - ABM por marca (tabla marca_tipos_equipo)
     path("catalogo/tipos-equipo/<int:tipo_id>/", CatalogoTipoDetailView.as_view()),
     # - ABM de series/modelos y variantes
@@ -192,7 +193,7 @@ urlpatterns = [
     path("catalogo/modelos/<int:serie_id>/", CatalogoModeloDetailView.as_view()),
     path("catalogo/variantes/", CatalogoVariantesCreateView.as_view()),
     path("catalogo/variantes/<int:variante_id>/", CatalogoVarianteDetailView.as_view()),
-    # asignación de tipo de equipo al modelo (alias singular/plural por compat)
+    # asignaciï¿½n de tipo de equipo al modelo (alias singular/plural por compat)
     path("catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
     path("catalogo/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
 
@@ -201,16 +202,12 @@ urlpatterns = [
     # historial de cambios por ingreso
     path("ingresos/<int:ingreso_id>/historial/", IngresoHistorialView.as_view()),
     # historial de cambios por ingreso
-    # métricas
+    # mï¿½tricas
+    path("metricas/resumen/", MetricasResumenView.as_view()),
     path("metricas/series/", MetricasSeriesView.as_view()),
     path("metricas/calibracion/", MetricasCalibracionView.as_view()),
     path("metricas/feriados/", FeriadosView.as_view()),
     path("metricas/config/", MetricasConfigView.as_view()),
 ]
-
-
-
-
-
 
 

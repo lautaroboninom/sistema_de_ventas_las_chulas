@@ -8,7 +8,7 @@ import { ingresoIdOf,
   norm,
   tipoEquipoOf,
   formatMoney,
-  resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
+  resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 
 // ENDPOINT para "presupuestados" (ya emitidos/enviados)
 const ENDPOINT = "/api/ingresos/presupuestados/"; // <-- AJUSTAR si tu API usa otra ruta
@@ -59,6 +59,7 @@ export default function JefePresupuestos() {
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
+        row?.numero_interno,
         String(row?.presupuesto_monto ?? row?.presupuesto_total ?? ""),
       ];
       return campos.some((c) => norm(c).includes(needle));
@@ -137,9 +138,7 @@ export default function JefePresupuestos() {
               <tr className="text-left">
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
-                <th scope="col" className="p-2">Marca</th>
                 <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Monto</th>
@@ -168,10 +167,8 @@ export default function JefePresupuestos() {
                     <td className="p-2">
                       {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
                     </td>
-                    <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
                     <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
-                    <td className="p-2">{tipoEquipoOf(row)}</td>
-                    <td className="p-2">{row?.numero_serie ?? "-"}</td>
+                    <td className="p-2">{nsPreferInternoOf(row)}</td>
                     <td className="p-2">{row?.estado ?? "-"}</td>
                     <td className="p-2">{formatMoney(monto, moneda)}</td>
                     <td className="p-2 whitespace-nowrap">

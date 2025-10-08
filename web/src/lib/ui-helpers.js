@@ -20,25 +20,36 @@ export const resolveFechaCreacion = (row) => row?.fecha_creacion ?? row?.fecha_i
 
 export const modeloSerieVarianteOf = (row, fallback = "-") => {
   if (!row) return fallback;
-  const parts = [];
-  const serie = row?.modelo_serie_variante || row?.modelo_serie || row?.serie_nombre;
-  const variante = row?.modelo_variante || row?.variante_nombre;
-  if (serie && typeof serie === "string" && serie.trim()) {
-    parts.push(serie.trim());
+  const str = (v) => (typeof v === "string" ? v.trim() : "");
+  const firstNonEmpty = (...vals) => vals.map(str).find((x) => !!x);
+
+  // Preferir: Modelo + Variante
+  const modelo = firstNonEmpty(
+    row?.modelo,
+    row?.equipo?.modelo,
+    row?.modelo_nombre,
+    row?.equipo?.modelo_nombre
+  );
+  const variante = firstNonEmpty(
+    row?.equipo_variante,
+    row?.modelo_variante,
+    row?.variante,
+    row?.variante_nombre
+  );
+  if (modelo) {
+    return [modelo, variante].filter(Boolean).join(" ").trim();
   }
-  if (variante && typeof variante === "string" && variante.trim()) {
-    if (!parts.length || parts[0].toLowerCase() !== variante.trim().toLowerCase()) {
-      parts.push(variante.trim());
-    }
-  }
-  if (!parts.length) {
-    const legacy = row?.modelo || row?.equipo?.modelo;
-    if (legacy && typeof legacy === "string" && legacy.trim()) {
-      return legacy.trim();
-    }
-    return fallback;
-  }
-  return parts.join(" ").trim();
+
+  // Fallback histórico: serie/variante consolidado
+  const serie = firstNonEmpty(
+    row?.modelo_serie_variante,
+    row?.modelo_serie,
+    row?.serie_nombre
+  );
+  const alt = [serie, variante].filter(Boolean).join(" ").trim();
+  if (alt) return alt;
+
+  return fallback;
 };
 
 export const tipoEquipoOf = (row, fallback = "-") => {
@@ -66,11 +77,29 @@ export const tipoEquipoOf = (row, fallback = "-") => {
 
 export const catalogEquipmentLabel = (row, fallback = "-") => {
   if (!row) return fallback;
-  const marca = (row?.marca || row?.equipo?.marca || "").toString().trim();
   const tipo = tipoEquipoOf(row, "").toString().trim();
+  const marca = (row?.marca || row?.equipo?.marca || "").toString().trim();
   const modelo = modeloSerieVarianteOf(row, "").toString().trim();
-  const parts = [marca, tipo, modelo].filter((part) => part);
+  const parts = [tipo, marca, modelo].filter((part) => part);
   return parts.length ? parts.join(" | ") : fallback;
+};
+
+// Devuelve la etiqueta de serie priorizando el número interno (MG) si existe.
+// Reglas:
+//  - Si hay MG (numero_interno) -> mostrar MG
+//  - Si no hay MG pero hay N/S (numero_serie) -> mostrar N/S
+//  - Si no hay ninguno -> fallback ("-")
+export const nsPreferInternoOf = (row, fallback = "-") => {
+  if (!row) return fallback;
+  const str = (v) => (v == null ? "" : String(v).trim());
+  const interno =
+    str(row?.numero_interno) ||
+    str(row?.equipo?.numero_interno) ||
+    str(row?.mg) ||
+    str(row?.equipo?.mg);
+  if (interno) return interno;
+  const serie = str(row?.numero_serie) || str(row?.equipo?.numero_serie);
+  return serie || fallback;
 };
 export const norm = (v) => {
   const s = (v ?? "").toString().toLowerCase().trim();

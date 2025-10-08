@@ -1,4 +1,4 @@
-// web/src/pages/ServiceSheet.jsx
+﻿// web/src/pages/ServiceSheet.jsx
 import { useEffect, useState, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import api, {
@@ -17,6 +17,7 @@ import api, {
   getIngresoHistorial,
   getGeneralEquipos,
 } from "../lib/api";
+import { getMarcas, getModelosByBrand, getVariantesPorMarca, checkGarantiaFabrica } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import {
   formatOS as formatOSHelper,
@@ -34,8 +35,8 @@ import IngresoPhotos from "../components/IngresoPhotos";
 // UI helpers
 const Row = ({ label, children, className = "" }) => (
   <div className={`flex gap-3 py-1 ${className}`}>
-    <div className="w-40 text-gray-500">{label}</div>
-    <div className="flex-1">{children}</div>
+    <div className="w-40 shrink-0 text-gray-500">{label}</div>
+    <div className="flex-1 min-w-0">{children}</div>
   </div>
 );
 
@@ -67,7 +68,7 @@ export default function ServiceSheet() {
   const navigate = useNavigate();
   const actAsTech = canActAsTech(user);
   const release = canRelease(user);
-  const canEditBasics = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]);
+  const canEditBasics = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR, ROLES.ADMIN]);
   const canAssignTecnico = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]);
   const [editBasics, setEditBasics] = useState(false);
   const canSeeHistory = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO]);
@@ -92,7 +93,7 @@ export default function ServiceSheet() {
     return selected.getTime() > Date.now();
   }
 
-  // pestañas
+  // pesta├▒as
   const [tab, setTab] = useState("principal");
 
   // datos generales
@@ -168,6 +169,14 @@ export default function ServiceSheet() {
   const [relatedErr, setRelatedErr] = useState("");
   const [relatedRows, setRelatedRows] = useState([]);
 
+  // Catálogo de Equipo (para editar Marca/Modelo/Variante)
+  const [marcas, setMarcas] = useState([]);
+  const [marcaIdSel, setMarcaIdSel] = useState(null);
+  const [modelos, setModelos] = useState([]);
+  const [modeloIdSel, setModeloIdSel] = useState(null);
+  const [tipoSel, setTipoSel] = useState(""); // filtro local por "tipo_equipo" del modelo
+  const [varSugeridas, setVarSugeridas] = useState([]);
+
   function money(n) {
     if (n == null) return "-";
     const num = Number(n);
@@ -229,7 +238,7 @@ export default function ServiceSheet() {
   }
 
   async function anularPresupuesto() {
-    if (!confirm("¿Anular el presupuesto actualó Podrás editar y re-emitir luego.")) return;
+    if (!confirm("¿Anular el presupuesto actual? Podrás editar y re-emitir luego.")) return;
     try {
       setAnulando(true);
       setQErr("");
@@ -372,8 +381,43 @@ export default function ServiceSheet() {
       remito_ingreso: data?.remito_ingreso || "",
       informe_preliminar: data?.informe_preliminar || "",
       garantia_reparacion: !!data?.garantia_reparacion,
+      // Equipo adicional
+      equipo_variante: data?.equipo_variante || "",
+      garantia: !!data?.garantia,
     });
     setEditBasics(true);
+    // Inicializar selección de Marca/Modelo/Tipo/Variante
+    (async () => {
+      try {
+        // Cargar marcas si aún no están
+        if (!marcas.length) {
+          try { setMarcas(await getMarcas()); } catch { /* noop */ }
+        }
+        // Resolver marca actual por nombre
+        const norm = (s) => (s || "").toString().trim().toLowerCase();
+        const curMarcaName = norm(data?.marca);
+        let curMarca = (marcas.length ? marcas : await getMarcas()).find((m) => norm(m?.nombre) === curMarcaName);
+        const marcaId = curMarca?.id ?? null;
+        setMarcaIdSel(marcaId);
+        // Tipo de equipo mostrado actualmente (solo para filtrar modelos)
+        const tipoActual = (data?.tipo_equipo_nombre || data?.tipo_equipo || "").toString();
+        setTipoSel(tipoActual);
+        // Cargar modelos por marca y preseleccionar el actual si coincide
+        if (marcaId) {
+          try {
+            const list = await getModelosByBrand(marcaId);
+            setModelos(list || []);
+            const curModeloName = norm(data?.modelo);
+            const md = (list || []).find((x) => norm(x?.nombre) === curModeloName);
+            setModeloIdSel(md?.id ?? null);
+          } catch { setModelos([]); setModeloIdSel(null); }
+          // Cargar variantes sugeridas por marca
+          try { setVarSugeridas(await getVariantesPorMarca(marcaId)); } catch { setVarSugeridas([]); }
+        } else {
+          setModelos([]); setModeloIdSel(null); setVarSugeridas([]);
+        }
+      } catch { /* noop */ }
+    })();
   }
 
   async function saveEditBasics() {
@@ -394,10 +438,31 @@ export default function ServiceSheet() {
     // Informe preliminar
     if (cmp(formBasics.informe_preliminar, data?.informe_preliminar)) diff.informe_preliminar = formBasics.informe_preliminar;
     if ((formBasics.garantia_reparacion ? 1 : 0) !== (data?.garantia_reparacion ? 1 : 0)) diff.garantia_reparacion = !!formBasics.garantia_reparacion;
+    // Equipo: Marca / Modelo / Variante / Garantía (fábrica)
+    try {
+      const norm = (s) => (s || "").toString().trim().toLowerCase();
+      const selMarca = marcas.find((m) => String(m.id) === String(marcaIdSel));
+      if (selMarca && norm(selMarca?.nombre) !== norm(data?.marca)) {
+        diff.marca_id = Number(selMarca.id);
+      }
+      const selModelo = modelos.find((m) => String(m.id) === String(modeloIdSel));
+      if (selModelo && norm(selModelo?.nombre) !== norm(data?.modelo)) {
+        diff.modelo_id = Number(selModelo.id);
+      }
+      const varNew = (formBasics?.equipo_variante || "").trim();
+      const varOld = (data?.equipo_variante || "").trim();
+      if (varNew !== varOld) diff.equipo_variante = varNew || null;
+      const garNew = !!formBasics?.garantia;
+      const garOld = !!data?.garantia;
+      if (garNew !== garOld) diff.garantia = garNew;
+    } catch { /* noop diff equipo */ }
     try {
       setSavingBasics(true);
       if (Object.keys(diff).length > 0) {
         await patch(diff);
+        if (diff.marca_id != null || diff.modelo_id != null || diff.equipo_variante !== undefined || diff.garantia !== undefined) {
+          await refreshIngreso();
+        }
       }
       setEditBasics(false);
       setFormBasics(null);
@@ -412,6 +477,45 @@ export default function ServiceSheet() {
       try { setAccesCatalogo(await getAccesoriosCatalogo()); } catch (_) {}
     })();
   }, []);
+
+  // Cargar marcas al montar (para acelerar al entrar en edición)
+  useEffect(() => {
+    (async () => { try { setMarcas(await getMarcas()); } catch { /* noop */ } })();
+  }, []);
+
+  // Cuando cambia marca en edición -> cargar modelos y variantes sugeridas
+  useEffect(() => {
+    if (!editBasics) return;
+    if (!marcaIdSel) { setModelos([]); setModeloIdSel(null); setVarSugeridas([]); return; }
+    (async () => {
+      try {
+        const list = await getModelosByBrand(marcaIdSel);
+        setModelos(list || []);
+      } catch { setModelos([]); }
+      try { setVarSugeridas(await getVariantesPorMarca(marcaIdSel)); } catch { setVarSugeridas([]); }
+      setModeloIdSel(null);
+    })();
+  }, [editBasics, marcaIdSel]);
+
+  // Auto-chequeo de garantía de fábrica cuando se edita NS o cambia la marca
+  useEffect(() => {
+    if (!editBasics) return;
+    const ns = (formBasics?.numero_serie || "").trim();
+    const selMarca = marcas.find((m) => String(m.id) === String(marcaIdSel));
+    const marcaName = (selMarca?.nombre || data?.marca || "").toString();
+    if (!ns) {
+      if (formBasics) setFormBasics((s) => ({ ...(s || {}), garantia: false }));
+      return;
+    }
+    const h = setTimeout(async () => {
+      try {
+        const r = await checkGarantiaFabrica(ns, marcaName);
+        const enGarantia = !!r.within_365_days;
+        setFormBasics((s) => ({ ...(s || {}), garantia: enGarantia }));
+      } catch { /* noop */ }
+    }, 400);
+    return () => clearTimeout(h);
+  }, [editBasics, formBasics?.numero_serie, marcaIdSel, marcas, data?.marca]);
 
   const canEditAcc = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO, ROLES.RECEPCION]) && data?.estado !== "entregado";
 
@@ -633,11 +737,11 @@ export default function ServiceSheet() {
             {/* Columna izquierda: Cliente/Equipo/Notas */}
             <div className="border rounded p-4">
               <h2 className="font-semibold mb-2">Cliente</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
               <Row label="Razón social">
                 {editBasics? (
                   <input
-                    className="border rounded p-1 w-64"
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                     value={formBasics?.razon_social ?? ""}
                     onChange={(e) => setFormBasics(s => ({ ...s, razon_social: e.target.value }))}
                   />
@@ -648,7 +752,7 @@ export default function ServiceSheet() {
               <Row label="Código empresa">
                 {editBasics ? (
                   <input
-                    className="border rounded p-1 w-40"
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                     value={formBasics?.cod_empresa ?? ""}
                     onChange={(e) => setFormBasics(s => ({ ...s, cod_empresa: e.target.value }))}
                   />
@@ -659,7 +763,7 @@ export default function ServiceSheet() {
               <Row label="Teléfono">
                 {editBasics ? (
                   <input
-                    className="border rounded p-1 w-48"
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                     value={formBasics?.telefono ?? ""}
                     onChange={(e) => setFormBasics(s => ({ ...s, telefono: e.target.value }))}
                   />
@@ -675,7 +779,7 @@ export default function ServiceSheet() {
                   <Row label="Nombre">
                     {editBasics ? (
                       <input
-                        className="border rounded p-1 w-64"
+                        className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                         value={formBasics?.propietario_nombre ?? ""}
                         onChange={(e) => setFormBasics(s => ({ ...s, propietario_nombre: e.target.value }))}
                       />
@@ -686,7 +790,7 @@ export default function ServiceSheet() {
                   <Row label="Contacto">
                     {editBasics ? (
                       <input
-                        className="border rounded p-1 w-64"
+                        className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                         value={formBasics?.propietario_contacto ?? ""}
                         onChange={(e) => setFormBasics(s => ({ ...s, propietario_contacto: e.target.value }))}
                       />
@@ -697,7 +801,7 @@ export default function ServiceSheet() {
                   <Row label="Documento">
                     {editBasics ? (
                       <input
-                        className="border rounded p-1 w-64"
+                        className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                         value={formBasics?.propietario_doc ?? ""}
                         onChange={(e) => setFormBasics(s => ({ ...s, propietario_doc: e.target.value }))}
                       />
@@ -709,16 +813,115 @@ export default function ServiceSheet() {
               )}
 
               <h2 className="font-semibold mt-4 mb-2">Equipo</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
-              <Row label="Marca">{data.marca}</Row>
-              <Row label="Equipo">{catalogEquipmentLabel(data)}</Row>
-              <Row label="Tipo de equipo">{data.tipo_equipo_nombre || data.tipo_equipo || "-"}</Row>
-              <Row label="Modelo">{data.modelo || "-"}</Row>
-              <Row label="Variante">{data.equipo_variante || "-"}</Row>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+              <Row label="Tipo de equipo">
+                {editBasics ? (
+                  <select
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
+                    value={tipoSel}
+                    onChange={(e) => { setTipoSel(e.target.value); setModeloIdSel(null); }}
+                  >
+                    <option value="">(todos)</option>
+                    {Array.from(new Set((modelos || []).map((m) => (m?.tipo_equipo || "").toString().trim().toUpperCase())))
+                      .filter(Boolean)
+                      .map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                  </select>
+                ) : (
+                  data.tipo_equipo_nombre || data.tipo_equipo || "-"
+                )}
+              </Row>
+              <Row label="Garantía (fábrica)">
+                {editBasics ? (
+                  <input
+                    type="checkbox"
+                    checked={!!(formBasics?.garantia)}
+                    onChange={(e) => setFormBasics((s) => ({ ...(s || {}), garantia: e.target.checked }))}
+                  />
+                ) : (
+                  data.garantia ? "Sí" : "No"
+                )}
+              </Row>
+              <Row label="Garanta (fbrica)">
+                {editBasics ? (
+                  <input
+                    type="checkbox"
+                    checked={!!(formBasics?.garantia)}
+                    onChange={(e) => setFormBasics((s) => ({ ...(s || {}), garantia: e.target.checked }))}
+                  />
+                ) : (
+                  data.garantia ? "Sd" : "No"
+                )}
+              </Row>
+              <Row label="Marca">
+                {editBasics ? (
+                  <select
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
+                    value={marcaIdSel == null ? "" : String(marcaIdSel)}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? null : Number(e.target.value);
+                      setMarcaIdSel(v);
+                      setModeloIdSel(null);
+                    }}
+                  >
+                    <option value="">(sin marca)</option>
+                    {(marcas || []).map((m) => (
+                      <option key={m.id} value={String(m.id)}>
+                        {m.nombre}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  data.marca
+                )}
+              </Row>
+              <Row label="Modelo">
+                {editBasics ? (
+                  <select
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
+                    value={modeloIdSel == null ? "" : String(modeloIdSel)}
+                    onChange={(e) => setModeloIdSel(e.target.value === "" ? null : Number(e.target.value))}
+                  >
+                    <option value="">(sin modelo)</option>
+                    {(modelos || [])
+                      .filter((m) => {
+                        const norm = (s) => (s || "").toString().trim().toUpperCase();
+                        return !tipoSel || norm(m?.tipo_equipo) === norm(tipoSel);
+                      })
+                      .map((m) => (
+                        <option key={m.id} value={String(m.id)}>
+                          {m.nombre}
+                        </option>
+                      ))}
+                  </select>
+                ) : (
+                  data.modelo || "-"
+                )}
+              </Row>
+              <Row label="Variante">
+                {editBasics ? (
+                  <>
+                    <input
+                      list="variantesOptions"
+                      className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
+                      value={formBasics?.equipo_variante ?? ""}
+                      onChange={(e) => setFormBasics(s => ({ ...(s || {}), equipo_variante: e.target.value }))}
+                    />
+                    <datalist id="variantesOptions">
+                      {(varSugeridas || []).map((v, idx) => (
+                        <option key={idx} value={v} />
+                      ))}
+                    </datalist>
+                  </>
+                ) : (
+                  data.equipo_variante || "-"
+                )}
+              </Row>
               <Row label="N° serie">
                 {editBasics ? (
                   <input
-                    className="border rounded p-1 w-60"
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                     value={formBasics?.numero_serie ?? ""}
                     onChange={(e) => setFormBasics(s => ({ ...s, numero_serie: e.target.value }))}
                   />
@@ -726,7 +929,6 @@ export default function ServiceSheet() {
                   <span>{numeroSerie || "-"}</span>
                 )}
               </Row>
-              <Row label="Garantía (fábrica)">{data.garantia ? "Sí" : "No"}</Row>
               <Row label="Garantía de reparación">
                 {editBasics ? (
                   <input
@@ -741,7 +943,7 @@ export default function ServiceSheet() {
               <Row label="N° interno (MG)">
                 {editBasics ? (
                   <input
-                    className="border rounded p-1 w-60"
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                     value={formBasics?.numero_interno || ""}
                     onChange={(e) => setFormBasics(s => ({ ...s, numero_interno: e.target.value }))}
                   />
@@ -749,10 +951,10 @@ export default function ServiceSheet() {
                   <span>{data.numero_interno || ""}</span>
                 )}
               </Row>
-              <Row label={"N\u00B0 de remito"}>
+              <Row label={"N° de remito"}>
                 {editBasics ? (
                   <input
-                    className="border rounded p-1 w-60"
+                    className="border rounded p-1 w-full bg-yellow-50 focus:bg-yellow-100"
                     value={formBasics?.remito_ingreso ?? ""}
                     onChange={(e) => setFormBasics(s => ({ ...s, remito_ingreso: e.target.value }))}
                   />
@@ -767,7 +969,7 @@ export default function ServiceSheet() {
                 <Row label="Informe preliminar">
                   {editBasics ? (
                     <textarea
-                      className="border rounded p-2 w-full min-h-[100px]"
+                      className="border rounded p-2 w-full min-h-[100px] bg-yellow-50 focus:bg-yellow-100"
                       value={formBasics?.informe_preliminar ?? ""}
                       onChange={(e) => setFormBasics(s => ({ ...s, informe_preliminar: e.target.value }))}
                     />
@@ -803,7 +1005,7 @@ export default function ServiceSheet() {
               <Row label="Fecha servicio">{data.fecha_servicio ? formatDateTimeHelper(data.fecha_servicio) : "-"}</Row>
               </div>
 
-              {/* Derivar a externo -> movido a pestaña Derivaciones */}
+              {/* Derivar a externo -> movido a pesta├▒a Derivaciones */}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
                 <div>
@@ -1061,7 +1263,7 @@ export default function ServiceSheet() {
         </>
       )}
 
-      {/* DIAGNÓSTICO */}
+      {/* DIAGN├ôSTICO */}
       {tab === "diagnostico" && (
         <div className="border rounded p-4">
           {/* Contexto útil para diagnosticar */}
@@ -1219,7 +1421,7 @@ export default function ServiceSheet() {
               className="w-full border rounded p-2 min-h-[200px]"
               value={trabajos}
               onChange={(e) => setTrabajos(e.target.value)}
-              placeholder="Ej.: Cambio de turbina; limpieza y secado; resoldado de conector; calibración; pruebas OK…"
+              placeholder="Ej.: Cambio de turbina; limpieza y secado; resoldado de conector; calibración; pruebas OKÔÇª"
             />
             <div className="mt-2 flex items-center gap-2">
               <button

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from rest_framework.authentication import BaseAuthentication
 from rest_framework import exceptions
 from django.contrib.auth.hashers import check_password, make_password
+from django.conf import settings
 from .models import User
 
 # Usá la misma clave en todos los contenedores; para dev vale el default
@@ -44,7 +45,8 @@ class JWTAuthentication(BaseAuthentication):
         if auth_header.startswith(self.keyword + " "):
             token = auth_header.split(" ", 1)[1].strip()
         else:
-            cookie_token = request.COOKIES.get("auth_token")
+            cookie_name = getattr(settings, "AUTH_COOKIE_NAME", "auth_token")
+            cookie_token = request.COOKIES.get(cookie_name)
             if cookie_token:
                 token = cookie_token.strip()
         if not token:

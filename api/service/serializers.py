@@ -109,6 +109,7 @@ class IngresoDetailSerializer(serializers.Serializer):
     descripcion_problema = serializers.CharField(allow_null=True, allow_blank=True)
     trabajos_realizados  = serializers.CharField(allow_null=True, allow_blank=True)
     accesorios           = serializers.CharField(allow_null=True, allow_blank=True)
+    comentarios          = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     equipo_variante      = serializers.CharField(allow_null=True, allow_blank=True, required=False)
 
     # Ubicación

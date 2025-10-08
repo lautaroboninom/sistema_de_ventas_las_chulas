@@ -16,7 +16,7 @@ class RLSMiddleware:
 class ActivityLogMiddleware:
     """
     Auditoría a nivel aplicación (HTTP). Registra SOLO métodos de escritura
-    (POST/PATCH/PUT/DELETE) con metadata mínima. Append-only. MySQL only.
+    (POST/PATCH/PUT/DELETE) con metadata mínima. Append-only.
     """
     WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -56,7 +56,7 @@ class ActivityLogMiddleware:
                     cur.execute(
                         """
                         INSERT INTO audit_log (ts, user_id, role, method, path, ip, user_agent, status_code, body)
-                        VALUES (now(), %s, %s, %s, %s, %s, %s, %s, CAST(%s AS JSON))
+                        VALUES (now(), %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                         """,
                         [
                             user_id,

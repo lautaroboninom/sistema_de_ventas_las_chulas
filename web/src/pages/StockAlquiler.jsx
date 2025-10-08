@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getGeneralEquipos } from "../lib/api";
-import { ingresoIdOf, formatOS, norm, tipoEquipoOf, catalogEquipmentLabel } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, norm, tipoEquipoOf, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import { useAuth } from "../context/AuthContext";
 
 // Catálogo (DB):
@@ -67,10 +67,32 @@ export default function StockAlquiler() {
     if (!needle) return rows;
     return rows.filter(r => {
       if (!estadoValido(r)) return false;
-      const campos = [formatOS(r), r?.marca, catalogEquipmentLabel(r), tipoEquipoOf(r), r?.numero_serie, r?.razon_social];
+      const campos = [formatOS(r), r?.marca, catalogEquipmentLabel(r), tipoEquipoOf(r), r?.numero_serie, r?.numero_interno, r?.razon_social];
       return campos.some(c => norm(c).includes(needle));
     });
   }, [rows, filter]);
+
+  const marcaOf = (row) => (row?.marca ?? row?.equipo?.marca ?? "-");
+  const modeloOf = (row) => {
+    const candidates = [row?.modelo, row?.equipo?.modelo, row?.modelo_nombre, row?.equipo?.modelo_nombre, row?.modelo_serie, row?.serie_nombre];
+    for (const raw of candidates) {
+      if (typeof raw === "string") {
+        const v = raw.trim();
+        if (v) return v;
+      }
+    }
+    return "-";
+  };
+  const varianteOf = (row) => {
+    const candidates = [row?.equipo_variante, row?.modelo_variante, row?.variante, row?.variante_nombre];
+    for (const raw of candidates) {
+      if (typeof raw === "string") {
+        const v = raw.trim();
+        if (v) return v;
+      }
+    }
+    return "-";
+  };
 
   return (
     <div className="card">
@@ -95,9 +117,10 @@ export default function StockAlquiler() {
               <thead>
                 <tr className="text-left">
                   <th className="p-2">OS</th>
+                  <th className="p-2">Tipo de equipo</th>
                   <th className="p-2">Marca</th>
-                  <th className="p-2">Equipo</th>
-                  <th className="p-2">Tipo</th>
+                  <th className="p-2">Modelo</th>
+                  <th className="p-2">Variante</th>
                   <th className="p-2">Serie</th>
                 </tr>
               </thead>
@@ -109,10 +132,11 @@ export default function StockAlquiler() {
                     onClick={() => nav(`/ingresos/${ingresoIdOf(row)}`)}
                   >
                     <td className="p-2 underline">{formatOS(row)}</td>
-                    <td className="p-2">{row.marca}</td>
-                    <td className="p-2">{catalogEquipmentLabel(row)}</td>
                     <td className="p-2">{tipoEquipoOf(row)}</td>
-                    <td className="p-2">{row.numero_serie}</td>
+                    <td className="p-2">{marcaOf(row)}</td>
+                    <td className="p-2">{modeloOf(row)}</td>
+                    <td className="p-2">{varianteOf(row)}</td>
+                    <td className="p-2">{nsPreferInternoOf(row)}</td>
                   </tr>
                 ))}
               </tbody>

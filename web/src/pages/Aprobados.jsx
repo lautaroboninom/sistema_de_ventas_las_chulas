@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
 
@@ -48,6 +48,7 @@ export default function Aprobados() {
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
+        row?.numero_interno,
       ];
       return campos.some((c) => norm(c).includes(needle));
     });
@@ -101,9 +102,7 @@ export default function Aprobados() {
               <tr className="text-left">
                 <th className="p-2">OS</th>
                 <th className="p-2">Cliente</th>
-                <th className="p-2">Marca</th>
                 <th className="p-2">Equipo</th>
-                <th className="p-2">Tipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
                 <th className="p-2">Fecha ingreso</th>
@@ -124,13 +123,11 @@ export default function Aprobados() {
                 >
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
-                  <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
                   <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
-                  <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">
                     <StatusChip value={row?.estado} />
                   </td>
-                  <td className="p-2">{row?.numero_serie ?? "-"}</td>
+                  <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_aprobacion ?? row?.presupuesto_fecha_aprobacion)}</td>
                 </tr>

@@ -1,7 +1,3 @@
-# app/_init_.py
-try:
-    import pymysql
-    pymysql.install_as_MySQLdb()
-except Exception:
-    # If mysqlclient is available, this is harmless; if not, PyMySQL provides MySQLdb
-    pass
+# app/__init__.py
+# PostgreSQL-only build: no legacy client shims needed.
+pass

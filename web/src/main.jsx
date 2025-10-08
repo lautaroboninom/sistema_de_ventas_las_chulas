@@ -39,6 +39,7 @@ import Derivados from "./pages/Derivados.jsx";
 import Metricas from "./pages/Metricas.jsx";
 import MetricasClientes from "./pages/MetricasClientes.jsx";
 import ConfigMetricas from "./pages/ConfigMetricas.jsx";
+import Garantias from "./pages/Garantias.jsx";
 
 function NotFound() {
   return (
@@ -234,6 +235,14 @@ const router = createBrowserRouter([
         ),
       },
       {
+        path: "garantias",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+            <Garantias />
+          </ProtectedRoute>
+        ),
+      },
+      {
         path: "usuarios",
         element: (
           <ProtectedRoute roles={["jefe","jefe_veedor"]}>
@@ -308,8 +317,21 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   </React.StrictMode>
 );
 
-// Registrar Service Worker (solo en build)
+// Limpieza de Service Workers/caches antiguos para evitar mezclar bundles
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  // Intentar desregistrar cualquier SW previo y limpiar caches de app
+  try {
+    navigator.serviceWorker.getRegistrations?.().then((regs) => {
+      regs?.forEach((r) => r.unregister().catch(() => {}));
+    });
+    if (window.caches && caches.keys) {
+      caches.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
+    }
+  } catch (_) {}
+}
+
+// Registrar Service Worker (opcional): habilitar solo si VITE_SW=1 en build
+if (import.meta.env.PROD && import.meta.env.VITE_SW === '1' && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {
       // silenciosamente ignoramos errores de registro

@@ -21,9 +21,13 @@ export function AuthProvider({ children }) {
     (async () => {
       try {
         const data = await getAuthSession();
-        if (active && data?.user) {
-          registerFeatures(data.features);
-          setUser(sanitizeUser(data.user));
+        if (!active) return;
+        // La API de sesión devuelve los campos del usuario en el nivel raíz.
+        // Mantener compatibilidad si alguna vez vuelve como { user, features }.
+        const u = data?.user ?? data;
+        if (u) {
+          if (data?.features) registerFeatures(data.features);
+          setUser(sanitizeUser(u));
         }
       } catch (err) {
         if (import.meta.env.DEV) {

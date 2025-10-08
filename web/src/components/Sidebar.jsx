@@ -108,6 +108,7 @@ export default function Sidebar() {
               <LinkItem to="/catalogo/tipos-equipo">Tipos de equipo</LinkItem>
               <LinkItem to="/catalogo/marcas">Marcas &amp; Modelos</LinkItem>
               <LinkItem to="/catalogo/proveedores">Proveedores externos</LinkItem>
+              <LinkItem to="/garantias">Garantías</LinkItem>
             </>
           )}
         </div>

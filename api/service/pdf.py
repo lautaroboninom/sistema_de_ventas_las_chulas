@@ -53,6 +53,10 @@ def _get_data(ingreso_id: int):
             t.remito_ingreso,
             t.motivo AS motivo,
             c.razon_social AS cliente,
+            COALESCE(c.cuit, '') AS cliente_cuit,
+            COALESCE(c.contacto, '') AS cliente_contacto,
+            COALESCE(c.telefono, '') AS cliente_telefono,
+            COALESCE(c.telefono_2, '') AS cliente_telefono_2,
             COALESCE(c.email, '') AS cliente_email,
             d.numero_serie,
             COALESCE(d.garantia_bool, false) AS garantia,
@@ -114,12 +118,110 @@ def _get_data(ingreso_id: int):
 
     return head, items
 
-# Logo (ruta configurable)
-LOGO_PATH = (
-    os.environ.get("LOGO_PATH")
-    or os.environ.get("SEPID_LOGO_PATH")
-    or os.path.join(settings.BASE_DIR, "service", "static", "logo.png")
-)
+# Logo: detectar primera ruta disponible (permite logo-app.png)
+def _detect_logo_path():
+    env = os.environ.get("LOGO_PATH") or os.environ.get("SEPID_LOGO_PATH")
+    candidates = [
+        env,
+        # rutas comunes en contenedor
+        "/app/staticfiles/branding/logo-app.png",
+        "/app/staticfiles/logo-app.png",
+        "/app/staticfiles/logo.png",
+        # rutas dentro del repo (dev local)
+        os.path.join(settings.BASE_DIR, "web", "public", "branding", "logo-empresa.png"),
+        os.path.join(settings.BASE_DIR, "web", "public", "branding", "logo-app.png"),
+        os.path.join(settings.BASE_DIR, "..", "web", "public", "branding", "logo-empresa.png"),
+        os.path.join(settings.BASE_DIR, "..", "web", "public", "branding", "logo-app.png"),
+        os.path.join(settings.BASE_DIR, "service", "static", "logo-app.png"),
+        os.path.join(settings.BASE_DIR, "service", "static", "logo.png"),
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+LOGO_PATH = _detect_logo_path()
+
+# --- Empresa/branding helpers ---
+def _get_empresa_facturar(ingreso_id: int) -> str:
+    """Returns 'SEPID' (default) or 'MGBIO' from ingresos. Safe if column is missing."""
+    try:
+        with connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'ingresos'
+                   AND column_name = 'empresa_facturar'
+                   AND table_schema = ANY(current_schemas(true))
+                 LIMIT 1
+                """
+            )
+            exists = cur.fetchone() is not None
+            if not exists:
+                return "SEPID"
+            cur.execute("SELECT empresa_facturar FROM ingresos WHERE id=%s", [ingreso_id])
+            row = cur.fetchone()
+            val = (row[0] if row else None) or "SEPID"
+            return "MGBIO" if str(val).strip().upper() == "MGBIO" else "SEPID"
+    except Exception:
+        return "SEPID"
+
+
+def _logo_path_for_company(code: str) -> str | None:
+    """Return a best-effort path to a company logo that exists on disk.
+
+    Tries environment overrides first, then common container/static paths,
+    and finally repo-local development paths.
+    """
+    candidates: list[str | None] = []
+
+    if code == "MGBIO":
+        # override específica para la segunda marca
+        candidates.append(os.environ.get("LOGO_PATH_2"))
+        # variantes habituales del nombre del archivo
+        candidates += [
+            "/app/staticfiles/branding/logo-empresa-2.png",
+            "/app/staticfiles/logo-empresa-2.png",
+            os.path.join(settings.BASE_DIR, "web", "public", "branding", "logo-empresa-2.png"),
+            os.path.join(settings.BASE_DIR, "..", "web", "public", "branding", "logo-empresa-2.png"),
+        ]
+
+    # Comunes a cualquier marca
+    candidates += [
+        os.environ.get("LOGO_PATH"),
+        LOGO_PATH,
+        os.path.join(settings.BASE_DIR, "web", "public", "branding", "logo-empresa.png"),
+        os.path.join(settings.BASE_DIR, "..", "web", "public", "branding", "logo-empresa.png"),
+        "/app/staticfiles/branding/logo-app.png",
+        "/app/staticfiles/logo-app.png",
+        "/app/staticfiles/logo.png",
+        os.path.join(settings.BASE_DIR, "service", "static", "logo-app.png"),
+        os.path.join(settings.BASE_DIR, "service", "static", "logo.png"),
+    ]
+
+    for cand in candidates:
+        try:
+            if cand and os.path.exists(cand):
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def _company_header_lines(code: str):
+    """Returns (L1 address, L2 company name, L3 'CUIT ...') for given company code.
+
+    Safe defaults are provided and variables are always defined to avoid runtime errors.
+    """
+    if code == "MGBIO":
+        name = os.environ.get("COMPANY_NAME_2", "MG BIO")
+        addr = os.environ.get("COMPANY_HEADER_L1_2") or os.environ.get("COMPANY_HEADER_L1", "")
+        cuit = os.environ.get("COMPANY_FOOTER_CUIT_2", "")
+        return addr, name, (f"CUIT {cuit}" if cuit else "")
+    name = os.environ.get("COMPANY_NAME", "SEPID SA")
+    addr = os.environ.get("COMPANY_HEADER_L1", "")
+    cuit = os.environ.get("COMPANY_FOOTER_CUIT", "")
+    return addr, name, (f"CUIT {cuit}" if cuit else "")
 
 def _wrap_lines(text, font, size, max_width):
     """Corta texto por palabras para que entre en max_width."""
@@ -194,6 +296,29 @@ def render_quote_pdf(ingreso_id: int):
     if not head:
         return None, None
 
+    # Recalcular totales desde items (evita depender de quotes.subtotal desactualizado)
+    try:
+        row = _q(
+            """
+            SELECT COALESCE(SUM(qi.qty*qi.precio_u),0) AS subtotal
+            FROM quote_items qi
+            JOIN quotes q ON q.id=qi.quote_id
+            WHERE q.ingreso_id=%s
+            """,
+            [ingreso_id],
+            one=True,
+        ) or {"subtotal": 0}
+        subtotal_calc = Decimal(row.get("subtotal") or 0)
+        iva_21_calc = subtotal_calc * Decimal("0.21")
+        total_calc = subtotal_calc + iva_21_calc
+        head["subtotal"], head["iva_21"], head["total"] = subtotal_calc, iva_21_calc, total_calc
+    except Exception:
+        pass
+
+    # Empresa para logo/pie, pero los headers permanecen fijos como antes
+    empresa = _get_empresa_facturar(ingreso_id)
+    _LOGO_THIS = _logo_path_for_company(empresa)
+    # Encabezado de empresa (fijo, indiferente de la empresa seleccionada)
     EMPRESA_LINEA1 = getattr(settings, "COMPANY_HEADER_L1", "Valdenegro 4578 C.A.B.A (1430)")
     EMPRESA_LINEA2 = getattr(settings, "COMPANY_HEADER_L2", "IMPORTADORES DE EQUIPOS")
     EMPRESA_LINEA3 = getattr(settings, "COMPANY_HEADER_L3", "MEDICOS Y REPARACIONES")
@@ -211,26 +336,35 @@ def render_quote_pdf(ingreso_id: int):
     ml, mt = 18*mm, 18*mm
     y = H - mt
 
-    if LOGO_PATH and os.path.exists(LOGO_PATH):
-        try:
-            logo_w = 45 * mm
-            x_logo = W/3 + logo_w
-            c.drawImage(
-                ImageReader(LOGO_PATH),
-                x_logo, y - 15*mm,
-                width=logo_w,
-                height=logo_w/2.62,
-                preserveAspectRatio=True,
-                mask='auto'
-            )
-        except Exception:
-            pass
+    # logo en encabezado
+    # Logo: intentar por empresa y si falla usar el global
+    _logo_candidates = []
+    if _LOGO_THIS:
+        _logo_candidates.append(_LOGO_THIS)
+    if LOGO_PATH:
+        _logo_candidates.append(LOGO_PATH)
+    for _lp in _logo_candidates:
+        if _lp and os.path.exists(_lp):
+            try:
+                logo_w = 50 * mm
+                x_logo = W/3 - logo_w
+                c.drawImage(
+                    ImageReader(_lp),
+                    x_logo, y - 15*mm,
+                    width=logo_w,
+                    height=logo_w/2.62,
+                    preserveAspectRatio=True,
+                    mask='auto'
+                )
+                break
+            except Exception:
+                continue
 
     c.setFont("Helvetica-Bold", 12)
-    c.drawCentredString(W - W/3, y-4*mm, EMPRESA_LINEA2)
-    c.drawCentredString(W - W/3, y-9*mm, EMPRESA_LINEA3)
+    c.drawCentredString(W - W/3+5*mm, y-4*mm, EMPRESA_LINEA2)
+    c.drawCentredString(W - W/3+5*mm, y-9*mm, EMPRESA_LINEA3)
     c.setFont("Helvetica", 9)
-    c.drawCentredString(W - W/3, y-14*mm, EMPRESA_LINEA1)
+    c.drawCentredString(W - W/3+5*mm, y-14*mm, EMPRESA_LINEA1)
 
     # Título de OS a la derecha, debajo del encabezado de empresa
     c.setFont("Helvetica-Bold", 18)
@@ -246,6 +380,30 @@ def render_quote_pdf(ingreso_id: int):
     c.setFont("Helvetica", 11)
     c.drawString(ml, y, f"Señor(es): {head['cliente']}")
     y -= 16
+
+    # Datos adicionales del cliente
+    try:
+        c.setFont("Helvetica", 10)
+        cuit_val = (head.get("cliente_cuit") or "").strip() or "-"
+        c.drawString(ml, y, f"CUIT: {cuit_val}")
+        y -= 14
+        parts = []
+        contacto = (head.get("cliente_contacto") or "").strip()
+        tel1 = (head.get("cliente_telefono") or "").strip()
+        tel2 = (head.get("cliente_telefono_2") or "").strip()
+        email = (head.get("cliente_email") or "").strip()
+        if contacto:
+            parts.append(f"Contacto: {contacto}")
+        tel = " / ".join([p for p in [tel1, tel2] if p])
+        if tel:
+            parts.append(f"Tel: {tel}")
+        if email:
+            parts.append(f"Email: {email}")
+        if parts:
+            c.drawString(ml, y, "   ".join(parts))
+            y -= 16
+    except Exception:
+        pass
 
     y = _draw_equipment_panel(
         c, ml, y, W - 2*ml,
@@ -273,8 +431,9 @@ def render_quote_pdf(ingreso_id: int):
         if d_up not in seen:
             seen.add(d_up)
             mats.append(d_up)
-    mat_text = "\n".join(mats) if mats else "—"
-    y = _draw_block(c, ml, y, "Mat. Reemplazar", mat_text, W-2*ml) - 4
+    mat_text = "\n".join(mats) if mats else "-"
+    # Se eliminó la sección "Mat. Reemplazar"
+    # y = _draw_block(c, ml, y, "Mat. Reemplazar", mat_text, W-2*ml) - 4
 
     diag = (head.get("descripcion_problema") or "").strip()
     trab = (head.get("trabajos_realizados") or "").strip()
@@ -353,6 +512,30 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     if not head:
         return b"", f"Remito_{ingreso_id}.pdf"
 
+    # Recalculate totals from items to avoid stale quote data
+    try:
+        row = _q(
+            """
+            SELECT COALESCE(SUM(qi.qty*qi.precio_u),0) AS subtotal
+            FROM quote_items qi
+            JOIN quotes q ON q.id=qi.quote_id
+            WHERE q.ingreso_id=%s
+            """,
+            [ingreso_id],
+            one=True,
+        ) or {"subtotal": 0}
+        subtotal_calc = Decimal(row.get("subtotal") or 0)
+        iva_21_calc = subtotal_calc * Decimal("0.21")
+        total_calc = subtotal_calc + iva_21_calc
+        head["subtotal"], head["iva_21"], head["total"] = subtotal_calc, iva_21_calc, total_calc
+    except Exception:
+        # Si falla el calculo, continuamos con los valores existentes
+        pass
+
+    empresa = _get_empresa_facturar(ingreso_id)
+    L1, L2, L3 = _company_header_lines(empresa)
+    _LOGO_THIS = _logo_path_for_company(empresa)
+
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
 
@@ -376,12 +559,26 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     P_LH    = 3.6 * mm        # leading de párrafo en Observaciones
 
     def draw_logo(x, y, w=24 * mm):
-        if LOGO_PATH and os.path.exists(LOGO_PATH):
+        # Probar varias rutas posibles para aumentar la robustez
+        candidates = []
+        if _LOGO_THIS:
+            candidates.append(_LOGO_THIS)
+        candidates.append(os.environ.get("LOGO_PATH"))
+        if LOGO_PATH:
+            candidates.append(LOGO_PATH)
+        # rutas dentro del repo por si el env está mal configurado en dev
+        candidates += [
+            os.path.join(settings.BASE_DIR, "web", "public", "branding", "logo-empresa.png"),
+            os.path.join(settings.BASE_DIR, "..", "web", "public", "branding", "logo-empresa.png"),
+        ]
+        for p in candidates:
             try:
-                c.drawImage(ImageReader(LOGO_PATH), x, y, width=w, height=w/2.62,
-                            preserveAspectRatio=True, mask='auto')
+                if p and os.path.exists(p):
+                    c.drawImage(ImageReader(p), x, y, width=w, height=w/2.62,
+                                preserveAspectRatio=True, mask='auto')
+                    return
             except Exception:
-                pass
+                continue
 
     def box(x, y, w, h):
         c.rect(x, y, w, h, stroke=1, fill=0)
@@ -411,11 +608,24 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
 
     def big_title(y_top):
         x = margin + 6 * mm
+        # Título y número de OS juntos
         c.setFont("Helvetica", 10.2)
-        c.drawString(x, y_top - 5 * mm, "Orden Interna de Servicio :")
-        c.setFont("Helvetica-Bold", 14.2)
-        c.drawRightString(W - margin - 34 * mm, y_top - 5 * mm, f"{head['ingreso_id']}")
+        title_txt = "Orden Interna de Servicio :"
+        c.drawString(x, y_top - 5 * mm, title_txt)
+        # Calcular ancho del título para ubicar el número pegado a la derecha
+        try:
+            title_w = pdfmetrics.stringWidth(title_txt, "Helvetica", 10.2)
+        except Exception:
+            title_w = 75  # fallback aproximado
+        c.setFont("Helvetica-Bold", 12.8)
+        c.drawString(x + title_w + 3 * mm, y_top - 5 * mm, f"{head['ingreso_id']}")
+
+        # Logo arriba a la derecha (sin nombre de empresa ni dirección para evitar solapes)
         draw_logo(W - margin - 26 * mm, y_top - 10 * mm, w=24 * mm)
+
+        # No dibujar nombre ni dirección; opcionalmente podría mostrarse el CUIT si se desea.
+        # Lo omitimos para asegurar que no tape los campos superiores.
+
         c.setFont("Helvetica-Bold", 8.5)
         c.drawString(x, y_top - 11.5 * mm, "ENTREGA DE EQUIPO")
 
@@ -473,7 +683,18 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
 
         c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
         c.drawString(inner_x + 118 * mm, y, "Costo Neto:")
-        c.setFillColor(colors.black); box(inner_x + 138 * mm, y - (SIGN_H/2), 24 * mm, SIGN_H)
+        # Draw box and value for net cost (subtotal)
+        x_box = inner_x + 138 * mm
+        w_box = 24 * mm
+        y_box = y - (SIGN_H/2)
+        c.setFillColor(colors.black)
+        box(x_box, y_box, w_box, SIGN_H)
+        try:
+            neto_val = Decimal(head.get("subtotal") or 0)
+        except Exception:
+            neto_val = Decimal(0)
+        c.setFont("Helvetica-Bold", F_FIELD)
+        c.drawRightString(x_box + w_box - 1.4 * mm, y_box + 1.2 * mm, f"$ {money_es(neto_val)}")
 
     def draw_form(y_top, height, leyenda):
         c.rect(margin, y_top - height, W - 2 * margin, height, stroke=1, fill=0)
@@ -492,6 +713,9 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         x = margin + 6 * mm
         y = y_top - 10 * mm
 
+        # Logo en la esquina superior derecha del recuadro de etiqueta
+        draw_logo(W - margin - 26 * mm, y_top - 10 * mm, w=24 * mm)
+
         c.setFont("Helvetica-Bold", 13.0); c.drawString(x, y, f"OS {head['ingreso_id']}")
         y -= 8.5 * mm
         c.setFont("Helvetica", 10.0)
@@ -505,13 +729,25 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
 
         c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
         c.drawString(x + 118 * mm, y, "Costo Neto:")
-        c.setFillColor(colors.black); box(x + 138 * mm, y - (SIGN_H/2), 24 * mm, SIGN_H)
+        # Draw box and value for net cost (subtotal)
+        x_box = x + 138 * mm
+        w_box = 24 * mm
+        y_box = y - (SIGN_H/2)
+        c.setFillColor(colors.black)
+        box(x_box, y_box, w_box, SIGN_H)
+        try:
+            neto_val = Decimal(head.get("subtotal") or 0)
+        except Exception:
+            neto_val = Decimal(0)
+        c.setFont("Helvetica-Bold", F_FIELD)
+        c.drawRightString(x_box + w_box - 1.4 * mm, y_box + 1.2 * mm, f"$ {money_es(neto_val)}")
 
         base = getattr(settings, 'PUBLIC_WEB_URL', '').rstrip('/')
         url = f"{base}/ingresos/{head['ingreso_id']}"
         code = qr.QrCodeWidget(url)
         d = Drawing(60, 60); d.add(code)
-        renderPDF.draw(d, c, W - margin - 35 * mm, y_top - height + 20 * mm)
+        # Correr el QR a la izquierda para no superponer con el logo
+        renderPDF.draw(d, c, W - margin - 80 * mm, y_top - height + 20 * mm)
 
     # --- 2–2–1 ---
     y = H - margin

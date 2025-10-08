@@ -2,12 +2,10 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion } from "../lib/ui-helpers";
 
-
-// Ajustá si tu backend usa otra ruta (histórico completo)
+// Ajusta si tu backend usa otra ruta (histórico completo)
 const ENDPOINT = "/api/equipos/";
-
 
 export default function GeneralEquipos() {
   const [rows, setRows] = useState([]);
@@ -21,7 +19,7 @@ export default function GeneralEquipos() {
       setErr("");
       setLoading(true);
       const data = await api.get(ENDPOINT);
-      // Si tu API ya ordena por fecha, podés omitir el sort local:
+      // Si tu API ya ordena por fecha, podés omitir el sort local
       const safe = Array.isArray(data) ? data : [];
       safe.sort((a, b) => {
         const da = new Date(resolveFechaCreacion(a) ?? 0).getTime();
@@ -51,10 +49,12 @@ export default function GeneralEquipos() {
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
         row?.marca ?? row?.equipo?.marca,
-        catalogEquipmentLabel(row),
+        row?.modelo ?? row?.equipo?.modelo,
+        row?.equipo_variante ?? row?.variante ?? row?.modelo_variante,
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
+        row?.numero_interno,
         row?.ubicacion_nombre,
       ];
       return campos.some((c) => norm(c).includes(needle));
@@ -89,7 +89,7 @@ export default function GeneralEquipos() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, marca, equipo, estado, serie…"
+          placeholder="Filtrar por OS, cliente, tipo de equipo, marca, modelo, variante, estado, serie..."
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar histórico"
         />
@@ -117,10 +117,13 @@ export default function GeneralEquipos() {
               <tr className="text-left">
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
-                <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">Tipo</th>
+                <th scope="col" className="p-2">Tipo de equipo</th>
+                <th scope="col" className="p-2">Marca</th>
+                <th scope="col" className="p-2">Modelo</th>
+                <th scope="col" className="p-2">Variante</th>
                 <th scope="col" className="p-2">Estado</th>
-                <th scope="col" className="p-2">Serie</th>
+                <th scope="col" className="p-2">N/S (serie)</th>
+                <th scope="col" className="p-2">MG</th>
                 <th scope="col" className="p-2">Ubicación</th>
                 <th scope="col" className="p-2">Fecha ingreso</th>
                 <th scope="col" className="p-2">Fecha entrega</th>
@@ -142,10 +145,13 @@ export default function GeneralEquipos() {
                   <td className="p-2">
                     {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
                   </td>
-                  <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   <td className="p-2">{tipoEquipoOf(row)}</td>
+                  <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
+                  <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                  <td className="p-2">{row?.equipo_variante ?? row?.variante ?? row?.modelo_variante ?? "-"}</td>
                   <td className="p-2">{row?.estado ?? "-"}</td>
                   <td className="p-2">{row?.numero_serie ?? "-"}</td>
+                  <td className="p-2">{row?.numero_interno ?? "-"}</td>
                   <td className="p-2">{row?.ubicacion_nombre ?? "-"}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_entrega)}</td>

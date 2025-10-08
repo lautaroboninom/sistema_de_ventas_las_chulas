@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { getClientes } from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 
 
 
@@ -71,6 +71,7 @@ export default function GeneralPorCliente() {
         row?.estado,
         row?.presupuesto_estado,
         row?.numero_serie,
+        row?.numero_interno,
         row?.ubicacion_nombre ?? String(row?.ubicacion_id ?? ""),
       ];
       return campos.some((c) => norm(c).includes(needle));
@@ -157,7 +158,6 @@ export default function GeneralPorCliente() {
               <tr className="text-left">
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Presupuesto</th>
@@ -179,13 +179,8 @@ export default function GeneralPorCliente() {
                   data-testid={`row-${ingresoIdOf(row)}`}
                 >
                   <td className="p-2 underline">{formatOS(row)}</td>
-                  <td className="p-2">
-                    {(row?.marca ?? row?.equipo?.marca ?? "-") +
-                      " " +
-                      (catalogEquipmentLabel(row) ?? "")}
-                  </td>
-                  <td className="p-2">{tipoEquipoOf(row)}</td>
-                  <td className="p-2">{row?.numero_serie ?? "-"}</td>
+                  <td className="p-2">{catalogEquipmentLabel(row)}</td>
+                  <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2">{row?.estado ?? "-"}</td>
                   <td className="p-2">{row?.presupuesto_estado ?? "-"}</td>
                   <td className="p-2">{row?.ubicacion_nombre ?? row?.ubicacion_id ?? "-"}</td>

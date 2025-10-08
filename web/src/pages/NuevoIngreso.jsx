@@ -9,6 +9,7 @@ import {
   postNuevoIngreso,
   getMotivos,
   checkGarantiaReparacion,
+  checkGarantiaFabrica,
   getAccesoriosCatalogo,
   getTiposEquipo,
   getMarcasPorTipo,
@@ -61,6 +62,7 @@ export default function NuevoIngreso() {
     },
     motivo: "",
     informe_preliminar: "",
+    comentarios: "",
     garantia_reparacion: false,
     remito_ingreso: "",
     fecha_ingreso: "", // opcional: si viene vacía, se usará hoy() en el backend
@@ -75,6 +77,8 @@ export default function NuevoIngreso() {
   const [propietario, setPropietario] = useState({ nombre: "", contacto: "", doc: "" });
   const [tecnicos, setTecnicos] = useState([]);
   const [tecnicoId, setTecnicoId] = useState(null);
+  // Empresa a facturar (SEPID por defecto)
+  const [empresaFact, setEmpresaFact] = useState("SEPID");
 
   const [loading, setLoading] = useState(false);
   const [out, setOut] = useState(null);
@@ -122,7 +126,7 @@ export default function NuevoIngreso() {
     }
   }
 
-  // Garantía de reparación (por N/S o N° interno MG) — debounce 400ms
+  // Garantía de reparación (por N/S o N° interno MG) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const mg = (form.equipo.numero_interno || "").trim();
@@ -140,6 +144,30 @@ export default function NuevoIngreso() {
     }, 400);
     return () => clearTimeout(h);
   }, [form.equipo.numero_serie, form.equipo.numero_interno]);
+
+  // Garantía de fábrica (por N/S en Excels) - debounce 400ms
+  useEffect(() => {
+    const ns = (form.equipo.numero_serie || "").trim();
+    const marcaSel = (() => {
+      const m = marcas.find((x) => x.id === (marcaId || form.equipo.marca_id));
+      return m?.nombre || "";
+    })();
+    if (!ns) {
+      // Si no hay N/S, no marcar
+      setForm((f) => ({ ...f, equipo: { ...f.equipo, garantia: false } }));
+      return;
+    }
+    const h = setTimeout(async () => {
+      try {
+        const r = await checkGarantiaFabrica(ns, marcaSel);
+        const enGarantia = !!r.within_365_days;
+        setForm((f) => ({ ...f, equipo: { ...f.equipo, garantia: enGarantia } }));
+      } catch {
+        /* noop */
+      }
+    }, 400);
+    return () => clearTimeout(h);
+  }, [form.equipo.numero_serie, marcaId, form.equipo.marca_id, marcas]);
 
   const tipoEquipoSel = useMemo(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
@@ -373,6 +401,7 @@ export default function NuevoIngreso() {
         equipo_variante: (varianteTxt || "").trim() || null,
         motivo: form.motivo,
         informe_preliminar: form.informe_preliminar,
+        comentarios: form.comentarios,
         remito_ingreso: (form.remito_ingreso || "").trim(),
         ...(form.fecha_ingreso ? { fecha_ingreso: form.fecha_ingreso } : {}),
         accesorios_items: accItems.map((it) => ({
@@ -386,6 +415,7 @@ export default function NuevoIngreso() {
           contacto: propietario.contacto || "",
           doc: propietario.doc || "",
         },
+        empresa_facturar: (empresaFact || "SEPID").toUpperCase(),
       };
 
       const r = await postNuevoIngreso(payload);
@@ -404,6 +434,7 @@ export default function NuevoIngreso() {
         equipo: { marca_id: "", modelo_id: "", numero_serie: "", numero_interno: "", garantia: false },
         motivo: "",
         informe_preliminar: "",
+        comentarios: "",
         garantia_reparacion: false,
         remito_ingreso: "",
         fecha_ingreso: "",
@@ -411,6 +442,7 @@ export default function NuevoIngreso() {
       setAccItems([]);
       setPropietario({ nombre: "", contacto: "", doc: "" });
       setTecnicoId(null);
+      setEmpresaFact("SEPID");
       setVarianteTxt("");
     } catch (e2) {
       setErr(e2?.message || "Error creando ingreso");
@@ -494,6 +526,19 @@ export default function NuevoIngreso() {
             <b> Código</b>; si completás ambos, deben corresponder al mismo cliente.
           </p>
         </fieldset>
+
+        {/* Empresa a facturar */}
+        <div className="border rounded p-3">
+          <label className="text-sm">Empresa a facturar</label>
+          <Select
+            value={empresaFact}
+            onChange={(e) => setEmpresaFact((e.target.value || "SEPID").toUpperCase())}
+          >
+            <option value="SEPID">SEPID SA</option>
+            <option value="MGBIO">MG BIO</option>
+          </Select>
+          <div className="text-xs text-gray-500 mt-1">Por defecto: SEPID SA</div>
+        </div>
 
         {/* Equipo */}
         <fieldset className="border rounded p-3">
@@ -658,6 +703,16 @@ export default function NuevoIngreso() {
             <div className="md:col-span-2">
               <label className="text-sm">Informe preliminar</label>
               <TextArea rows={3} value={form.informe_preliminar} onChange={onChange("informe_preliminar")} />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="text-sm">Comentarios</label>
+              <TextArea
+                rows={3}
+                value={form.comentarios}
+                onChange={onChange("comentarios")}
+                placeholder="Notas internas u observaciones del ingreso"
+              />
             </div>
 
             {/* Accesorios */}

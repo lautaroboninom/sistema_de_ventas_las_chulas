@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { norm } from "../lib/ui-helpers";
 import api, { getTiposEquipo } from "../lib/api";
 
@@ -36,7 +36,7 @@ export default function TiposEquipo() {
       await api.post("/api/catalogos/tipos-equipo/", { nombre });
       setForm({ nombre: "" });
       await loadTipos();
-      setMsg("Tipo agregado (aparecerÃ¡Â¡ cuando lo uses en un modelo)");
+      setMsg("Tipo agregado (aparecerá¡ cuando lo uses en un modelo)");
     } catch (e) {
       setErr(e.message || "No se pudo agregar");
     } finally {
@@ -65,7 +65,7 @@ export default function TiposEquipo() {
   // No hay activar/desactivar: para ocultar, eliminar (limpiar en todos los modelos)
 
   async function removeItem(it) {
-    if (!confirm("Ã‚Â¿Eliminar tipo?")) return;
+    if (!confirm("�,¿Eliminar tipo?")) return;
     try {
       setLoading(true);
       setErr("");
@@ -134,3 +134,4 @@ export default function TiposEquipo() {
     </div>
   );
 }
+

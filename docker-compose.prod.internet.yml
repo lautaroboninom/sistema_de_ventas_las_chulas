@@ -1,5 +1,7 @@
 ﻿version: "3.9"
 
+
+name: sistemadereparaciones
 services:
   reverse-proxy:
     image: traefik:v3.0
@@ -33,22 +35,15 @@ services:
     networks:
       - proxy
 
-  mysql:
-    image: mysql:8
-    container_name: sepid-mysql
+  postgres:
+    image: postgres:16
+    container_name: sistemadereparaciones-postgres
     env_file: .env.prod.internet
-    environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
-      - MYSQL_DATABASE=${MYSQL_DATABASE}
-      - MYSQL_USER=${MYSQL_USER}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
-      - TZ=${TZ:-America/Argentina/Buenos_Aires}
     volumes:
-      - ./mysql:/docker-entrypoint-initdb.d:ro
-      - ./mysql.cnf:/etc/mysql/conf.d/custom.cnf:ro
-      - mysql_data:/var/lib/mysql
+      - pg_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p${MYSQL_ROOT_PASSWORD} --silent"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -q"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -60,13 +55,13 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.prod
-    container_name: sepid-api
+    container_name: sistemadereparaciones-api
     env_file: .env.prod.internet
     environment:
       - DJANGO_SETTINGS_MODULE=app.settings_internet
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
     command: >
       bash -lc "python manage.py migrate --noinput && \
@@ -96,7 +91,7 @@ services:
       dockerfile: Dockerfile.prod
       args:
         - VITE_API_URL=${VITE_API_URL}
-    container_name: sepid-web
+    container_name: sistemadereparaciones-web
     environment:
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
     depends_on:
@@ -126,6 +121,8 @@ networks:
     internal: true
 
 volumes:
-  mysql_data:
+  pg_data:
   staticfiles:
   mediafiles:
+
+

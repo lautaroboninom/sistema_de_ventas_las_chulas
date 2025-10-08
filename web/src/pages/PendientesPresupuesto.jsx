@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getPendientesPresupuesto } from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
 
@@ -52,6 +52,7 @@ export default function PendientesPresupuesto() {
         tipoEquipoOf(row),
         row?.estado,
         row?.numero_serie,
+        row?.numero_interno,
         row?.presupuesto_estado,
         String(row?.presupuesto_numero ?? ""),
         String(row?.presupuesto_monto ?? ""),
@@ -114,9 +115,7 @@ export default function PendientesPresupuesto() {
               <tr className="text-left">
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
-                <th scope="col" className="p-2">Marca</th>
                 <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">N/S</th>
                 <th scope="col" className="p-2">Presupuesto</th>
@@ -145,11 +144,9 @@ export default function PendientesPresupuesto() {
                   >
                     <td className="p-2 underline">{formatOS(row)}</td>
                     <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
-                    <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
                     <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
-                    <td className="p-2">{tipoEquipoOf(row)}</td>
                     <td className="p-2"><StatusChip value={row?.estado} /></td>
-                    <td className="p-2">{row?.numero_serie ?? "-"}</td>
+                    <td className="p-2">{nsPreferInternoOf(row)}</td>
                     <td className="p-2"><StatusChip value={presuLabel} title="Estado de Presupuesto" /></td>
                     <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                     <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_servicio)}</td>

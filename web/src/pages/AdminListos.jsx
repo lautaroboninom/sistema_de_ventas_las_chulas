@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, catalogEquipmentLabel } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 import { resolutionLabel } from "../lib/constants";
 
@@ -60,6 +60,7 @@ export default function AdminListos() {
         row?.resolucion,
         resolutionLabel(row?.resolucion ?? ""),
         row?.numero_serie,
+        row?.numero_interno,
       ];
       return campos.some((c) => norm(c).includes(needle));
     });
@@ -133,9 +134,7 @@ export default function AdminListos() {
               <tr className="text-left">
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
-                <th scope="col" className="p-2">Marca</th>
                 <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">Tipo</th>
                 <th scope="col" className="p-2">Resolución</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Fecha listo</th>
@@ -156,13 +155,11 @@ export default function AdminListos() {
                 >
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
-                  <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
                   <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
-                  <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2">
                     <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolución" />
                   </td>
-                  <td className="p-2">{row?.numero_serie ?? "-"}</td>
+                  <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">
                     {formatDateTime(row?.fecha_listo ?? row?.fecha_reparado ?? row?.fecha_estado)}
                   </td>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
 export default function Tecnico() {
@@ -77,6 +77,28 @@ export default function Tecnico() {
     navigate(`/ingresos/${id}`);
   };
 
+  const marcaOf = (row) => (row?.marca ?? row?.equipo?.marca ?? "-");
+  const modeloOf = (row) => {
+    const candidates = [row?.modelo, row?.equipo?.modelo, row?.modelo_serie, row?.serie_nombre];
+    for (const raw of candidates) {
+      if (typeof raw === "string") {
+        const v = raw.trim();
+        if (v) return v;
+      }
+    }
+    return "-";
+  };
+  const varianteOf = (row) => {
+    const candidates = [row?.modelo_variante, row?.variante_nombre, row?.equipo_variante, row?.equipo?.variante];
+    for (const raw of candidates) {
+      if (typeof raw === "string") {
+        const v = raw.trim();
+        if (v) return v;
+      }
+    }
+    return "-";
+  };
+
   const onRowKeyDown = (e, row) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -103,9 +125,7 @@ export default function Tecnico() {
               <tr className="text-left">
                 <th className="p-2">OS</th>
                 <th className="p-2">Fecha Ingreso</th>
-                <th className="p-2">Marca</th>
                 <th className="p-2">Equipo</th>
-                <th className="p-2">Tipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
                 <th className="p-2 text-right">Diagnosticado</th>
@@ -153,13 +173,11 @@ export default function Tecnico() {
                     <td className="p-2 whitespace-nowrap">
                       {fechaIngreso ? formatDateTime(fechaIngreso) : "-"}
                     </td>
-                    <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                    <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
-                    <td className="p-2">{tipoEquipoOf(row)}</td>
+                    <td className="p-2">{catalogEquipmentLabel(row)}</td>
                     <td className="p-2">
                       <StatusChip value={row?.estado} />
                     </td>
-                    <td className="p-2">{row?.numero_serie ?? "-"}</td>
+                    <td className="p-2">{nsPreferInternoOf(row)}</td>
 
                     <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
                       <StateSquare

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getTecnicos } from "../lib/api";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
 
@@ -36,7 +36,7 @@ export default function PendientesPorTecnico() {
     const needle = norm(filter);
     if (!needle) return rows;
     return rows.filter(r=>{
-      const campos = [formatOS(r), r?.razon_social, r?.marca, r?.modelo, tipoEquipoOf(r), r?.numero_serie, r?.estado];
+      const campos = [formatOS(r), r?.razon_social, r?.marca, r?.modelo, tipoEquipoOf(r), r?.numero_serie, r?.numero_interno, r?.estado];
       return campos.some(c => norm(c).includes(needle));
     });
   }, [rows, filter]);
@@ -59,19 +59,17 @@ export default function PendientesPorTecnico() {
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead><tr className="text-left">
-              <th className="p-2">OS</th><th className="p-2">Cliente</th><th className="p-2">Marca</th>
-              <th className="p-2">Equipo</th><th className="p-2">Tipo</th><th className="p-2">Estado</th><th className="p-2">Serie</th><th className="p-2">Fecha</th>
+              <th className="p-2">OS</th><th className="p-2">Cliente</th>
+              <th className="p-2">Equipo</th><th className="p-2">Estado</th><th className="p-2">Serie</th><th className="p-2">Fecha</th>
             </tr></thead>
             <tbody>
               {filtered.map(row=>(
                 <tr key={ingresoIdOf(row)} className="hover:bg-gray-50 cursor-pointer" onClick={()=>nav(`/ingresos/${ingresoIdOf(row)}`)}>
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{row.razon_social}</td>
-                  <td className="p-2">{row.marca}</td>
                   <td className="p-2">{catalogEquipmentLabel(row)}</td>
-                  <td className="p-2">{tipoEquipoOf(row)}</td>
                   <td className="p-2"><StatusChip value={row.estado} /></td>
-                  <td className="p-2">{row.numero_serie}</td>
+                  <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                 </tr>
               ))}
