@@ -51,6 +51,7 @@ def _get_data(ingreso_id: int):
             t.trabajos_realizados,
             t.accesorios,
             t.remito_ingreso,
+            t.equipo_variante,
             t.motivo AS motivo,
             c.razon_social AS cliente,
             COALESCE(c.cuit, '') AS cliente_cuit,
@@ -117,6 +118,29 @@ def _get_data(ingreso_id: int):
             head["accesorios"] = (head["accesorios"] or "").strip() + "\n" + acc_text
 
     return head, items
+
+
+def _first_non_empty(*vals) -> str:
+    for v in vals:
+        s = ("" if v is None else str(v)).strip()
+        if s:
+            return s
+    return ""
+
+
+def _compose_equipment_label(head: dict) -> str:
+    """Build a compact equipment label similar to web catalogEquipmentLabel.
+
+    Prefers: Tipo | Marca | (Modelo + Variante)
+    Falls back gracefully if some parts are missing.
+    """
+    tipo = _first_non_empty(head.get("tipo_equipo_nombre"), head.get("equipo"))
+    marca = _first_non_empty(head.get("marca"))
+    modelo = _first_non_empty(head.get("modelo"))
+    variante = _first_non_empty(head.get("equipo_variante"))
+    modelo_comp = (f"{modelo} {variante}" if modelo else variante).strip()
+    parts = [p for p in (tipo, marca, modelo_comp) if p]
+    return " | ".join(parts) if parts else _first_non_empty(head.get("equipo"), head.get("modelo"), head.get("marca"))
 
 # Logo: detectar primera ruta disponible (permite logo-app.png)
 def _detect_logo_path():
@@ -721,7 +745,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         c.setFont("Helvetica", 10.0)
         c.drawString(x, y, f"Cliente: {head.get('cliente') or '-'}"); y -= 6.5 * mm
         c.drawString(x, y, f"NúmeroSerie: {head.get('numero_serie') or '-'}"); y -= 6.5 * mm
-        c.drawString(x, y, f"Equipo: {head.get('equipo') or '-'}"); y -= 10 * mm
+        c.drawString(x, y, f"Equipo: {_compose_equipment_label(head) or (head.get('equipo') or '-')}"); y -= 10 * mm
 
         c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
         c.drawString(x, y, "Recibido:")
