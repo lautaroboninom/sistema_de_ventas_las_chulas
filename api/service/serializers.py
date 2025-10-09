@@ -119,6 +119,8 @@ class IngresoDetailSerializer(serializers.Serializer):
     # Equipo
     device_id = serializers.IntegerField()
     numero_serie = serializers.CharField()
+    # MG / número interno del equipo
+    numero_interno = serializers.CharField(allow_blank=True, required=False)
     garantia = serializers.BooleanField()
     marca_id = serializers.IntegerField()
     marca = serializers.CharField()

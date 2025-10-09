@@ -14,6 +14,11 @@ class DerivarIngresoView(APIView):
     def post(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
         _set_audit_user(request)
+        # Serializar concurrencia por ingreso para evitar inserts duplicados en carreras
+        try:
+            exec_void("SELECT pg_advisory_xact_lock(%s)", [ingreso_id])
+        except Exception:
+            pass
 
         data = request.data or {}
         proveedor_id = data.get("proveedor_id") or data.get("external_service_id")
@@ -28,16 +33,51 @@ class DerivarIngresoView(APIView):
         if not prov:
             return Response({"detail": "Proveedor externo invalido"}, status=400)
 
-        exec_void(
+        # Regla: no puede existir mas de una derivacion ABIERTA por ingreso
+        open_any = q(
+            "SELECT id FROM equipos_derivados WHERE ingreso_id=%s AND estado='derivado' AND fecha_entrega IS NULL ORDER BY id DESC LIMIT 1",
+            [ingreso_id],
+            one=True,
+        )
+        if open_any and open_any.get("id"):
+            return Response({"detail": "Ya existe una derivacion abierta para este ingreso", "deriv_id": int(open_any["id"])}, status=409)
+
+        # Idempotency: si ya existe una derivacion igual (misma combinacion) abierta, devolver esa
+        data_norm = {
+            "remit": (data.get("remit_deriv") or "").strip(),
+            "fecha": data.get("fecha_deriv"),
+            "coment": (data.get("comentarios") or "").strip(),
+        }
+        existing = q(
+            """
+            SELECT id
+              FROM equipos_derivados
+             WHERE ingreso_id=%s AND proveedor_id=%s
+               AND COALESCE(TRIM(remit_deriv),'') = COALESCE(TRIM(%s),'')
+               AND fecha_deriv = COALESCE(%s, CURRENT_DATE)
+               AND COALESCE(TRIM(comentarios),'') = COALESCE(TRIM(%s),'')
+               AND estado = 'derivado' AND fecha_entrega IS NULL
+             ORDER BY id DESC
+             LIMIT 1
+            """,
+            [ingreso_id, proveedor_id, data_norm["remit"], data_norm["fecha"], data_norm["coment"]],
+            one=True,
+        )
+        if existing and existing.get("id"):
+            return Response({"ok": True, "deriv_id": int(existing["id"])})
+
+        from .helpers import exec_returning
+        new_id = exec_returning(
             """
             INSERT INTO equipos_derivados (ingreso_id, proveedor_id, remit_deriv, fecha_deriv, comentarios, estado)
             VALUES (%s, %s, %s, COALESCE(%s, CURRENT_DATE), %s, 'derivado')
+            RETURNING id
             """,
             [ingreso_id, proveedor_id, data.get("remit_deriv"), data.get("fecha_deriv"), data.get("comentarios")],
         )
 
         exec_void("UPDATE ingresos SET estado='derivado' WHERE id=%s AND estado <> 'derivado'", [ingreso_id])
-        return Response({"ok": True})
+        return Response({"ok": True, "deriv_id": new_id})
 
 
 class DevolverDerivacionView(APIView):

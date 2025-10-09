@@ -1,8 +1,8 @@
-// web/src/lib/constants.js
-// Catálogos/constantes de dominio (única fuente de verdad).
+﻿// web/src/lib/constants.js
+// CatÃ¡logos/constantes de dominio (Ãºnica fuente de verdad).
 
 // =========================
-// Resolución de reparación
+// ResoluciÃ³n de reparaciÃ³n
 // =========================
 export const RESOLUCION = {
   REPARADO: "reparado",
@@ -18,7 +18,7 @@ export const RESOLUCION_LABELS = {
   [RESOLUCION.PRESUPUESTO_RECHAZADO]: "Presupuesto rechazado",
 };
 
-// Útil para armar selects sin repetir arrays en cada pantalla
+// Ãštil para armar selects sin repetir arrays en cada pantalla
 export const RESOLUCION_OPTIONS = Object.entries(RESOLUCION_LABELS).map(
   ([value, label]) => ({ value, label })
 );
@@ -49,10 +49,11 @@ export const ESTADO_OPTIONS = Object.entries(ESTADO_LABELS).map(
   ([value, label]) => ({ value, label })
 );
 
-// (opcional) por si querés habilitar “siguiente paso” en UI
+// (opcional) por si querÃ©s habilitar â€œsiguiente pasoâ€ en UI
 export const NEXT_STATE = {
   [ESTADO.DIAGNOSTICADO]: ESTADO.REPARAR,
   [ESTADO.REPARAR]: ESTADO.REPARADO,
   [ESTADO.REPARADO]: ESTADO.LIBERADO,
   [ESTADO.LIBERADO]: ESTADO.ENTREGADO,
 };
+

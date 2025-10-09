@@ -23,7 +23,7 @@ function formatBytes(bytes) {
   return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
 }
 
-export default function IngresoPhotos({ ingresoId, canManage }) {
+export default function IngresoPhotos({ ingresoId, canManage, showFilters = false }) {
   const [photos, setPhotos] = useState([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -42,8 +42,17 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
   const fullUrlsRef = useRef(new Map());  // id -> objectURL
   const [thumbSrc, setThumbSrc] = useState({}); // id -> objectURL
   const [fullSrc, setFullSrc] = useState({});   // id -> objectURL
+  const [typeFilter, setTypeFilter] = useState('all'); // all|image|pdf|video
+  const visiblePhotos = useMemo(() => {
+    const mimeOk = (p) => String(p?.mime_type || '').toLowerCase();
+    if (typeFilter === 'all') return photos;
+    if (typeFilter === 'image') return photos.filter((p) => mimeOk(p).startsWith('image/'));
+    if (typeFilter === 'pdf') return photos.filter((p) => mimeOk(p) === 'application/pdf');
+    if (typeFilter === 'video') return photos.filter((p) => mimeOk(p).startsWith('video/'));
+    return photos;
+  }, [photos, typeFilter]);
 
-  const currentPhoto = useMemo(() => (viewer.open ? photos[viewer.index] : null), [viewer, photos]);
+  const currentPhoto = useMemo(() => (viewer.open ? visiblePhotos[viewer.index] : null), [viewer, visiblePhotos]);
 
   const resetViewer = useCallback(() => {
     setViewer({ open: false, index: 0, zoom: 1, rotation: 0 });
@@ -79,7 +88,7 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
       });
       Promise.allSettled(promises);
     } catch (err) {
-      setError(err?.message || "No se pudieron cargar las fotos");
+      setError(err?.message || "No se pudieron cargar los archivos");
     } finally {
       setLoading(false);
     }
@@ -91,14 +100,14 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
   }, [ingresoId, loadPhotos]);
 
   useEffect(() => {
-    if (viewer.open && viewer.index >= photos.length) {
-      if (photos.length === 0) {
+    if (viewer.open && viewer.index >= visiblePhotos.length) {
+      if (visiblePhotos.length === 0) {
         resetViewer();
       } else {
-        setViewer((prev) => ({ ...prev, index: Math.max(photos.length - 1, 0) }));
+        setViewer((prev) => ({ ...prev, index: Math.max(visiblePhotos.length - 1, 0) }));
       }
     }
-  }, [photos, viewer, resetViewer]);
+  }, [visiblePhotos, viewer, resetViewer]);
 
   // Asegurar carga de imagen completa (hoisted declaration to avoid TDZ in effects)
   function ensureFullLoaded(photo) {
@@ -119,9 +128,9 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
   // Cargar imagen completa al navegar en el visor
   useEffect(() => {
     if (!viewer.open) return;
-    const p = photos[viewer.index];
+    const p = visiblePhotos[viewer.index];
     if (p) ensureFullLoaded(p);
-  }, [viewer.open, viewer.index, photos, ensureFullLoaded]);
+  }, [viewer.open, viewer.index, visiblePhotos, ensureFullLoaded]);
 
   const handleUpload = async (fileList) => {
     const files = Array.from(fileList || []).filter((f) => f && f.size);
@@ -138,9 +147,9 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
         setUploadErrors([]);
       }
       await loadPhotos(1, false);
-      setStatusMessage("Fotos subidas correctamente");
+      setStatusMessage("Archivos subidos correctamente");
     } catch (err) {
-      setUploadErrors([err?.message || "No se pudo subir la foto"]);
+      setUploadErrors([err?.message || "No se pudo subir el archivo"]);
     } finally {
       setUploading(false);
     }
@@ -185,12 +194,12 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
   };
 
   const confirmDelete = async (photoId) => {
-    if (!window.confirm("¿Eliminar la foto seleccionada?")) return;
+    if (!window.confirm("¿Eliminar el archivo seleccionado??")) return;
     try {
       await deleteIngresoFoto(ingresoId, photoId);
       setPhotos((prev) => prev.filter((p) => p.id !== photoId));
-      setStatusMessage("Foto eliminada");
-      // Revocar y limpiar URLs asociadas a la foto eliminada
+      setStatusMessage("Archivo eliminado");
+      // Revocar y limpiar URLs asociadas a la Archivo eliminado
       const t = thumbUrlsRef.current.get(photoId);
       if (t) {
         URL.revokeObjectURL(t);
@@ -212,21 +221,21 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
         return next;
       });
     } catch (err) {
-      setUploadErrors([err?.message || "No se pudo eliminar la foto"]);
+      setUploadErrors([err?.message || "No se pudo eliminar el archivo"]);
     }
   };
 
 
   const openViewer = (index) => {
     setViewer({ open: true, index, zoom: 1, rotation: 0 });
-    const p = photos[index];
+    const p = visiblePhotos[index];
     if (p) ensureFullLoaded(p);
   };
 
   const changeViewerIndex = (delta) => {
     setViewer((prev) => {
       const next = prev.index + delta;
-      if (next < 0 || next >= photos.length) return prev;
+      if (next < 0 || next >= visiblePhotos.length) return prev;
       return { ...prev, index: next, zoom: 1, rotation: 0 };
     });
   };
@@ -245,7 +254,7 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
   const handleDownload = async (photo) => {
     if (!photo) return;
     try {
-      await downloadAuth(photo.url, photo.original_name || `ingreso-${ingresoId}-foto-${photo.id}`);
+      await downloadAuth(photo.url, photo.original_name || `ingreso-${ingresoId}-archivo-${photo.id}`);
     } catch (err) {
       setUploadErrors([err?.message || "No se pudo descargar la foto"]);
     }
@@ -268,10 +277,8 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
     <div className="border rounded p-4 mt-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-lg font-semibold">Fotos del equipo (Ingreso)</h3>
-          <p className="text-sm text-gray-600">
-            Subí imágenes para documentar estado, roturas y condiciones de recepción.
-          </p>
+          <h3 className="text-lg font-semibold">Archivos del ingreso</h3>
+          <p className="text-sm text-gray-600">Subí imágenes, PDF y videos cortos.</p>
         </div>
         {canManage && (
           <button
@@ -280,7 +287,7 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
             type="button"
             disabled={uploading}
           >
-            {uploading ? "Subiendo..." : "Cargar fotos"}
+            {uploading ? "Subiendo..." : "Cargar archivos"}
           </button>
         )}
       </div>
@@ -294,15 +301,13 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/*,application/pdf,video/mp4"
             multiple
             className="hidden"
             onChange={onFileChange}
           />
-          <p className="font-medium">Arrastrá y soltá fotos acá o usá el botón "Cargar fotos".</p>
-          <p className="mt-1 text-xs text-gray-500">
-            Formatos permitidos: JPG/PNG (máx. 10 MB por archivo, hasta 50 fotos por ingreso).
-          </p>
+          <p className="font-medium">Arrastrá y soltá archivos acá o usá el botón "Cargar archivos".</p>
+          <p className="mt-1 text-xs text-gray-500">Formatos: JPG/PNG, PDF y MP4 (máx. 10 MB c/u, hasta 50 archivos).</p>
         </div>
       )}
 
@@ -326,31 +331,66 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
         </div>
       )}
 
+      {showFilters && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-gray-600">Filtrar:</span>
+          {[
+            { v: 'all', label: 'Todos' },
+            { v: 'image', label: 'Imágenes' },
+            { v: 'pdf', label: 'PDF' },
+            { v: 'video', label: 'Videos' },
+          ].map((opt) => (
+            <button
+              key={opt.v}
+              className={`px-2 py-1 rounded border ${typeFilter === opt.v ? 'bg-blue-600 text-white border-blue-600' : ''}`}
+              onClick={() => setTypeFilter(opt.v)}
+              type="button"
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="mt-4 space-y-3">
-        {loading && photos.length === 0 && (
-          <div className="text-sm text-gray-500">Cargando fotos...</div>
+        {loading && visiblePhotos.length === 0 && (
+          <div className="text-sm text-gray-500">Cargando archivos...</div>
         )}
-        {!loading && photos.length === 0 && (
-          <div className="text-sm text-gray-500">Aún no hay fotos asociadas a este ingreso.</div>
+        {!loading && visiblePhotos.length === 0 && (
+          <div className="text-sm text-gray-500">Aún no hay archivos asociados a este ingreso.</div>
         )}
-          
-        {photos.map((photo, idx) => (
+        
+        {visiblePhotos
+          .filter((p) => {
+            const mime = String(p?.mime_type || '').toLowerCase();
+            if (typeFilter === 'all') return true;
+            if (typeFilter === 'image') return mime.startsWith('image/');
+            if (typeFilter === 'pdf') return mime === 'application/pdf';
+            if (typeFilter === 'video') return mime.startsWith('video/');
+            return true;
+          })
+          .map((photo, idx) => (
           <div key={photo.id} className="flex flex-col md:flex-row gap-3 border rounded p-3 bg-white">
             <div className="w-full md:w-28 md:h-28 flex-shrink-0 flex items-center justify-center bg-gray-100 rounded cursor-pointer overflow-hidden">
               <img
                 src={thumbSrc[photo.id] || ""}
-                alt={photo.original_name || `Foto ${photo.id}`}
+                alt={photo.original_name || `Archivo ${photo.id}`}
                 className="object-cover w-full h-full"
-                onClick={() => openViewer(idx)}
+                onClick={() => {
+                  const mime = String(photo?.mime_type || '').toLowerCase();
+                  if (mime.startsWith('image/')) openViewer(idx);
+                }}
               />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">
-                <span className="font-medium text-gray-900">{photo.original_name || `Foto ${photo.id}`}</span>
+                <span className="font-medium text-gray-900">{photo.original_name || `Archivo ${photo.id}`}</span>
                 <span>{formatDateTime(photo.created_at)}</span>
                 <span>{photo.usuario_nombre || "-"}</span>
                 <span>{formatBytes(photo.size_bytes)}</span>
-                <span>{photo.width}x{photo.height}px</span>
+                {!!(photo.width && photo.height) && (
+                  <span>{photo.width}x{photo.height}px</span>
+                )}
               </div>
               {editingId === photo.id ? (
                 <div className="mt-3 space-y-2">
@@ -390,9 +430,10 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
                   <button className="text-red-600" onClick={() => confirmDelete(photo.id)} type="button">
                     Eliminar
                   </button>
-                  <button className="text-gray-600" onClick={() => handleDownload(photo)} type="button">
-                    Descargar
-                  </button>
+                  <button className="text-gray-600" onClick={() => handleDownload(photo)} type="button">Descargar</button>
+                  {['application/pdf'].includes(String(photo?.mime_type || '').toLowerCase()) && (
+                    <button className="text-blue-600" onClick={() => handleOpenInline(photo)} type="button">Ver</button>
+                  )}
                 </div>
               )}
             </div>
@@ -413,11 +454,11 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
         </div>
       )}
 
-      {viewer.open && currentPhoto && (
+      {viewer.open && currentPhoto && String(currentPhoto?.mime_type || '').toLowerCase().startsWith('image/') && (
         <div className="fixed inset-0 bg-black/80 z-40 flex flex-col items-center justify-center p-6">
           <div className="flex justify-between items-center w-full max-w-4xl text-white mb-4">
             <div>
-              <div className="font-semibold">{currentPhoto.original_name || `Foto ${currentPhoto.id}`}</div>
+              <div className="font-semibold">{currentPhoto.original_name || `Archivo ${currentPhoto.id}`}</div>
               <div className="text-sm text-gray-300">{formatDateTime(currentPhoto.created_at)}</div>
             </div>
             <div className="flex gap-2">
@@ -433,7 +474,7 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
           <div className="relative max-w-4xl max-h-[70vh] overflow-auto bg-black/40 rounded">
             <img
               src={fullSrc[currentPhoto.id] || thumbSrc[currentPhoto.id] || ""}
-              alt={currentPhoto.original_name || `Foto ${currentPhoto.id}`}
+              alt={currentPhoto.original_name || `Archivo ${currentPhoto.id}`}
               style={{ transform: `scale(${viewer.zoom}) rotate(${viewer.rotation}deg)` }}
               className="max-w-full max-h-[70vh] object-contain transition-transform duration-200"
             />
@@ -450,7 +491,7 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
             <button
               className="px-3 py-1 bg-gray-700 rounded"
               onClick={() => changeViewerIndex(1)}
-              disabled={viewer.index >= photos.length - 1}
+              disabled={viewer.index >= visiblePhotos.length - 1}
               type="button"
             >
               Siguiente
@@ -461,6 +502,11 @@ export default function IngresoPhotos({ ingresoId, canManage }) {
     </div>
   );
 }
+
+
+
+
+
 
 
 

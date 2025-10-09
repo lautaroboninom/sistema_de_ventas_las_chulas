@@ -83,7 +83,7 @@ export default function Sidebar() {
           {(jefe || jefeVeedor) && <LinkItem to="/pendientes-presupuesto">Pendientes de Presupuesto</LinkItem>}
           {(jefe || jefeVeedor) && <LinkItem to="/presupuestados">Presupuestados</LinkItem>}
           {techLike && (
-            <LinkItem to="/aprobados" variant="green">Aprobados p/Reparar</LinkItem>
+            <LinkItem to="/aprobados" variant="green">Aprobados</LinkItem>
           )}
           {(techLike || admin || recep) && (
             <LinkItem to="/derivados" variant="blue">Derivados</LinkItem>

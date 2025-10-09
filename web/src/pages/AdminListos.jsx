@@ -8,7 +8,7 @@ import { resolutionLabel } from "../lib/constants";
 
 
 // AjustÃ¡ si tu backend usa otra ruta
-const ENDPOINT = "/api/ingresos/liberados/";
+const ENDPOINT = "/api/listos-para-retiro/";
 
 
 export default function AdminListos() {
@@ -28,9 +28,9 @@ export default function AdminListos() {
       // Orden sugerido: primero los mÃ¡s recientes marcados como "listos"
       list.sort((a, b) => {
         const da =
-          new Date(a?.fecha_listo ?? a?.fecha_reparado ?? a?.fecha_estado ?? 0).getTime();
+          new Date(a?.fecha_entrega ?? a?.fecha_listo ?? a?.fecha_reparado ?? a?.fecha_estado ?? a?.estado_fecha ?? 0).getTime();
         const db =
-          new Date(b?.fecha_listo ?? b?.fecha_reparado ?? b?.fecha_estado ?? 0).getTime();
+          new Date(b?.fecha_entrega ?? b?.fecha_listo ?? b?.fecha_reparado ?? b?.fecha_estado ?? b?.estado_fecha ?? 0).getTime();
         return db - da;
       });
       setRows(list);
@@ -108,7 +108,7 @@ export default function AdminListos() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, equipo, serie, resoluciÃ³nâ€¦"
+          placeholder="Filtrar por OS, cliente, equipo, serie, resolución…"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar listos para retiro"
         />
@@ -135,7 +135,7 @@ export default function AdminListos() {
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">ResoluciÃ³n</th>
+                <th scope="col" className="p-2">Resolución</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Fecha listo</th>
                 <th scope="col" className="p-2 text-right">Acciones</th>
@@ -157,11 +157,11 @@ export default function AdminListos() {
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                   <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   <td className="p-2">
-                    <StatusChip value={resolutionLabel(row?.resolucion)} title="ResoluciÃ³n" />
+                    <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolución" />
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">
-                    {formatDateTime(row?.fecha_listo ?? row?.fecha_reparado ?? row?.fecha_estado)}
+                    {formatDateTime(row?.fecha_entrega ?? row?.fecha_listo ?? row?.fecha_reparado ?? row?.fecha_estado ?? row?.estado_fecha)}
                   </td>
                   <td className="p-2">
                     <div className="flex gap-2 justify-end">
@@ -191,3 +191,9 @@ export default function AdminListos() {
     </div>
   );
 }
+
+
+
+
+
+

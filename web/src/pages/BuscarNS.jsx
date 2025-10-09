@@ -15,6 +15,8 @@ export default function BuscarNS() {
     (async () => {
       setLoading(true); setErr("");
       try {
+        // Normalizar consulta: si es MG válido (MG ####), enviarlo tal cual al back
+        const mgMatch = /^mg\s*\d{4}$/i.test(String(ns || "").trim());
         const data = await getGeneralEquipos(ns ? { q: ns } : {});
         const safe = Array.isArray(data) ? data : [];
         // Filtrar por coincidencia exacta de N/S o MG y ordenar por fecha de creacion (desc)
@@ -24,12 +26,14 @@ export default function BuscarNS() {
           .filter(r => {
             const serieCompact = String(r?.numero_serie || "").trim().replace(/\s+/g, "").toLowerCase();
             const internoCompact = String(r?.numero_interno || "").trim().replace(/\s+/g, "").toLowerCase();
-            // Coincide por N/S exacto o por MG (acepta con o sin prefijo 'MG')
-            return (
-              serieCompact === compact ||
-              internoCompact === compact ||
-              internoCompact === ("mg" + compact.replace(/^mg/, ""))
-            );
+            if (mgMatch) {
+              // Aceptar solo MG exacto (MG ####)
+              const mgDigits = compact.replace(/^mg/, "");
+              const mgNoSpace = `mg${mgDigits}`;
+              return serieCompact === mgNoSpace || internoCompact === mgNoSpace;
+            }
+            // De lo contrario, buscar por N/S exacto (no interpretar como MG)
+            return serieCompact === compact;
           })
           .sort((a, b) => {
             const tb = resolveFechaCreacion(b);
@@ -58,6 +62,8 @@ export default function BuscarNS() {
                 <th className="p-2">OS</th>
                 <th className="p-2">Marca</th>
                 <th className="p-2">Modelo</th>
+                <th className="p-2">MG</th>
+                <th className="p-2">N° serie</th>
                 <th className="p-2">Tipo</th>
                 <th className="p-2">Fecha de ingreso</th>
               </tr>
@@ -75,6 +81,8 @@ export default function BuscarNS() {
                     <td className="p-2 underline">{formatOSHelper(r, ingresoId)}</td>
                     <td className="p-2">{r?.marca || "-"}</td>
                     <td className="p-2">{r?.modelo || "-"}</td>
+                    <td className="p-2">{r?.numero_interno || "-"}</td>
+                    <td className="p-2">{r?.numero_serie || "-"}</td>
                     <td className="p-2">{tipoEquipoOf(r)}</td>
                     <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(resolveFechaIngreso(r))}</td>
                   </tr>

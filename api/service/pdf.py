@@ -1,4 +1,4 @@
-from io import BytesIO
+﻿from io import BytesIO
 from decimal import Decimal
 from django.db import connection
 from reportlab.pdfgen import canvas
@@ -15,6 +15,20 @@ from datetime import datetime
 from reportlab.graphics import renderPDF
 from reportlab.graphics.barcode import qr
 from reportlab.graphics.shapes import Drawing
+
+# Resolución: mapeo de valores internos -> etiqueta amigable
+RESOLUTION_LABELS = {
+    "reparado": "Reparado",
+    "no_reparado": "No reparado",
+    "no_se_encontro_falla": "No se encontró falla",
+    "presupuesto_rechazado": "Presupuesto rechazado",
+}
+
+def resolution_label(value: str) -> str:
+    v = (value or "").strip()
+    if not v:
+        return ""
+    return RESOLUTION_LABELS.get(v, v.replace("_", " ").capitalize())
 
 # --- helpers de formato ---
 MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"]
@@ -45,7 +59,7 @@ def _get_data(ingreso_id: int):
     head = _q("""
         SELECT
             t.id AS ingreso_id,
-            t.resolucion,
+            t.Resolucion,
             t.informe_preliminar,
             t.descripcion_problema,
             t.trabajos_realizados,
@@ -142,6 +156,199 @@ def _compose_equipment_label(head: dict) -> str:
     parts = [p for p in (tipo, marca, modelo_comp) if p]
     return " | ".join(parts) if parts else _first_non_empty(head.get("equipo"), head.get("modelo"), head.get("marca"))
 
+
+def _get_derivacion_data(ingreso_id: int, deriv_id: int | None = None) -> dict | None:
+    """Fetch derivación data joined with ingreso/device/customer/model/provider.
+
+    If deriv_id is None, use the latest derivación for the ingreso.
+    """
+    where = "WHERE ed.ingreso_id=%s"
+    params: list = [ingreso_id]
+    if deriv_id is not None:
+        where += " AND ed.id=%s"
+        params.append(deriv_id)
+    sql = f"""
+        SELECT
+            t.id AS ingreso_id,
+            COALESCE(c.razon_social,'') AS cliente,
+            COALESCE(b.nombre,'') AS marca,
+            COALESCE(m.nombre,'') AS modelo,
+            m.tipo_equipo AS equipo,
+            NULLIF(t.equipo_variante,'') AS equipo_variante,
+            COALESCE(d.numero_serie,'') AS numero_serie,
+            COALESCE(d.n_de_control,'') AS numero_interno,
+            COALESCE(t.informe_preliminar,'') AS informe_preliminar,
+            ed.id           AS deriv_id,
+            COALESCE(ed.remit_deriv,'')    AS remit_deriv,
+            ed.fecha_deriv  AS fecha_deriv,
+            COALESCE(ed.comentarios,'')    AS comentarios,
+            COALESCE(pe.nombre,'')         AS proveedor
+        FROM equipos_derivados ed
+        JOIN ingresos t   ON t.id = ed.ingreso_id
+        JOIN devices d    ON d.id = t.device_id
+        JOIN customers c  ON c.id = d.customer_id
+        LEFT JOIN marcas b ON b.id = d.marca_id
+        LEFT JOIN models m ON m.id = d.model_id
+        LEFT JOIN proveedores_externos pe ON pe.id = ed.proveedor_id
+        {where}
+        ORDER BY ed.fecha_deriv DESC, ed.id DESC
+        LIMIT 1
+    """
+    return _q(sql, params, one=True)
+
+
+def render_remito_derivacion_pdf(ingreso_id: int, deriv_id: int | None = None, printed_by: str = ""):
+    """Render two-section Derivación receipt (Original/Duplicado).
+
+    Layout inspired by render_remito_salida_pdf, but simplified, no accessories, and
+    emphasizing provider, reference, and comments.
+    """
+    head = _get_derivacion_data(ingreso_id, deriv_id)
+    if not head:
+        return b"", f"RemitoDerivacion_{ingreso_id}.pdf"
+
+    empresa = _get_empresa_facturar(ingreso_id)
+    _LOGO_THIS = _logo_path_for_company(empresa)
+
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+
+    W, H = A4
+    margin = 12 * mm
+    gap = 8 * mm
+    ROW_H = 5 * mm
+    ROW_GAP = 4.2 * mm
+    SIGN_H = 5 * mm
+    F_FIELD = 7.4
+    F_LABEL = 6.8
+    P_LH = 3.6 * mm
+
+    usable_h = H - 2 * margin
+    part_h = (usable_h - gap) / 2.0
+
+    def draw_logo(x, y, w=24 * mm):
+        candidates = []
+        if _LOGO_THIS:
+            candidates.append(_LOGO_THIS)
+        env = os.environ.get("LOGO_PATH")
+        if env:
+            candidates.append(env)
+        if LOGO_PATH:
+            candidates.append(LOGO_PATH)
+        candidates += [
+            os.path.join(settings.BASE_DIR, "web", "public", "branding", "logo-empresa.png"),
+            os.path.join(settings.BASE_DIR, "..", "web", "public", "branding", "logo-empresa.png"),
+        ]
+        for p in candidates:
+            try:
+                if p and os.path.exists(p):
+                    c.drawImage(ImageReader(p), x, y, width=w, height=w/2.62, preserveAspectRatio=True, mask='auto')
+                    return
+            except Exception:
+                continue
+
+    def box(x, y, w, h):
+        c.rect(x, y, w, h, stroke=1, fill=0)
+
+    def label_value(x, y, w, h, label, value, fsz=F_FIELD, bold=False):
+        c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
+        c.drawString(x, y + h + 1.4 * mm, label)
+        c.setFillColor(colors.black)
+        box(x, y, w, h)
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", fsz)
+        c.drawString(x + 1.4 * mm, y + 1.2 * mm, str(value or "-"))
+
+    def paragraph_in_box(x, y, w, h, title, text, fsz=F_FIELD):
+        c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
+        c.drawString(x, y + h + 1.4 * mm, title)
+        c.setFillColor(colors.black)
+        box(x, y, w, h)
+        c.setFont("Helvetica", fsz)
+        max_w = w - 3.6 * mm
+        lines = _wrap_lines(text or "-", "Helvetica", fsz, max_w)
+        ty = y + h - 3.0 * mm
+        for ln in lines:
+            if ty < y + 2.0 * mm:
+                break
+            c.drawString(x + 1.8 * mm, ty, ln)
+            ty -= P_LH
+
+    def big_title(y_top):
+        x = margin + 6 * mm
+        c.setFont("Helvetica", 10.2)
+        title_txt = "Orden Interna de Servicio :"
+        c.drawString(x, y_top - 5 * mm, title_txt)
+        try:
+            title_w = pdfmetrics.stringWidth(title_txt, "Helvetica", 10.2)
+        except Exception:
+            title_w = 75
+        c.setFont("Helvetica-Bold", 12.8)
+        c.drawString(x + title_w + 3 * mm, y_top - 5 * mm, f"{head['ingreso_id']}")
+        # Subtítulo
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(x, y_top - 12 * mm, "EQUIPO DERIVADO")
+        # Logo
+        draw_logo(W - margin - 26 * mm, y_top - 10 * mm, w=24 * mm)
+
+    def field_grid(y_top, height):
+        inner_x = margin + 6 * mm
+        inner_w = W - 2 * margin - 12 * mm
+        y = y_top - 18 * mm
+
+        # r1: Derivado a | Fecha (sin remito/referencia)
+        label_value(inner_x, y - ROW_H, 90 * mm, ROW_H, "Derivado a", head.get("proveedor"))
+        label_value(inner_x + 92 * mm, y - ROW_H, 36 * mm, ROW_H, "Fecha",
+                    (head.get("fecha_deriv") or datetime.now().date()).strftime("%d/%m/%y"), bold=True)
+        y -= (ROW_H + ROW_GAP)
+
+        # r2: Equipo (compose) | MG
+        comp = _compose_equipment_label(head)
+        label_value(inner_x, y - ROW_H, 110 * mm, ROW_H, "Equipo", comp)
+        label_value(inner_x + 112 * mm, y - ROW_H, 30 * mm, ROW_H, "MG", head.get("numero_interno") or "")
+        y -= (ROW_H + ROW_GAP)
+
+        # r3: Marca | Modelo | NumeroSerie
+        label_value(inner_x, y - ROW_H, 52 * mm, ROW_H, "Marca", head.get("marca"))
+        label_value(inner_x + 54 * mm, y - ROW_H, 38 * mm, ROW_H, "Modelo", head.get("modelo"))
+        label_value(inner_x + 95 * mm, y - ROW_H, 36 * mm, ROW_H, "NumeroSerie", head.get("numero_serie"))
+        y -= (ROW_H + ROW_GAP)
+
+        # r4: Informe preliminar
+        paragraph_in_box(inner_x, y - 16 * mm, inner_w, 16 * mm, "Informe preliminar", head.get("informe_preliminar"))
+        y -= (16 * mm + ROW_GAP)
+
+        # r5: Observaciones (comentarios derivación)
+        obs_h = 26 * mm
+        paragraph_in_box(inner_x, y - obs_h, inner_w, obs_h, "Observaciones", head.get("comentarios"))
+        y -= (obs_h + 7.6 * mm)
+
+        # Firma y aclaración
+        c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
+        c.drawString(inner_x, y, "Recibido:")
+        c.setFillColor(colors.black); box(inner_x + 18 * mm, y - (SIGN_H/2), 60 * mm, SIGN_H)
+        c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
+        c.drawString(inner_x + 88 * mm, y, "Aclaracion:")
+        c.setFillColor(colors.black); box(inner_x + 110 * mm, y - (SIGN_H/2), 60 * mm, SIGN_H)
+
+    def draw_form(y_top, height, leyenda):
+        c.rect(margin, y_top - height, W - 2 * margin, height, stroke=1, fill=0)
+        big_title(y_top)
+        field_grid(y_top, height)
+        c.setFont("Helvetica", 7.0)
+        c.drawRightString(W - margin - 2 * mm, y_top - height + 3.5 * mm, leyenda)
+        if printed_by:
+            c.drawString(margin + 6 * mm, y_top - height + 3.5 * mm, f"Impreso por: {printed_by}")
+
+    # Doble formulario: ORIGINAL y DUPLICADO
+    y = H - margin
+    draw_form(y, part_h, "ORIGINAL")
+    y -= (part_h + gap)
+    draw_form(y, part_h, "DUPLICADO")
+
+    c.showPage(); c.save()
+    pdf_bytes = buf.getvalue(); buf.close()
+    return pdf_bytes, f"RemitoDerivacion_{ingreso_id}.pdf"
+
 # Logo: detectar primera ruta disponible (permite logo-app.png)
 def _detect_logo_path():
     env = os.environ.get("LOGO_PATH") or os.environ.get("SEPID_LOGO_PATH")
@@ -200,7 +407,7 @@ def _logo_path_for_company(code: str) -> str | None:
     candidates: list[str | None] = []
 
     if code == "MGBIO":
-        # override específica para la segunda marca
+        # override especí­fica para la segunda marca
         candidates.append(os.environ.get("LOGO_PATH_2"))
         # variantes habituales del nombre del archivo
         candidates += [
@@ -268,7 +475,7 @@ def _wrap_lines(text, font, size, max_width):
     return lines
 
 def _draw_block(c, x, y, title, value, width, font="Helvetica", fsize=9, leading=12):
-    """Dibuja un título y un bloque multilínea sin detallar precios."""
+    """Dibuja un tí­tulo y un bloque multilí­nea sin detallar precios."""
     c.setFont("Helvetica-Bold", 10)
     c.drawString(x, y, title)
     y -= 4
@@ -277,7 +484,7 @@ def _draw_block(c, x, y, title, value, width, font="Helvetica", fsize=9, leading
     y -= leading
     c.setFont(font, fsize)
     max_text_width = width
-    for line in _wrap_lines(value or "—", font, fsize, max_text_width):
+    for line in _wrap_lines(value or "â€”", font, fsize, max_text_width):
         c.drawString(x, y, line)
         y -= leading
     return y
@@ -308,7 +515,7 @@ def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None, 
         c.drawString(cx, base_y, label)
         c.setFillColor(colors.black)
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(cx, base_y - 6*mm, value or "—")
+        c.drawString(cx, base_y - 6*mm, value or "â€”")
 
     col(0, "Marca", (marca or "").upper())
     col(1, "Modelo", (modelo or "").upper())
@@ -390,12 +597,12 @@ def render_quote_pdf(ingreso_id: int):
     c.setFont("Helvetica", 9)
     c.drawCentredString(W - W/3+5*mm, y-14*mm, EMPRESA_LINEA1)
 
-    # Título de OS a la derecha, debajo del encabezado de empresa
+    # Tí­tulo de OS a la derecha, debajo del encabezado de empresa
     c.setFont("Helvetica-Bold", 18)
     y_title = y - 25*mm
     c.drawCentredString(W/2, y_title, title)
 
-    # Separación suficiente para no superponer con encabezado/título
+    # Separación suficiente para no superponer con encabezado/tí­tulo
     y -= 27 *mm
     c.setLineWidth(0.8)
     c.line(ml, y, W-ml, y)
@@ -461,7 +668,7 @@ def render_quote_pdf(ingreso_id: int):
 
     diag = (head.get("descripcion_problema") or "").strip()
     trab = (head.get("trabajos_realizados") or "").strip()
-    diag_trab = (diag + ("\n" if diag and trab else "") + trab) or "—"
+    diag_trab = (diag + ("\n" if diag and trab else "") + trab) or "â€”"
     y = _draw_block(c, ml, y, "Detalle Rep. (Diagnóstico / Trabajos a realizar)", diag_trab, W-2*ml) - 2
 
     y -= 6
@@ -529,7 +736,7 @@ def _fetchone_dict(cur):
 # =========================
 def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     """
-    Orden de salida en 3 franjas (proporción 2–2–1).
+    Orden de salida en 3 franjas (proporción 2â€“2â€“1).
     Cajas de 5 mm de alto y separación vertical (ROW_GAP) aumentada +3 mm para evitar solapes.
     """
     head, _items = _get_data(ingreso_id)
@@ -563,7 +770,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
 
-    # --- Geometría A4 ---
+    # --- Geometrí­a A4 ---
     W, H = A4
     margin = 12 * mm
     gap = 6 * mm
@@ -632,11 +839,11 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
 
     def big_title(y_top):
         x = margin + 6 * mm
-        # Título y número de OS juntos
+        # Tí­tulo y número de OS juntos
         c.setFont("Helvetica", 10.2)
         title_txt = "Orden Interna de Servicio :"
         c.drawString(x, y_top - 5 * mm, title_txt)
-        # Calcular ancho del título para ubicar el número pegado a la derecha
+        # Calcular ancho del tí­tulo para ubicar el número pegado a la derecha
         try:
             title_w = pdfmetrics.stringWidth(title_txt, "Helvetica", 10.2)
         except Exception:
@@ -647,7 +854,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         # Logo arriba a la derecha (sin nombre de empresa ni dirección para evitar solapes)
         draw_logo(W - margin - 26 * mm, y_top - 10 * mm, w=24 * mm)
 
-        # No dibujar nombre ni dirección; opcionalmente podría mostrarse el CUIT si se desea.
+        # No dibujar nombre ni dirección; opcionalmente podrí­a mostrarse el CUIT si se desea.
         # Lo omitimos para asegurar que no tape los campos superiores.
 
         c.setFont("Helvetica-Bold", 8.5)
@@ -685,11 +892,11 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         label_value(inner_x + 134 * mm, y - ROW_H, 36 * mm, ROW_H, "NumeroSerie", head.get("numero_serie"))
         y -= (ROW_H + ROW_GAP)
 
-        # r3: Accesorios | Garantia | Resolución
+        # r3: Accesorios | Garantia | Resolucion
         label_value(inner_x, y - ROW_H, 102 * mm, ROW_H, "Accesorios", head.get("accesorios"))
-        garantia_txt = "Sí" if head.get("garantia") else "No"
-        label_value(inner_x + 104 * mm, y - ROW_H, 24 * mm, ROW_H, "Garantia", garantia_txt)
-        label_value(inner_x + 131 * mm, y - ROW_H, 39 * mm, ROW_H, "Resolución", head.get("resolucion"))
+        garantia_txt = "Si" if head.get("garantia") else "No"
+        label_value(inner_x + 104 * mm, y - ROW_H, 24 * mm, ROW_H, "Garantia", garantia_txt  )
+        label_value(inner_x + 131 * mm, y - ROW_H, 39 * mm, ROW_H, "Resolucion", resolution_label(head.get("resolucion")))
         y -= (ROW_H + ROW_GAP)
 
         # Observaciones (Descripción + Trabajos)
@@ -773,7 +980,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         # Correr el QR a la izquierda para no superponer con el logo
         renderPDF.draw(d, c, W - margin - 80 * mm, y_top - height + 20 * mm)
 
-    # --- 2–2–1 ---
+    # --- 2â€“2â€“1 ---
     y = H - margin
     draw_form(y, h_each_form, "ORIGINAL")
     y -= (h_each_form + gap)
@@ -784,4 +991,10 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     c.showPage(); c.save()
     pdf_bytes = buf.getvalue(); buf.close()
     return pdf_bytes, f"Remito_{ingreso_id}.pdf"
+
+
+
+
+
+
 

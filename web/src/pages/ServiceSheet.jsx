@@ -1,6 +1,6 @@
 ﻿// web/src/pages/ServiceSheet.jsx
 import { useEffect, useState, useRef } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import api, {
   // ingreso / catálogos
   getIngreso, getUbicaciones, patchIngreso,
@@ -36,7 +36,7 @@ import IngresoPhotos from "../components/IngresoPhotos";
 const Row = ({ label, children, className = "" }) => (
   <div className={`flex gap-3 py-1 ${className}`}>
     <div className="w-40 shrink-0 text-gray-500">{label}</div>
-    <div className="flex-1 min-w-0">{children}</div>
+    <div className="flex-1 min-w-0 break-words">{children}</div>
   </div>
 );
 
@@ -64,6 +64,7 @@ const Tabs = ({ value, onChange, items, extraRight }) => (
 
 export default function ServiceSheet() {
   const { id } = useParams();
+  const location = useLocation();
   const { user } = useAuth(); // para ocultar/mostrar botones según rol
   const navigate = useNavigate();
   const actAsTech = canActAsTech(user);
@@ -95,6 +96,16 @@ export default function ServiceSheet() {
 
   // pesta├▒as
   const [tab, setTab] = useState("principal");
+  // Permitir abrir con una pestaña preseleccionada (via navigate state)
+  useEffect(() => {
+    try {
+      const t = location?.state?.tab;
+      if (t && ["principal","diagnostico","presupuesto","derivaciones","historial"].includes(t)) {
+        setTab(t);
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location?.state]);
 
   // datos generales
   const [data, setData] = useState(null);
@@ -460,7 +471,15 @@ export default function ServiceSheet() {
       setSavingBasics(true);
       if (Object.keys(diff).length > 0) {
         await patch(diff);
-        if (diff.marca_id != null || diff.modelo_id != null || diff.equipo_variante !== undefined || diff.garantia !== undefined) {
+        // Si cambia equipo (marca/modelo/variante/garantía) o identificadores (NS/MG), refrescar desde el back
+        if (
+          diff.marca_id != null ||
+          diff.modelo_id != null ||
+          diff.equipo_variante !== undefined ||
+          diff.garantia !== undefined ||
+          diff.numero_serie !== undefined ||
+          diff.numero_interno !== undefined
+        ) {
           await refreshIngreso();
         }
       }
@@ -695,7 +714,7 @@ export default function ServiceSheet() {
     (user?.rol === ROLES.TECNICO && userId && data?.asignado_a === userId);
 
   return (
-    <div className="max-w-6xl mx-auto p-4">
+    <div className="max-w-none p-4">
       <button
         type="button"
         onClick={() => navigate(-1)}
@@ -832,28 +851,6 @@ export default function ServiceSheet() {
                   data.tipo_equipo_nombre || data.tipo_equipo || "-"
                 )}
               </Row>
-              <Row label="Garantía (fábrica)">
-                {editBasics ? (
-                  <input
-                    type="checkbox"
-                    checked={!!(formBasics?.garantia)}
-                    onChange={(e) => setFormBasics((s) => ({ ...(s || {}), garantia: e.target.checked }))}
-                  />
-                ) : (
-                  data.garantia ? "Sí" : "No"
-                )}
-              </Row>
-              <Row label="Garanta (fbrica)">
-                {editBasics ? (
-                  <input
-                    type="checkbox"
-                    checked={!!(formBasics?.garantia)}
-                    onChange={(e) => setFormBasics((s) => ({ ...(s || {}), garantia: e.target.checked }))}
-                  />
-                ) : (
-                  data.garantia ? "Sd" : "No"
-                )}
-              </Row>
               <Row label="Marca">
                 {editBasics ? (
                   <select
@@ -929,15 +926,15 @@ export default function ServiceSheet() {
                   <span>{numeroSerie || "-"}</span>
                 )}
               </Row>
-              <Row label="Garantía de reparación">
+              <Row label="Garantía (fábrica)">
                 {editBasics ? (
                   <input
                     type="checkbox"
-                    checked={!!(formBasics?.garantia_reparacion)}
-                    onChange={(e) => setFormBasics(s => ({ ...s, garantia_reparacion: e.target.checked }))}
+                    checked={!!(formBasics?.garantia)}
+                    onChange={(e) => setFormBasics((s) => ({ ...(s || {}), garantia: e.target.checked }))}
                   />
                 ) : (
-                  <span>{data.garantia_reparacion ? "Sí" : "No"}</span>
+                  data.garantia ? "Sí" : "No"
                 )}
               </Row>
               <Row label="N° interno (MG)">
@@ -949,6 +946,17 @@ export default function ServiceSheet() {
                   />
                 ) : (
                   <span>{data.numero_interno || ""}</span>
+                )}
+              </Row>
+              <Row label="Garantía de reparación">
+                {editBasics ? (
+                  <input
+                    type="checkbox"
+                    checked={!!(formBasics?.garantia_reparacion)}
+                    onChange={(e) => setFormBasics(s => ({ ...s, garantia_reparacion: e.target.checked }))}
+                  />
+                ) : (
+                  <span>{data.garantia_reparacion ? "Sí" : "No"}</span>
                 )}
               </Row>
               <Row label={"N° de remito"}>
@@ -1001,7 +1009,6 @@ export default function ServiceSheet() {
               <Row label="Presupuesto">{data.presupuesto_estado === "presupuestado" ? "Presupuestado" : (data.presupuesto_estado || "-")}</Row>
               <Row label="Resolución">{data.resolucion ? resolutionLabel(data.resolucion) : "-"}</Row>
               <Row label="Fecha ingreso">{formatDateTimeHelper(resolveFechaIngreso(data))}</Row>
-              <Row label="Fecha creacion">{formatDateTimeHelper(resolveFechaCreacion(data))}</Row>
               <Row label="Fecha servicio">{data.fecha_servicio ? formatDateTimeHelper(data.fecha_servicio) : "-"}</Row>
               </div>
 
@@ -1867,6 +1874,10 @@ export default function ServiceSheet() {
     </div>
   );
 }
+
+
+
+
 
 
 

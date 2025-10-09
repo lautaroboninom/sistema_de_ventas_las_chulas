@@ -318,6 +318,79 @@ class AprobadosYReparadosView(APIView):
         return Response(IngresoListItemSerializer(data, many=True).data)
 
 
+class AprobadosCombinadosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        with connection.cursor() as cur:
+            _set_audit_user(request)
+            cur.execute(
+                """
+                -- Aprobados (incluye 'aprobado' y 'reparar' activos en taller)
+                SELECT
+                  t.id,
+                  t.estado,
+                  t.presupuesto_estado,
+                  c.razon_social,
+                  d.numero_serie,
+                  COALESCE(b.nombre,'') AS marca,
+                  COALESCE(m.nombre,'') AS modelo,
+                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  t.fecha_ingreso,
+                  q.fecha_aprobado AS fecha_aprobacion,
+                  NULL::timestamp AS fecha_reparado,
+                  0 AS grp,
+                  COALESCE(q.fecha_aprobado, t.fecha_ingreso) AS fecha_ref
+                FROM ingresos t
+                JOIN devices d ON d.id=t.device_id
+                JOIN customers c ON c.id=d.customer_id
+                LEFT JOIN marcas b ON b.id=d.marca_id
+                LEFT JOIN models m ON m.id=d.model_id
+                LEFT JOIN quotes q ON q.ingreso_id = t.id
+                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                WHERE LOWER(loc.nombre) = LOWER(%s)
+                  AND (
+                        (t.presupuesto_estado = 'aprobado'
+                         AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado'))
+                        OR t.estado = 'reparar'
+                      )
+                  AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado')
+                UNION ALL
+                -- Reparados en taller
+                SELECT
+                  t.id,
+                  t.estado,
+                  t.presupuesto_estado,
+                  c.razon_social,
+                  d.numero_serie,
+                  COALESCE(b.nombre,'') AS marca,
+                  COALESCE(m.nombre,'') AS modelo,
+                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  t.fecha_ingreso,
+                  NULL::timestamp AS fecha_aprobacion,
+                  ev.fecha_reparado,
+                  1 AS grp,
+                  ev.fecha_reparado AS fecha_ref
+                FROM ingresos t
+                JOIN devices d ON d.id=t.device_id
+                JOIN customers c ON c.id=d.customer_id
+                LEFT JOIN marcas b ON b.id=d.marca_id
+                LEFT JOIN models m ON m.id=d.model_id
+                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                LEFT JOIN (
+                  SELECT ingreso_id, MAX(ts) AS fecha_reparado
+                  FROM ingreso_events
+                  WHERE a_estado='reparado'
+                  GROUP BY ingreso_id
+                ) ev ON ev.ingreso_id = t.id
+                WHERE LOWER(loc.nombre) = LOWER(%s)
+                  AND t.estado IN ('reparado')
+                ORDER BY grp ASC, fecha_ref ASC, fecha_ingreso ASC;
+                """,
+                ["taller", "taller"],
+            )
+            data = _fetchall_dicts(cur)
+        return Response(IngresoListItemSerializer(data, many=True).data)
+
 class LiberadosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
@@ -356,6 +429,7 @@ class GeneralEquiposView(APIView):
     def get(self, request):
         ubic = (request.GET.get("ubicacion") or "").strip()
         estado_raw = (request.GET.get("estado") or "").strip()
+        q_raw = (request.GET.get("q") or "").strip()
         estados = [e.strip() for e in estado_raw.split(",") if e.strip()] if estado_raw else []
 
         with connection.cursor() as cur:
@@ -368,6 +442,19 @@ class GeneralEquiposView(APIView):
                 placeholders = ",".join(["%s"] * len(estados))
                 wh.append(f"t.estado IN ({placeholders})")
                 params.extend(estados)
+            # Búsqueda exacta por N/S o por MG (formato 'MG ####')
+            if q_raw:
+                needle = q_raw.strip()
+                needle_ns = needle.replace(" ", "").upper()
+                import re as _re
+                m = _re.match(r"^MG\s*(\d{4})$", needle, _re.IGNORECASE)
+                if m:
+                    mg_no_space = ("MG" + m.group(1)).upper()
+                    wh.append("(REPLACE(UPPER(d.n_de_control),' ','') = %s OR REPLACE(UPPER(d.numero_serie),' ','') = %s)")
+                    params.extend([mg_no_space, mg_no_space])
+                else:
+                    wh.append("REPLACE(UPPER(d.numero_serie),' ','') = %s")
+                    params.append(needle_ns)
 
             where_sql = (" WHERE " + " AND ".join(wh)) if wh else ""
             sql = f"""
@@ -377,6 +464,7 @@ class GeneralEquiposView(APIView):
                   COALESCE(loc.nombre,'') AS ubicacion_nombre,
                   c.id AS customer_id, c.razon_social,
                   d.numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno,
                   COALESCE(b.nombre,'') AS marca,
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,

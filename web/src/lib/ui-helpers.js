@@ -18,6 +18,20 @@ export const formatDateTime = (s, locale = "es-AR") =>
 export const resolveFechaIngreso = (row) => row?.fecha_ingreso ?? row?.fecha_creacion ?? null;
 export const resolveFechaCreacion = (row) => row?.fecha_creacion ?? row?.fecha_ingreso ?? null;
 
+// Parseador seguro para fechas "YYYY-MM-DD": trátalas como hora local 00:00
+export const parseDateLocal = (s) => {
+  if (!s) return null;
+  if (typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return new Date(`${s}T00:00:00`);
+  }
+  return new Date(s);
+};
+
+export const formatDateOnly = (s, locale = "es-AR") => {
+  const d = parseDateLocal(s);
+  return d ? d.toLocaleDateString(locale, { dateStyle: "short" }) : "-";
+};
+
 export const modeloSerieVarianteOf = (row, fallback = "-") => {
   if (!row) return fallback;
   const str = (v) => (typeof v === "string" ? v.trim() : "");

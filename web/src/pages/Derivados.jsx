@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import api, { postDerivacionDevuelto } from "../lib/api";
-import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, nsPreferInternoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateOnly, nsPreferInternoOf } from "../lib/ui-helpers";
 import { catalogEquipmentLabel } from "../lib/ui-helpers";
 
 export default function Derivados() {
@@ -30,12 +30,9 @@ export default function Derivados() {
   useEffect(() => { load(); }, []);
 
   const sorted = useMemo(() => {
-    // más recientes primero por fecha_deriv
-    return [...rows].sort((a,b) => {
-      const ad = a?.fecha_deriv ? new Date(a.fecha_deriv) : new Date(0);
-      const bd = b?.fecha_deriv ? new Date(b.fecha_deriv) : new Date(0);
-      return bd - ad;
-    });
+    // más recientes primero por fecha_deriv (tratar YYYY-MM-DD como local)
+    const toDate = (v) => (v && typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? new Date(`${v}T00:00:00`) : (v ? new Date(v) : new Date(0));
+    return [...rows].sort((a,b) => toDate(b?.fecha_deriv) - toDate(a?.fecha_deriv));
   }, [rows]);
 
   const onDevuelto = async (row) => {
@@ -71,7 +68,7 @@ export default function Derivados() {
                 <th className="p-2">Proveedor</th>
                 <th className="p-2">Equipo</th>
                 <th className="p-2">Serie</th>
-                <th className="p-2">Fecha derivación</th>
+                <th className="p-2">Fecha derivaciÃ³n</th>
                 <th className="p-2 text-right">Acciones</th>
               </tr>
             </thead>
@@ -83,7 +80,7 @@ export default function Derivados() {
                   <td className="p-2">{row?.proveedor ?? '-'}</td>
                   <td className="p-2">{catalogEquipmentLabel(row)}</td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
-                  <td className="p-2 whitespace-nowrap">{row?.fecha_deriv ? formatDateTime(row.fecha_deriv) : '-'}</td>
+                  <td className="p-2 whitespace-nowrap">{row?.fecha_deriv ? formatDateOnly(row.fecha_deriv) : '-'}</td>
                   <td className="p-2 text-right">
                     <div className="flex items-center gap-2 justify-end">
                       <input
@@ -91,7 +88,7 @@ export default function Derivados() {
                         value={fechaMap[ingresoIdOf(row)] || ''}
                         onChange={(e) => setFechaMap((m) => ({ ...m, [ingresoIdOf(row)]: e.target.value }))}
                         className="border rounded p-1"
-                        aria-label="Fecha devolución"
+                        aria-label="Fecha devoluciÃ³n"
                       />
                       <button className="btn" onClick={() => onDevuelto(row)}>
                         Devuelto
@@ -107,4 +104,6 @@ export default function Derivados() {
     </div>
   );
 }
+
+
 

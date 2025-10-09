@@ -13,7 +13,7 @@ from .views import (
 
     # listados / generales
     CustomersListView, PendientesGeneralView,
-    AprobadosParaRepararView, AprobadosYReparadosView, LiberadosView,
+    AprobadosParaRepararView, AprobadosYReparadosView, AprobadosCombinadosView, LiberadosView,
     GeneralEquiposView, GeneralPorClienteView,
 
     # ingresos nuevos + derivaci�n
@@ -53,7 +53,7 @@ from .views import (
     IngresoMediaListCreateView, IngresoMediaDetailView, IngresoMediaFileView, IngresoMediaThumbnailView,
 
     QuoteDetailView, QuoteItemsView, QuoteItemDetailView, QuoteResumenView, AnularPresupuestoView,
-    RemitoSalidaPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
+    RemitoSalidaPdfView, RemitoDerivacionPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
     MetricasResumenView, MetricasSeriesView, MetricasCalibracionView, FeriadosView, MetricasConfigView,
     CatalogoMotivosView,
 )
@@ -89,7 +89,7 @@ urlpatterns = [
     path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
 
     # ALIAS de compatibilidad con el front (si exist�an)
-    path("ingresos/aprobados/", AprobadosParaRepararView.as_view()),
+    path("ingresos/aprobados/", AprobadosCombinadosView.as_view()),
     path("ingresos/reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
 
@@ -178,6 +178,7 @@ urlpatterns = [
 
 
     path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # remito de salida (nuevo)
+    path("ingresos/<int:ingreso_id>/derivaciones/<int:deriv_id>/remito/", RemitoDerivacionPdfView.as_view()),  # remito derivación
     path("ingresos/<int:ingreso_id>/cerrar/", CerrarReparacionView.as_view()),
 
     # tipos de equipo

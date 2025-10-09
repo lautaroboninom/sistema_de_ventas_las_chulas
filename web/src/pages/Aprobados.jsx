@@ -2,14 +2,20 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import {
+  ingresoIdOf,
+  formatOS,
+  formatDateTime,
+  norm,
+  tipoEquipoOf,
+  resolveFechaIngreso,
+  catalogEquipmentLabel,
+  nsPreferInternoOf,
+} from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
-
-// Ajustá si tu backend usa otra ruta
-const ENDPOINT = "/api/ingresos/aprobados-para-reparar/";
-
-
+// Endpoint combinado del backend
+const ENDPOINT = "/api/ingresos/aprobados/";
 
 export default function Aprobados() {
   const [rows, setRows] = useState([]);
@@ -69,7 +75,7 @@ export default function Aprobados() {
 
   return (
     <div className="card">
-      <div className="h1 mb-3">Aprobados para reparar</div>
+      <div className="h1 mb-3">Aprobados</div>
 
       {err && (
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">
@@ -106,7 +112,7 @@ export default function Aprobados() {
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
                 <th className="p-2">Fecha ingreso</th>
-                <th className="p-2">Fecha aprobación</th>
+                <th className="p-2">Fecha aprob./repar.</th>
               </tr>
             </thead>
             <tbody>
@@ -129,7 +135,13 @@ export default function Aprobados() {
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_aprobacion ?? row?.presupuesto_fecha_aprobacion)}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateTime(
+                    row?.fecha_aprobacion ||
+                      row?.presupuesto_fecha_aprobacion ||
+                      row?.fecha_reparado ||
+                      row?.fecha_reparacion ||
+                      row?.estado_fecha
+                  )}</td>
                 </tr>
               ))}
             </tbody>

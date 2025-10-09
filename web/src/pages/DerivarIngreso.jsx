@@ -1,7 +1,12 @@
 // web/src/pages/DerivarIngreso.jsx
-import { useEffect, useState } from "react";
-import { useNavigate, useParams, Link } from "react-router-dom";
-import { getProveedoresExternos, postDerivarIngreso } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import {
+  getProveedoresExternos,
+  postDerivarIngreso,
+  fetchBlobAuth,
+  getDerivacionesPorIngreso,
+} from "../lib/api";
 
 export default function DerivarIngreso() {
   const { id } = useParams(); // :id del ingreso
@@ -10,11 +15,11 @@ export default function DerivarIngreso() {
   const [proveedores, setProveedores] = useState([]);
   const [form, setForm] = useState({
     external_service_id: "",
-    remit_deriv: "",
     fecha_deriv: new Date().toISOString().slice(0, 10),
     comentarios: "",
   });
   const [error, setError] = useState("");
+  const busyRef = useRef(false); // barrera sincrónica contra doble submit
 
   useEffect(() => {
     (async () => {
@@ -34,29 +39,79 @@ export default function DerivarIngreso() {
 
   const onSubmit = async (e) => {
     e.preventDefault();
+    if (loading || busyRef.current) return;
+    busyRef.current = true;
     setError("");
     if (!form.external_service_id) {
       setError("Seleccioná un proveedor externo.");
+      busyRef.current = false;
       return;
     }
+
+    // Abrir ventana anticipada para evitar bloqueos de pop-ups tras await
+    let win = null;
+    try { win = window.open('', '_blank'); } catch (_) {}
     setLoading(true);
     try {
-      await postDerivarIngreso(id, {
+      const res = await postDerivarIngreso(id, {
         external_service_id: Number(form.external_service_id),
-        remit_deriv: form.remit_deriv || null,
         fecha_deriv: form.fecha_deriv || null,
         comentarios: form.comentarios || null,
       });
-      nav("/tecnico");
+      // Intentar abrir el remito de derivación inmediatamente
+      try {
+        const derivId = res?.deriv_id;
+        if (derivId) {
+          const { blob } = await fetchBlobAuth(`/api/ingresos/${id}/derivaciones/${derivId}/remito/`);
+          const url = URL.createObjectURL(blob);
+          if (win) { try { win.location = url; } catch { window.open(url, "_blank"); } } else { window.open(url, "_blank"); }
+          setTimeout(() => URL.revokeObjectURL(url), 20000);
+        }
+      } catch (_) {
+        // Fallback: abrir la derivación abierta si existe
+        try {
+          const list = await getDerivacionesPorIngreso(id);
+          const abierta = Array.isArray(list) ? list.find(d => !d.fecha_entrega) : null;
+          if (abierta) {
+            const { blob } = await fetchBlobAuth(`/api/ingresos/${id}/derivaciones/${abierta.id}/remito/`);
+            const url = URL.createObjectURL(blob);
+            if (win) { try { win.location = url; } catch { window.open(url, "_blank"); } } else { window.open(url, "_blank"); }
+            setTimeout(() => URL.revokeObjectURL(url), 20000);
+          } else if (win) {
+            try { win.close(); } catch {}
+          }
+        } catch { /* noop */ }
+      }
+      // Volver a la hoja de servicio y resaltar Derivaciones
+      nav(`/ingresos/${id}`, { state: { tab: "derivaciones" } });
     } catch (e) {
       setError(String(e));
+      // Si el POST falló (por ejemplo, 409 por derivación abierta), intentar abrir el PDF de la abierta
+      try {
+        const list = await getDerivacionesPorIngreso(id);
+        const abierta = Array.isArray(list) ? list.find(d => !d.fecha_entrega) : null;
+        if (abierta) {
+          const { blob } = await fetchBlobAuth(`/api/ingresos/${id}/derivaciones/${abierta.id}/remito/`);
+          const url = URL.createObjectURL(blob);
+          if (win) { try { win.location = url; } catch { window.open(url, "_blank"); } } else { window.open(url, "_blank"); }
+          setTimeout(() => URL.revokeObjectURL(url), 20000);
+        } else if (win) { try { win.close(); } catch {} }
+      } catch (_) { try { if (win) win.close(); } catch {} }
     } finally {
       setLoading(false);
+      busyRef.current = false;
     }
   };
 
   return (
     <div className="max-w-xl">
+      <button
+        type="button"
+        onClick={() => nav(`/ingresos/${id}`, { state: { tab: "derivaciones" } })}
+        className="mb-3 inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800"
+      >
+        Volver
+      </button>
       <h1 className="text-xl font-semibold mb-4">Derivar ingreso #{id}</h1>
 
       {error && <div className="p-3 mb-3 bg-red-100 text-red-700 rounded">{error}</div>}
@@ -75,17 +130,6 @@ export default function DerivarIngreso() {
               <option key={p.id} value={p.id}>{p.nombre}</option>
             ))}
           </select>
-        </div>
-
-        <div>
-          <label className="block text-sm mb-1">Remito / referencia</label>
-          <input
-            name="remit_deriv"
-            value={form.remit_deriv}
-            onChange={onChange}
-            className="input w-full"
-            placeholder="Remito 123"
-          />
         </div>
 
         <div>
@@ -114,7 +158,13 @@ export default function DerivarIngreso() {
           <button className="btn" disabled={loading}>
             {loading ? "Derivando..." : "Derivar"}
           </button>
-          <Link to="/tecnico" className="btn-secondary">Cancelar</Link>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => nav(`/ingresos/${id}`, { state: { tab: "derivaciones" } })}
+          >
+            Cancelar
+          </button>
         </div>
       </form>
     </div>

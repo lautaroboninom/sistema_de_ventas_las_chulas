@@ -1,5 +1,5 @@
 ﻿import { Link } from "react-router-dom";
-import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
+import { formatDateOnly as formatDateOnlyHelper } from "../../../lib/ui-helpers";
 import { postDerivacionDevuelto, getDerivacionesPorIngreso } from "../../../lib/api";
 
 export default function DerivacionesTab({
@@ -68,8 +68,8 @@ export default function DerivacionesTab({
               <tr key={d.id} className="border-t">
                 <td className="p-2">{d.proveedor || "-"}</td>
                 <td className="p-2">{d.remit_deriv || "-"}</td>
-                <td className="p-2 whitespace-nowrap">{d.fecha_deriv ? formatDateTimeHelper(d.fecha_deriv) : "-"}</td>
-                <td className="p-2 whitespace-nowrap">{d.fecha_entrega ? formatDateTimeHelper(d.fecha_entrega) : "-"}</td>
+                <td className="p-2 whitespace-nowrap">{d.fecha_deriv ? formatDateOnlyHelper(d.fecha_deriv) : "-"}</td>
+                <td className="p-2 whitespace-nowrap">{d.fecha_entrega ? formatDateOnlyHelper(d.fecha_entrega) : "-"}</td>
                 <td className="p-2">{d.estado || "-"}</td>
                 <td className="p-2">{d.comentarios || "-"}</td>
               </tr>

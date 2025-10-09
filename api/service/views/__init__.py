@@ -40,6 +40,7 @@ from .ingresos_views import (
     PresupuestadosView,
     AprobadosParaRepararView,
     AprobadosYReparadosView,
+    AprobadosCombinadosView,
     LiberadosView,
     GeneralEquiposView,
     GeneralPorClienteView,
@@ -140,6 +141,7 @@ from .clientes_views import (
 
 from .reportes_views import (
     RemitoSalidaPdfView,
+    RemitoDerivacionPdfView,
 )
 
 # Motivos catálogo (propio de views/)
@@ -167,6 +169,7 @@ __all__ = [
     "PresupuestadosView",
     "AprobadosParaRepararView",
     "AprobadosYReparadosView",
+    "AprobadosCombinadosView",
     "LiberadosView",
     "GeneralEquiposView",
     "GeneralPorClienteView",
@@ -248,6 +251,7 @@ __all__ = [
     "ClienteDeleteView",
     # reportes
     "RemitoSalidaPdfView",
+    "RemitoDerivacionPdfView",
     # motivos (catálogo ENUM ingreso.motivo)
     "CatalogoMotivosView",
 ]

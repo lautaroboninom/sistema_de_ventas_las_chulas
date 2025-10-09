@@ -262,6 +262,11 @@ CREATE TABLE IF NOT EXISTS equipos_derivados (
   comentarios   TEXT
 );
 
+-- Evitar mas de una derivacion "abierta" por ingreso a la vez
+CREATE UNIQUE INDEX IF NOT EXISTS uq_equipos_derivados_ingreso_abierto
+  ON equipos_derivados(ingreso_id)
+  WHERE estado = 'derivado' AND fecha_entrega IS NULL;
+
 CREATE TABLE IF NOT EXISTS handoffs (
   id                     INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   ingreso_id             INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
