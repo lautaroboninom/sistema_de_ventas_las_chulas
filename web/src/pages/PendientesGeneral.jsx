@@ -125,7 +125,7 @@ export default function PendientesGeneral() {
                 <th className="p-2">Cliente</th>
                 <th className="p-2">Equipo</th>
                 <th className="p-2">Estado</th>
-                <th className="p-2">N/S</th>
+                <th className="p-2">N/S o MG</th>
                 <th className="p-2">Fecha ingreso</th>
               </tr>
             </thead>

@@ -371,16 +371,42 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
           })
           .map((photo, idx) => (
           <div key={photo.id} className="flex flex-col md:flex-row gap-3 border rounded p-3 bg-white">
-            <div className="w-full md:w-28 md:h-28 flex-shrink-0 flex items-center justify-center bg-gray-100 rounded cursor-pointer overflow-hidden">
-              <img
-                src={thumbSrc[photo.id] || ""}
-                alt={photo.original_name || `Archivo ${photo.id}`}
-                className="object-cover w-full h-full"
-                onClick={() => {
-                  const mime = String(photo?.mime_type || '').toLowerCase();
-                  if (mime.startsWith('image/')) openViewer(idx);
-                }}
-              />
+            <div className="w-full md:w-28 md:h-28 flex-shrink-0 flex items-center justify-center bg-gray-100 rounded overflow-hidden">
+              {(() => {
+                const mime = String(photo?.mime_type || '').toLowerCase();
+                const src = thumbSrc[photo.id] || "";
+                const hasThumb = !!src;
+                if (hasThumb) {
+                  return (
+                    <img
+                      src={src}
+                      alt={photo.original_name || `Archivo ${photo.id}`}
+                      className="object-cover w-full h-full"
+                      onClick={() => {
+                        if (mime.startsWith('image/')) openViewer(idx);
+                      }}
+                      style={{ cursor: mime.startsWith('image/') ? 'pointer' : 'default' }}
+                    />
+                  );
+                }
+                if (mime === 'application/pdf') {
+                  return (
+                    <div className="w-full h-full flex items-center justify-center bg-red-50 text-red-700 font-semibold">
+                      PDF
+                    </div>
+                  );
+                }
+                if (mime.startsWith('video/')) {
+                  return (
+                    <div className="w-full h-full flex items-center justify-center bg-indigo-50 text-indigo-700 font-semibold">
+                      VIDEO
+                    </div>
+                  );
+                }
+                return (
+                  <div className="w-full h-full flex items-center justify-center text-gray-600">ARCHIVO</div>
+                );
+              })()}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">

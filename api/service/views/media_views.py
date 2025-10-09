@@ -3,6 +3,7 @@ import logging
 
 from django.conf import settings
 from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 from django.db import connection, transaction
 from django.http import FileResponse
 from django.utils import timezone
@@ -14,11 +15,13 @@ from rest_framework.views import APIView
 from .helpers import q, exec_void, exec_returning, _set_audit_user
 from ..serializers import IngresoMediaItemSerializer
 from ..media_utils import (
-    process_upload,
-    save_processed_image,
+    process_upload_any,
+    save_processed_media,
     delete_media_paths,
     MediaValidationError,
     MediaProcessingError,
+    _make_placeholder_thumb,
+    _make_pdf_thumb,
 )
 
 logger = logging.getLogger(__name__)
@@ -211,8 +214,8 @@ class IngresoMediaListCreateView(APIView):
             storage_path = None
             thumb_path = None
             try:
-                processed = process_upload(up, max_size_bytes=max_size_bytes, thumb_max=thumb_max, allowed_mime=allowed_mime)
-                storage_path, thumb_path = save_processed_image(ingreso_id, processed)
+                processed = process_upload_any(up, max_size_bytes=max_size_bytes, thumb_max=thumb_max, allowed_mime=allowed_mime)
+                storage_path, thumb_path = save_processed_media(ingreso_id, processed)
                 with transaction.atomic():
                     if connection.vendor == "postgresql":
                         exec_void("SET LOCAL app.ingreso_id = %s", [ingreso_id])
@@ -232,8 +235,8 @@ class IngresoMediaListCreateView(APIView):
                             processed.display_name,
                             processed.mime_type,
                             len(processed.content),
-                            processed.width,
-                            processed.height,
+                            getattr(processed, "width", 0) or 0,
+                            getattr(processed, "height", 0) or 0,
                         ],
                     )
                 row = _fetch_media_row(ingreso_id, media_id)
@@ -393,11 +396,54 @@ class IngresoMediaThumbnailView(APIView):
             return Response({"detail": "Foto no encontrada"}, status=404)
         thumb_path = row.get("thumbnail_path")
         if not thumb_path:
-            return Response({"detail": "Miniatura no disponible"}, status=404)
+            # Generar miniatura on-demand: intentar PDF real, si no placeholder
+            try:
+                mime = (row.get("mime_type") or "").lower()
+                max_size = int(getattr(settings, "INGRESO_MEDIA_THUMB_MAX", 512) or 512)
+                content = None
+                # Intentar thumb de PDF desde el archivo original
+                if mime == "application/pdf":
+                    orig_path = row.get("storage_path")
+                    if orig_path:
+                        try:
+                            with default_storage.open(orig_path, "rb") as f:
+                                pdf_bytes = f.read()
+                            tb, tm = _make_pdf_thumb(pdf_bytes, min(max_size, 512))
+                            if tb:
+                                content = tb
+                        except Exception:
+                            content = None
+                if content is None:
+                    label = "PDF" if mime == "application/pdf" else ("VIDEO" if mime.startswith("video/") else "FILE")
+                    content, _ = _make_placeholder_thumb(label, size=min(max_size, 512))
+                # Reusar carpeta del original
+                orig_path = (row.get("storage_path") or "").strip().strip("/")
+                folder = "/".join(orig_path.split("/")[:-1]) if "/" in orig_path else orig_path
+                name = f"media-{media_id}-thumb.jpg"
+                new_thumb_path = (folder + "/" + name).strip("/") if folder else name
+                default_storage.save(new_thumb_path, ContentFile(content))
+                # Persistir en DB
+                exec_void(
+                    "UPDATE ingreso_media SET thumbnail_path=%s WHERE ingreso_id=%s AND id=%s",
+                    [new_thumb_path, ingreso_id, media_id],
+                )
+                thumb_path = new_thumb_path
+            except Exception:
+                return Response({"detail": "Miniatura no disponible"}, status=404)
         try:
             file_obj = default_storage.open(thumb_path, "rb")
         except FileNotFoundError:
-            return Response({"detail": "Miniatura no disponible"}, status=410)
+            # Intentar regenerar si fue borrada
+            try:
+                label = "PDF" if (row.get("mime_type") or "").lower() == "application/pdf" else (
+                    "VIDEO" if (row.get("mime_type") or "").lower().startswith("video/") else "FILE"
+                )
+                max_size = int(getattr(settings, "INGRESO_MEDIA_THUMB_MAX", 512) or 512)
+                content, _ = _make_placeholder_thumb(label, size=min(max_size, 512))
+                default_storage.save(thumb_path, ContentFile(content))
+                file_obj = default_storage.open(thumb_path, "rb")
+            except Exception:
+                return Response({"detail": "Miniatura no disponible"}, status=410)
         except Exception:
             return Response({"detail": "No se pudo abrir la miniatura"}, status=500)
         response = FileResponse(file_obj, content_type="image/jpeg")

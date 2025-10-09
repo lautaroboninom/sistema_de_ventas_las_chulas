@@ -167,6 +167,19 @@ class MarcarReparadoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id: int):
         require_roles(request, ["tecnico", "jefe", "jefe_veedor"])
+        # Solo el técnico asignado puede marcar como reparado (salvo jefes)
+        try:
+            if _rol(request) == "tecnico":
+                row = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+                uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
+                if not row or int(row.get("asignado_a") or 0) != int(uid or 0):
+                    raise PermissionDenied("Solo el técnico asignado puede marcar como reparado")
+        except PermissionDenied:
+            raise
+        except Exception:
+            # En duda, permitir solo a roles superiores
+            if _rol(request) == "tecnico":
+                raise PermissionDenied("Solo el técnico asignado puede marcar como reparado")
         _set_audit_user(request)
         exec_void("UPDATE ingresos SET estado='reparado' WHERE id=%s", [ingreso_id])
         return Response({"ok": True})
@@ -204,7 +217,44 @@ class ListosParaRetiroView(APIView):
     def get(self, request):
         with connection.cursor() as cur:
             _set_audit_user(request)
-            cur.execute("SELECT * FROM vw_listos_para_retiro ORDER BY id DESC;")
+            # Fallback sin vista: equipos en 'taller' con estado 'liberado'.
+            # Devuelve columnas esperadas por el front: id, estado, resolucion,
+            # cliente, numero_serie, numero_interno (MG), marca, modelo, tipo_equipo,
+            # fecha_ingreso, fecha_listo (desde ingreso_events), fecha_entrega.
+            cur.execute(
+                """
+                SELECT
+                  t.id,
+                  t.estado,
+                  t.presupuesto_estado,
+                  t.resolucion,
+                  c.razon_social,
+                  d.numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno,
+                  COALESCE(b.nombre,'') AS marca,
+                  COALESCE(m.nombre,'') AS modelo,
+                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  t.fecha_ingreso,
+                  ev.ts AS fecha_listo,
+                  t.fecha_entrega
+                FROM ingresos t
+                JOIN devices   d ON d.id = t.device_id
+                JOIN customers c ON c.id = d.customer_id
+                LEFT JOIN marcas b ON b.id = d.marca_id
+                LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                LEFT JOIN (
+                  SELECT ingreso_id, MAX(ts) AS ts
+                    FROM ingreso_events
+                   WHERE a_estado = 'liberado'
+                   GROUP BY ingreso_id
+                ) ev ON ev.ingreso_id = t.id
+                WHERE LOWER(loc.nombre) = LOWER(%s)
+                  AND t.estado = 'liberado'
+                ORDER BY COALESCE(ev.ts, t.fecha_ingreso, NOW()) DESC, t.id DESC
+                """,
+                ["taller"],
+            )
             return Response(_fetchall_dicts(cur))
 
 
@@ -1292,6 +1342,11 @@ class IngresoDetalleView(APIView):
                 sets_no_estado.append("fecha_servicio=%s")
                 params_no_estado.append(dt)
                 fecha_present = True
+        # Si el rol es técnico, solo el asignado puede editar diagnóstico/trabajos/fecha
+        if rol == "tecnico" and any(k in d for k in ("descripcion_problema", "trabajos_realizados", "fecha_servicio")):
+            uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
+            if int(asignado_a or 0) != int(uid or 0):
+                raise PermissionDenied("Solo el técnico asignado puede editar diagnóstico y reparación")
         if any(k in d for k in ("remito_salida", "factura_numero", "fecha_entrega")):
             if _rol(request) not in {"jefe", "jefe_veedor", "admin", "recepcion"}:
                 raise PermissionDenied("No autorizado para editar datos de entrega")

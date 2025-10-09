@@ -17,7 +17,7 @@
     token = t;
   };
 
-  /* ===== Logout forzado ante 401/403 ===== */
+  /* ===== Logout forzado ante 401 ===== */
   let forcingLogout = false;
   function forceLogout() {
     if (forcingLogout) return;
@@ -54,7 +54,7 @@
     const isJSON = ct.includes("application/json");
     const data = isJSON ? await res.json() : await res.text();
 
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       // Evitar redirigir desde páginas públicas de auth
       const p = window.location.pathname || "";
       const publicAuth = p.startsWith("/restablecer") || p.startsWith("/recuperar") || p === "/login";
@@ -368,7 +368,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       forceLogout();
     }
     if (!res.ok) {

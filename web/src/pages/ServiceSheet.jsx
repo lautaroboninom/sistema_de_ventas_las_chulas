@@ -31,6 +31,7 @@ import { canActAsTech, canRelease, hasAnyRole, ROLES } from "../lib/authz";
 import { RESOLUCION, RESOLUCION_OPTIONS, resolutionLabel } from "../lib/constants";
 
 import IngresoPhotos from "../components/IngresoPhotos";
+import ArchivosTab from "./ServiceSheet/tabs/ArchivosTab";
 
 // UI helpers
 const Row = ({ label, children, className = "" }) => (
@@ -712,6 +713,10 @@ export default function ServiceSheet() {
   const userId = Number(user?.id || 0);
   const canManagePhotos = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) ||
     (user?.rol === ROLES.TECNICO && userId && data?.asignado_a === userId);
+  const isTech = user?.rol === ROLES.TECNICO;
+  const canEditDiag = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) ||
+    (isTech && userId && data?.asignado_a === userId);
+  const canMarkReparado = canEditDiag;
 
   return (
     <div className="max-w-none p-4">
@@ -722,7 +727,7 @@ export default function ServiceSheet() {
       >
         Volver
       </button>
-      <h1 className="text-2xl font-bold mb-2">Hoja de servicio — {formatOSHelper(data, id)}</h1>
+      <h1 className="text-2xl font-bold mb-2">Hoja de servicio — {formatOSHelper(data, id)} — NS {data?.numero_serie}</h1>
 
       {err && <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-4">{err}</div>}
       {canSeeHistory && (
@@ -745,8 +750,14 @@ export default function ServiceSheet() {
           { value: "diagnostico", label: "Diagnóstico y Reparación" },
           { value: "presupuesto", label: "Presupuesto" },
           { value: "derivaciones", label: "Derivaciones" },
+          { value: "archivos", label: "Archivos" },
         ]}
       />
+
+      {/* ARCHIVOS */}
+      {tab === "archivos" && (
+        <ArchivosTab id={id} canManagePhotos={canManagePhotos} />
+      )}
 
 
       {/* PRINCIPAL */}
@@ -1273,6 +1284,11 @@ export default function ServiceSheet() {
       {/* DIAGN├ôSTICO */}
       {tab === "diagnostico" && (
         <div className="border rounded p-4">
+          {!canEditDiag && (
+            <div className="bg-yellow-50 border border-yellow-300 text-yellow-800 p-2 rounded mb-3">
+              No tenés asignado este equipo. Podés ver, pero no editar. Pedí asignación a tu supervisor.
+            </div>
+          )}
           {/* Contexto útil para diagnosticar */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
             <div className="border rounded p-3 bg-gray-50">
@@ -1362,6 +1378,7 @@ export default function ServiceSheet() {
                 }}
                 max={maxLocalNow}
                 placeholder="YYYY-MM-DD HH:mm"
+                disabled={!canEditDiag}
               />
             </div>
 
@@ -1394,7 +1411,7 @@ export default function ServiceSheet() {
               )}
 
               {/* Marcar reparado */}
-              {actAsTech && !["reparado","liberado","entregado"].includes(data?.estado) && (
+              {canMarkReparado && !["reparado","liberado","entregado"].includes(data?.estado) && (
                 <button
                   className="bg-emerald-600 text-white px-3 py-2 rounded"
                   onClick={async () => {
@@ -1420,6 +1437,7 @@ export default function ServiceSheet() {
             value={descripcion}
             onChange={(e) => setDescripcion(e.target.value)}
             placeholder="Ej.: Ingreso de agua en turbina; placa de control con óxido; válvula X no abre..."
+            disabled={!canEditDiag}
           />
 
           <div className="border rounded p-4 mt-4">
@@ -1429,12 +1447,13 @@ export default function ServiceSheet() {
               value={trabajos}
               onChange={(e) => setTrabajos(e.target.value)}
               placeholder="Ej.: Cambio de turbina; limpieza y secado; resoldado de conector; calibración; pruebas OKÔÇª"
+              disabled={!canEditDiag}
             />
             <div className="mt-2 flex items-center gap-2">
               <button
                 className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
                 onClick={saveDiagYReparacion}
-                disabled={savingAll}
+                disabled={savingAll || !canEditDiag}
                 aria-busy={savingAll ? "true" : "false"}
                 type="button"
               >

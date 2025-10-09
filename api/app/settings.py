@@ -177,7 +177,14 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 INGRESO_MEDIA_MAX_SIZE_MB = int(os.getenv('INGRESO_MEDIA_MAX_SIZE_MB', '10'))
 INGRESO_MEDIA_MAX_FILES = int(os.getenv('INGRESO_MEDIA_MAX_FILES', '50'))
 INGRESO_MEDIA_THUMB_MAX = int(os.getenv('INGRESO_MEDIA_THUMB_MAX', '512'))
-INGRESO_MEDIA_ALLOWED_MIME = [m.strip() for m in os.getenv('INGRESO_MEDIA_ALLOWED_MIME', 'image/jpeg,image/png').split(',') if m.strip()]
+INGRESO_MEDIA_ALLOWED_MIME = [
+    m.strip()
+    for m in os.getenv(
+        'INGRESO_MEDIA_ALLOWED_MIME',
+        # permitir imágenes + PDF + MP4 por defecto
+        'image/jpeg,image/png,application/pdf,video/mp4'
+    ).split(',') if m.strip()
+]
 
 # Ruta al repositorio de trazabilidad (Excels con ventas)
 # Se puede sobreescribir con la variable de entorno TRAZABILIDAD_ROOT
