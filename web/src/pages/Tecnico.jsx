@@ -1,13 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import {
+  ingresoIdOf,
+  formatOS,
+  formatDateOnly,
+  tipoEquipoOf,
+  resolveFechaIngreso,
+  resolveFechaCreacion,
+  catalogEquipmentLabel,
+  nsPreferInternoOf,
+  norm,
+} from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
 export default function Tecnico() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  const [filter, setFilter] = useState("");
 
   const navigate = useNavigate();
 
@@ -53,6 +64,25 @@ export default function Tecnico() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const filteredRows = useMemo(() => {
+    const needle = norm(filter);
+    if (!needle) return rows;
+    return rows.filter((row) => {
+      const campos = [
+        formatOS(row),
+        row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
+        catalogEquipmentLabel(row),
+        tipoEquipoOf(row),
+        row?.numero_serie,
+        row?.numero_interno,
+        row?.estado,
+      ];
+      return campos.some((campo) => norm(campo).includes(needle));
+    });
+  }, [rows, filter]);
+
+  const displayRows = filter ? filteredRows : rows;
 
   const StateSquare = ({ checked, label, disabled }) => {
     const cls = [
@@ -120,108 +150,121 @@ export default function Tecnico() {
         <div className="text-sm text-gray-500">No tenés pendientes por ahora.</div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left">
-                <th className="p-2">OS</th>
-                <th className="p-2">Fecha Ingreso</th>
-                <th className="p-2">Cliente</th>
-                <th className="p-2">Equipo</th>
-                <th className="p-2">Estado</th>
-                <th className="p-2">Serie</th>
-                <th className="p-2 text-right">Diagnosticado</th>
-                <th className="p-2 text-right">Presupuestado</th>
-                <th className="p-2 text-right">Aprobado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const urgente = isUrgente(row);
-                const devuelto = !!row?.derivado_devuelto;
-                const fechaIngreso = resolveFechaIngreso(row);
-                const rowCls = [
-                  "hover:bg-gray-50 cursor-pointer",
-                  urgente && "text-red-600 font-semibold",
-                  devuelto && "text-blue-700 font-semibold",
-                ]
-                  .filter(Boolean)
-                  .join(" ");
+          <div className="flex justify-end mb-2">
+            <input
+              className="border rounded p-2 w-full max-w-md"
+              placeholder="Filtrar por OS, cliente, equipo, serie, estado..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          </div>
+          {displayRows.length === 0 ? (
+            <div className="text-sm text-gray-500">No se encontraron pendientes para el filtro aplicado.</div>
+          ) : (
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left">
+                  <th className="p-2">OS</th>
+                  <th className="p-2">Fecha Ingreso</th>
+                  <th className="p-2">Cliente</th>
+                  <th className="p-2">Equipo</th>
+                  <th className="p-2">Estado</th>
+                  <th className="p-2">Serie</th>
+                  <th className="p-2 text-right">Diagnosticado</th>
+                  <th className="p-2 text-right">Presupuestado</th>
+                  <th className="p-2 text-right">Aprobado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayRows.map((row) => {
+                  const urgente = isUrgente(row);
+                  const devuelto = !!row?.derivado_devuelto;
+                  const fechaIngreso = resolveFechaIngreso(row);
+                  const rowCls = [
+                    "hover:bg-gray-50 cursor-pointer",
+                    urgente && "text-red-600 font-semibold",
+                    devuelto && "text-blue-700 font-semibold",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
 
-                return (
-                  <tr
-                    key={ingresoIdOf(row)}
-                    onClick={() => go(row)}
-                    onKeyDown={(e) => onRowKeyDown(e, row)}
-                    className={rowCls}
-                    role="link"
-                    tabIndex={0}
-                    aria-label={`Abrir hoja de servicio de ${formatOS(row)}`}
-                    data-testid={`row-${ingresoIdOf(row)}`}
-                  >
-                    <td className="p-2 underline">
-                      <span>{formatOS(row)}</span>
-                      {devuelto && (
-                        <span className="ml-2 inline-block px-2 py-0.5 text-[10px] rounded bg-blue-100 text-blue-700 align-middle">
-                          DERIVADO DEVUELTO
-                        </span>
-                      )}
-                      {urgente && (
-                        <span className="ml-2 inline-block px-2 py-0.5 text-[10px] rounded bg-red-100 text-red-700 align-middle">
-                          URGENTE
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-2 whitespace-nowrap">
-                      {fechaIngreso ? formatDateTime(fechaIngreso) : "-"}
-                    </td>
-                    <td className="p-2">{catalogEquipmentLabel(row)}</td>
-                    <td className="p-2">
-                      <StatusChip value={row?.estado} />
-                    </td>
-                    <td className="p-2">{nsPreferInternoOf(row)}</td>
+                  return (
+                    <tr
+                      key={ingresoIdOf(row)}
+                      onClick={() => go(row)}
+                      onKeyDown={(e) => onRowKeyDown(e, row)}
+                      className={rowCls}
+                      role="link"
+                      tabIndex={0}
+                      aria-label={`Abrir hoja de servicio de ${formatOS(row)}`}
+                      data-testid={`row-${ingresoIdOf(row)}`}
+                    >
+                      <td className="p-2 underline">
+                        <span>{formatOS(row)}</span>
+                        {devuelto && (
+                          <span className="ml-2 inline-block px-2 py-0.5 text-[10px] rounded bg-blue-100 text-blue-700 align-middle">
+                            DERIVADO DEVUELTO
+                          </span>
+                        )}
+                        {urgente && (
+                          <span className="ml-2 inline-block px-2 py-0.5 text-[10px] rounded bg-red-100 text-red-700 align-middle">
+                            URGENTE
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-2 whitespace-nowrap">
+                        {fechaIngreso ? formatDateOnly(fechaIngreso) : "-"}
+                      </td>
+                      <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
+                      <td className="p-2">{catalogEquipmentLabel(row)}</td>
+                      <td className="p-2">
+                        <StatusChip value={row?.estado} />
+                      </td>
+                      <td className="p-2">{nsPreferInternoOf(row)}</td>
 
-                    <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
-                      <StateSquare
-                        label="Diagnosticado"
-                        checked={(() => {
-                          const e = (row?.estado || "").toLowerCase();
-                          const p = (row?.presupuesto_estado || "").toLowerCase();
-                          const diagChain = [
-                            "diagnosticado",
-                            "reparar",
-                            "reparado",
-                            "liberado",
-                            "entregado",
-                            "alquilado",
-                          ];
-                          // Diagnosticado si el estado ya pasó por diagnóstico
-                          // o si el presupuesto ya fue emitido/aprobado/rechazado
-                          return diagChain.includes(e) || ["presupuestado","aprobado","rechazado"].includes(p);
-                        })()}
-                      />
-                    </td>
+                      <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
+                        <StateSquare
+                          label="Diagnosticado"
+                          checked={(() => {
+                            const e = (row?.estado || "").toLowerCase();
+                            const p = (row?.presupuesto_estado || "").toLowerCase();
+                            const diagChain = [
+                              "diagnosticado",
+                              "reparar",
+                              "reparado",
+                              "liberado",
+                              "entregado",
+                              "alquilado",
+                            ];
+                            // Diagnosticado si el estado ya pasó por diagnóstico
+                            // o si el presupuesto ya fue emitido/aprobado/rechazado
+                            return diagChain.includes(e) || ["presupuestado", "aprobado", "rechazado"].includes(p);
+                          })()}
+                        />
+                      </td>
 
-                    <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
-                      <StateSquare
-                        label="Presupuestado"
-                        checked={(() => {
-                          const p = (row?.presupuesto_estado || "").toLowerCase();
-                          return ["presupuestado", "aprobado", "rechazado"].includes(p);
-                        })()}
-                      />
-                    </td>
+                      <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
+                        <StateSquare
+                          label="Presupuestado"
+                          checked={(() => {
+                            const p = (row?.presupuesto_estado || "").toLowerCase();
+                            return ["presupuestado", "aprobado", "rechazado"].includes(p);
+                          })()}
+                        />
+                      </td>
 
-                    <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
-                      <StateSquare
-                        label="Aprobado"
-                        checked={(row?.presupuesto_estado || "").toLowerCase() === "aprobado"}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
+                        <StateSquare
+                          label="Aprobado"
+                          checked={(row?.presupuesto_estado || "").toLowerCase() === "aprobado"}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
     </div>
