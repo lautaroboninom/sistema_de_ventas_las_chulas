@@ -125,6 +125,7 @@ export default function Tecnico() {
               <tr className="text-left">
                 <th className="p-2">OS</th>
                 <th className="p-2">Fecha Ingreso</th>
+                <th className="p-2">Cliente</th>
                 <th className="p-2">Equipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>

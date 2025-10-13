@@ -1,15 +1,13 @@
-﻿
+﻿name: sistemadereparaciones-dev
 
-name: sistemadereparaciones
 services:
   postgres:
     image: postgres:16
-    container_name: sistemadereparaciones-postgres
     env_file: ./.env
     ports:
-      - "5433:5432"
+      - "5433:5433"
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - pg_data_dev:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -q"]
@@ -20,14 +18,13 @@ services:
 
   api:
     build: ./api
-    container_name: sistemadereparaciones-api
     env_file: ./.env
     environment:
       - DB_VENDOR=postgresql
       - POSTGRES_HOST=postgres
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-      - FRONTEND_ORIGIN=${FRONTEND_ORIGIN}
-      - PUBLIC_WEB_URL=${PUBLIC_WEB_URL}
+      - FRONTEND_ORIGIN=http://localhost:5176
+      - PUBLIC_WEB_URL=http://localhost:5176
       - LOGO_PATH=${LOGO_PATH:-/app/staticfiles/branding/logo-app.png}
     depends_on:
       postgres:
@@ -35,7 +32,7 @@ services:
     ports:
       - "18100:8000"
     volumes:
-      - ./api:/code
+      # Montar sólo directorio de presupuestos; evitar bind del código en Windows (paths con acentos)
       - type: bind
         source: ${QUOTES_HOST_DIR:-./quotes}
         target: /quotes
@@ -47,29 +44,14 @@ services:
 
   web:
     build: ./web
-    container_name: sistemadereparaciones-web
     ports:
       - "5175:5173"
     environment:
-      - VITE_API_URL=http://localhost:18100
-    volumes:
-      - ./web:/app
-    command: sh -c "npm ci && npm run dev -- --host"
+      - VITE_API_URL=http://localhost:18110
+    command: sh -c "npm install && npm run dev -- --host"
     depends_on:
       api:
         condition: service_started
-  nginx:
-    image: nginx:alpine
-    container_name: sistemadereparaciones-nginx
-    depends_on: [api, web]
-    ports:
-      - "8082:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./web/dist:/usr/share/nginx/html:ro
-      - ./api/service/static:/static:ro
-    restart: unless-stopped
-
 volumes:
   pg_data:
 
