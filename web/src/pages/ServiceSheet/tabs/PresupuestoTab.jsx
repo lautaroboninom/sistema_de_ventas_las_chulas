@@ -16,6 +16,8 @@
   aprobarPresupuesto,
   anulando,
   anularPresupuesto,
+  marcarNoAplica,
+  quitarNoAplica,
   nuevoRep,
   setNuevoRep,
   addRepuesto,
@@ -44,7 +46,7 @@
           <div className="text-sm text-gray-600">Forma de pago</div>
           <input className="border rounded p-2" value={formaPago} onChange={(e) => setFormaPago(e.target.value)} />
         </label>
-        {canManagePresupuesto && data.presupuesto_estado !== "presupuestado" && (
+        {canManagePresupuesto && data.presupuesto_estado === "pendiente" && (
           <button className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={emitirPresupuesto} disabled={emitiendo}>
             {emitiendo ? "Emitiendo..." : "Emitir presupuesto"}
           </button>
@@ -62,6 +64,16 @@
         {canManagePresupuesto && data.presupuesto_estado === "presupuestado" && (
           <button className="bg-red-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={anularPresupuesto} disabled={anulando} type="button">
             {anulando ? "Anulando..." : "Anular presupuesto"}
+          </button>
+        )}
+        {canManagePresupuesto && data.presupuesto_estado === "pendiente" && (
+          <button className="bg-neutral-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={marcarNoAplica} disabled={emitiendo} type="button">
+            {emitiendo ? "Marcando..." : "No aplica"}
+          </button>
+        )}
+        {canManagePresupuesto && data.presupuesto_estado === "no_aplica" && (
+          <button className="bg-neutral-500 text-white px-3 py-2 rounded disabled:opacity-60" onClick={quitarNoAplica} disabled={emitiendo} type="button">
+            {emitiendo ? "Marcando..." : "Quitar 'No aplica'"}
           </button>
         )}
       </div>

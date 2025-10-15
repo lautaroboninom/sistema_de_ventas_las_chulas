@@ -327,11 +327,11 @@ def _get_motivo_enum_values() -> list:
         pass
     return [
         "urgente control",
-        "reparaciÃ³n",
+        "reparación",
         "service preventivo",
         "baja alquiler",
-        "reparaciÃ³n alquiler",
-        "devoluciÃ³n demo",
+        "reparación alquiler",
+        "devolución demo",
         "otros",
     ]
 
@@ -464,8 +464,8 @@ def _frontend_url(request, path: str) -> str:
 
 # ---- Email footer helpers ----
 EMAIL_LEGAL_FOOTER = getattr(settings, "EMAIL_LEGAL_FOOTER", (
-    "La informaciÃ³n de este correo es confidencial y concierne Ãºnicamente a la persona a la que estÃ¡ dirigida. "
-    "Si este mensaje no estÃ¡ dirigido a usted, por favor ignÃ³relo."
+    "La información de este correo es confidencial y concierne unicamente a la persona a la que está dirigida. "
+    "Si este mensaje no está dirigido a usted, por favor ignórelo."
 ))
 
 

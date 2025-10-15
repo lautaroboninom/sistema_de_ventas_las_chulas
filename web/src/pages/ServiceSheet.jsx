@@ -10,6 +10,7 @@ import api, {
   // presupuesto
   getQuote, postQuoteItem, patchQuoteItem, deleteQuoteItem, patchQuoteResumen,
   postQuoteEmitir, postQuoteAprobar, getBlob, postQuoteAnular, postCerrarReparacion, postMarcarReparado,
+  postQuoteNoAplica, postQuoteQuitarNoAplica,
   // entrega
   postEntregarIngreso,
   // accesorios
@@ -268,13 +269,57 @@ export default function ServiceSheet() {
     try {
       setAprobando(true);
       setQErr("");
+      const shouldPrint = (data?.estado || "").toLowerCase() === "reparado" &&
+        window.confirm("Este equipo ya está reparado, ¿imprimir remito de salida?");
+
       const r = await postQuoteAprobar(id);
       setQuote(r);
       setData((d) => ({ ...d, presupuesto_estado: "aprobado" }));
+
+      if (shouldPrint) {
+        try {
+          const blob = await getBlob(`/api/ingresos/${id}/remito/`);
+          if (!(blob instanceof Blob)) throw new Error("La respuesta no fue un PDF");
+          const url = URL.createObjectURL(blob);
+          window.open(url, "_blank", "noopener");
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
+          await refreshIngreso();
+        } catch (e) {
+          setQErr(e?.message || "No se pudo imprimir el remito de salida");
+        }
+      }
     } catch (e) {
       setQErr(e?.message || "No se pudo aprobar el presupuesto");
     } finally {
       setAprobando(false);
+    }
+  }
+
+  async function marcarNoAplica() {
+    try {
+      setQErr("");
+      setEmitiendo(true);
+      const r = await postQuoteNoAplica(id);
+      setQuote(r);
+      setData((d) => ({ ...d, presupuesto_estado: "no_aplica" }));
+    } catch (e) {
+      setQErr(e?.message || "No se pudo marcar 'No aplica'");
+    } finally {
+      setEmitiendo(false);
+    }
+  }
+
+  async function quitarNoAplica() {
+    try {
+      setQErr("");
+      setEmitiendo(true);
+      const r = await postQuoteQuitarNoAplica(id);
+      setQuote(r);
+      setData((d) => ({ ...d, presupuesto_estado: "pendiente" }));
+    } catch (e) {
+      setQErr(e?.message || "No se pudo quitar 'No aplica'");
+    } finally {
+      setEmitiendo(false);
     }
   }
 
@@ -1017,7 +1062,20 @@ export default function ServiceSheet() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
               <Row label="Motivo">{data.motivo}</Row>
               <Row label="Estado">{data.estado}</Row>
-              <Row label="Presupuesto">{data.presupuesto_estado === "presupuestado" ? "Presupuestado" : (data.presupuesto_estado || "-")}</Row>
+              <Row label="Presupuesto">{
+                (() => {
+                  const v = data.presupuesto_estado;
+                  if (!v) return "-";
+                  if (v === "presupuestado") return "Presupuestado";
+                  if (v === "no_aplica") return "No aplica";
+                  try {
+                    const s = String(v);
+                    return s.charAt(0).toUpperCase() + s.slice(1);
+                  } catch (_) {
+                    return String(v);
+                  }
+                })()
+              }</Row>
               <Row label="Resolución">{data.resolucion ? resolutionLabel(data.resolucion) : "-"}</Row>
               <Row label="Fecha ingreso">{formatDateTimeHelper(resolveFechaIngreso(data))}</Row>
               <Row label="Fecha servicio">{data.fecha_servicio ? formatDateTimeHelper(data.fecha_servicio) : "-"}</Row>
@@ -1490,7 +1548,7 @@ export default function ServiceSheet() {
               <div className="text-sm text-gray-600">Forma de pago</div>
               <input className="border rounded p-2" value={formaPago} onChange={(e)=>setFormaPago(e.target.value)} />
             </label>
-            {hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]) && data.presupuesto_estado !== "presupuestado" && (
+            {hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]) && data.presupuesto_estado === "pendiente" && (
               <button className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={emitirPresupuesto} disabled={emitiendo}>
                 {emitiendo ? "Emitiendo..." : "Emitir presupuesto"}
               </button>
@@ -1506,6 +1564,16 @@ export default function ServiceSheet() {
             {hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]) && data.presupuesto_estado === "presupuestado" && (
               <button className="bg-red-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={anularPresupuesto} disabled={anulando} type="button">
                 {anulando ? "Anulando..." : "Anular presupuesto"}
+              </button>
+            )}
+            {hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]) && data.presupuesto_estado === "pendiente" && (
+              <button className="bg-neutral-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={marcarNoAplica} disabled={emitiendo} type="button">
+                {emitiendo ? "Marcando..." : "No aplica"}
+              </button>
+            )}
+            {hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]) && data.presupuesto_estado === "no_aplica" && (
+              <button className="bg-neutral-500 text-white px-3 py-2 rounded disabled:opacity-60" onClick={quitarNoAplica} disabled={emitiendo} type="button">
+                {emitiendo ? "Marcando..." : "Quitar 'No aplica'"}
               </button>
             )}
           </div>
@@ -1781,7 +1849,13 @@ export default function ServiceSheet() {
                           >
                             <td className="p-2 underline">{formatOSHelper(ingresoId)}</td>
                             <td className="p-2 capitalize">{r?.estado || '-'}</td>
-                            <td className="p-2 capitalize">{r?.presupuesto_estado || '-'}</td>
+                            <td className="p-2">{(() => {
+                              const v = r?.presupuesto_estado;
+                              if (!v) return '-';
+                              if (v === 'presupuestado') return 'Presupuestado';
+                              if (v === 'no_aplica') return 'No aplica';
+                              try { const s = String(v); return s.charAt(0).toUpperCase() + s.slice(1); } catch { return String(v); }
+                            })()}</td>
                             <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(resolveFechaIngreso(r))}</td>
                             <td className="p-2">{r?.ubicacion_nombre || '-'}</td>
                           </tr>

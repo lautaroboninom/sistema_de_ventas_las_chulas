@@ -1,6 +1,8 @@
 // web/src/pages/Aprobados.jsx
 import { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
+import api, { getBlob } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
+import { canRelease } from "../lib/authz";
 import { useNavigate } from "react-router-dom";
 import {
   ingresoIdOf,
@@ -8,7 +10,6 @@ import {
   formatDateTime,
   norm,
   tipoEquipoOf,
-  resolveFechaIngreso,
   catalogEquipmentLabel,
   nsPreferInternoOf,
 } from "../lib/ui-helpers";
@@ -23,6 +24,8 @@ export default function Aprobados() {
   const [err, setErr] = useState("");
   const [filter, setFilter] = useState("");
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const release = canRelease(user);
 
   async function load() {
     try {
@@ -111,8 +114,8 @@ export default function Aprobados() {
                 <th className="p-2">Equipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
-                <th className="p-2">Fecha ingreso</th>
                 <th className="p-2">Fecha aprob./repar.</th>
+                <th className="p-2">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -134,7 +137,6 @@ export default function Aprobados() {
                     <StatusChip value={row?.estado} />
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(
                     row?.fecha_aprobacion ||
                       row?.presupuesto_fecha_aprobacion ||
@@ -142,6 +144,32 @@ export default function Aprobados() {
                       row?.fecha_reparacion ||
                       row?.estado_fecha
                   )}</td>
+                  <td className="p-2">
+                    {release && row?.estado === "reparado" && (
+                      <button
+                        className="btn"
+                        type="button"
+                        title="Imprimir remito"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const id = ingresoIdOf(row);
+                            if (!id) return;
+                            const blob = await getBlob(`/api/ingresos/${id}/remito/`);
+                            if (!(blob instanceof Blob)) throw new Error("La respuesta no fue un PDF");
+                            const url = URL.createObjectURL(blob);
+                            window.open(url, "_blank", "noopener");
+                            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                            await load();
+                          } catch (e) {
+                            setErr(e?.message || "No se pudo imprimir el remito");
+                          }
+                        }}
+                      >
+                        Imprimir remito
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

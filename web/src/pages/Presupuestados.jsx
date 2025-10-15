@@ -1,6 +1,6 @@
 // web/src/pages/JefePresupuestos.jsx
 import { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
+import api, { getBlob } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf,
   formatOS,
@@ -88,7 +88,20 @@ export default function JefePresupuestos() {
     }
     try {
       setBusyId(ingresoId);
+      const shouldPrint = (row?.estado || "").toLowerCase() === "reparado" &&
+        window.confirm("Este equipo ya está reparado, ¿imprimir remito de salida?");
       await api.post(`/api/quotes/${ingresoId}/aprobar/`);
+      if (shouldPrint) {
+        try {
+          const blob = await getBlob(`/api/ingresos/${ingresoId}/remito/`);
+          if (!(blob instanceof Blob)) throw new Error("La respuesta no fue un PDF");
+          const url = URL.createObjectURL(blob);
+          window.open(url, "_blank", "noopener");
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        } catch (e) {
+          setErr(e?.message || "No se pudo imprimir el remito de salida");
+        }
+      }
       await load();
     } catch (e) {
       setErr(e?.message || "No se pudo aprobar el presupuesto");

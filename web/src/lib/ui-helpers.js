@@ -2,14 +2,14 @@
 
 export const ingresoIdOf = (row) => row?.ingreso_id ?? row?.id;
 
-export const formatOS = (rowOrId, prefix = "OS ") => {
+export const formatOS = (rowOrId, prefix = "") => {
   // Acepta objeto row o un id suelto
   if (rowOrId && typeof rowOrId === "object") {
     const id = ingresoIdOf(rowOrId) ?? 0;
-    return rowOrId?.os ?? `${prefix}${String(id).padStart(6, "0")}`;
+    return rowOrId?.os ?? `${prefix}${String(id).padStart(5, "0")}`;
   }
   const id = Number(rowOrId ?? 0);
-  return `${prefix}${String(id).padStart(6, "0")}`;
+  return `${prefix}${String(id).padStart(5, "0")}`;
 };
 
 export const formatDateTime = (s, locale = "es-AR") =>

@@ -493,6 +493,12 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const postQuoteAprobar = (ingresoId) =>
     api.post(`/api/quotes/${ingresoId}/aprobar/`);
 
+  export const postQuoteNoAplica = (ingresoId) =>
+    api.post(`/api/quotes/${ingresoId}/no-aplica/`);
+
+  export const postQuoteQuitarNoAplica = (ingresoId) =>
+    api.post(`/api/quotes/${ingresoId}/no-aplica/quitar/`);
+
   // === GET binario (Blob) con auth y cookies ===
   export async function getBlob(path, opts = {}) {
     const url = path.startsWith("http") ? path : `${BASE}${path}`;

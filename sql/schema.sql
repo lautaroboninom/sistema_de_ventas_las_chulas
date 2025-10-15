@@ -24,7 +24,7 @@ DO $$ BEGIN
     CREATE TYPE disposicion_type AS ENUM ('normal','para_repuesto');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'quote_estado') THEN
-    CREATE TYPE quote_estado AS ENUM ('pendiente','emitido','aprobado','rechazado','presupuestado');
+    CREATE TYPE quote_estado AS ENUM ('pendiente','emitido','aprobado','rechazado','presupuestado','no_aplica');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'quote_item_tipo') THEN
     CREATE TYPE quote_item_tipo AS ENUM ('repuesto','mano_obra','servicio');
@@ -67,6 +67,7 @@ BEGIN
               WHEN 'presupuestado' THEN 'presupuestado'::quote_estado
               WHEN 'aprobado' THEN 'aprobado'::quote_estado
               WHEN 'rechazado' THEN 'rechazado'::quote_estado
+              WHEN 'no_aplica' THEN 'no_aplica'::quote_estado
               ELSE 'pendiente'::quote_estado
             END
          ),

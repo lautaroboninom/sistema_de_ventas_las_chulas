@@ -182,7 +182,13 @@ export default function GeneralPorCliente() {
                   <td className="p-2">{catalogEquipmentLabel(row)}</td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2">{row?.estado ?? "-"}</td>
-                  <td className="p-2">{row?.presupuesto_estado ?? "-"}</td>
+                  <td className="p-2">{(() => {
+                    const v = row?.presupuesto_estado;
+                    if (!v) return "-";
+                    if (v === "presupuestado") return "Presupuestado";
+                    if (v === "no_aplica") return "No aplica";
+                    try { const s = String(v); return s.charAt(0).toUpperCase() + s.slice(1); } catch { return String(v); }
+                  })()}</td>
                   <td className="p-2">{row?.ubicacion_nombre ?? row?.ubicacion_id ?? "-"}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">

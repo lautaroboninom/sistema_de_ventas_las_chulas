@@ -18,17 +18,6 @@ class RemitoSalidaPdfView(APIView):
         cur_row = q("SELECT resolucion, estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not cur_row:
             return Response(status=404)
-        # Autocompletar resolución si está 'reparado' y aún sin resolución
-        if not cur_row["resolucion"] and (cur_row["estado"] or "").lower() == 'reparado':
-            exec_void(
-                """
-                UPDATE ingresos
-                   SET resolucion = 'reparado'
-                 WHERE id=%s AND (resolucion IS NULL OR btrim(resolucion)='')
-                """,
-                [ingreso_id],
-            )
-            cur_row["resolucion"] = 'reparado'
         if not cur_row["resolucion"] and cur_row["estado"] != 'liberado':
             return Response({"detail": "No se puede liberar sin resolución"}, status=409)
 

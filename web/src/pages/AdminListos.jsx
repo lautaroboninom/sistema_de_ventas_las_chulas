@@ -108,7 +108,7 @@ export default function AdminListos() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, equipo, serie, resolución…"
+          placeholder="Filtrar por OS, cliente, equipo, serie, resoluciÃ³n"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar listos para retiro"
         />
@@ -135,7 +135,7 @@ export default function AdminListos() {
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">Resolución</th>
+                <th scope="col" className="p-2">ResoluciÃ³n</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Fecha listo</th>
                 <th scope="col" className="p-2 text-right">Acciones</th>
@@ -157,7 +157,7 @@ export default function AdminListos() {
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                   <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   <td className="p-2">
-                    <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolución" />
+                    <StatusChip value={resolutionLabel(row?.resolucion)} title="ResoluciÃ³n" />
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">

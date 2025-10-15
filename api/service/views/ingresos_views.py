@@ -139,8 +139,13 @@ class PresupuestadosView(APIView):
                   t.fecha_ingreso,
                   q.id AS presupuesto_id,
                   q.id AS presupuesto_numero,
-                  q.subtotal AS presupuesto_monto,
-                  'ARS' AS presupuesto_moneda,
+                  -- Monto mostrado: Subtotal del presupuesto (mano de obra + repuestos), sin IVA
+                  COALESCE((
+                    SELECT ROUND(SUM(qi.qty * qi.precio_u), 2)
+                    FROM quote_items qi
+                    WHERE qi.quote_id = q.id
+                  ), 0) AS presupuesto_monto,
+                  COALESCE(q.moneda, 'ARS') AS presupuesto_moneda,
                   q.fecha_emitido AS presupuesto_fecha_emision,
                   NULL AS presupuesto_fecha_envio 
                 FROM ingresos t

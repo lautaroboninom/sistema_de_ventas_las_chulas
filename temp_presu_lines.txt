@@ -1,0 +1,206 @@
+1	// web/src/pages/JefePresupuestos.jsx
+2	import { useEffect, useMemo, useState } from "react";
+3	import api from "../lib/api";
+4	import { useNavigate } from "react-router-dom";
+5	import { ingresoIdOf,
+6	  formatOS,
+7	  formatDateTime,
+8	  norm,
+9	  tipoEquipoOf,
+10	  formatMoney,
+11	  resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+12	
+13	// ENDPOINT para "presupuestados" (ya emitidos/enviados)
+14	const ENDPOINT = "/api/ingresos/presupuestados/"; // <-- AJUSTAR si tu API usa otra ruta
+15	
+16	export default function JefePresupuestos() {
+17	  const [rows, setRows] = useState([]);
+18	  const [loading, setLoading] = useState(true);
+19	  const [err, setErr] = useState("");
+20	  const [filter, setFilter] = useState("");
+21	  const [busyId, setBusyId] = useState(null);
+22	
+23	  const navigate = useNavigate();
+24	
+25	  async function load() {
+26	    try {
+27	      setErr("");
+28	      setLoading(true);
+29	      const data = await api.get(ENDPOINT);
+30	      const list = Array.isArray(data) ? data : [];
+31	      // Orden sugerido: más recientes primero por fecha de emisión/envío o ingreso
+32	      list.sort((a, b) => {
+33	        const da = new Date(a?.presupuesto_fecha_envio ?? a?.presupuesto_fecha_emision ?? resolveFechaCreacion(a) ?? 0).getTime();
+34	        const db = new Date(b?.presupuesto_fecha_envio ?? b?.presupuesto_fecha_emision ?? resolveFechaCreacion(b) ?? 0).getTime();
+35	        return db - da;
+36	      });
+37	      setRows(list);
+38	    } catch (e) {
+39	      setErr(e?.message || "No se pudo cargar la lista de presupuestados");
+40	      setRows([]);
+41	    } finally {
+42	      setLoading(false);
+43	    }
+44	  }
+45	
+46	  useEffect(() => {
+47	    load();
+48	  }, []);
+49	
+50	  const filtered = useMemo(() => {
+51	    const needle = norm(filter);
+52	    if (!needle) return rows;
+53	    return rows.filter((row) => {
+54	      const campos = [
+55	        formatOS(row),
+56	        row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
+57	        row?.marca ?? row?.equipo?.marca,
+58	        catalogEquipmentLabel(row),
+59	        tipoEquipoOf(row),
+60	        row?.estado,
+61	        row?.numero_serie,
+62	        row?.numero_interno,
+63	        String(row?.presupuesto_monto ?? row?.presupuesto_total ?? ""),
+64	      ];
+65	      return campos.some((c) => norm(c).includes(needle));
+66	    });
+67	  }, [rows, filter]);
+68	
+69	  const go = (row) => {
+70	    const id = ingresoIdOf(row);
+71	    if (!id) return;
+72	    navigate(`/ingresos/${id}`);
+73	  };
+74	
+75	  const onRowKeyDown = (e, row) => {
+76	    if (e.key === "Enter" || e.key === " ") {
+77	      e.preventDefault();
+78	      go(row);
+79	    }
+80	  };
+81	
+82	  // Acción: Aprobar presupuesto (por ingreso_id)
+83	  async function aprobar(row) {
+84	    const ingresoId = ingresoIdOf(row);
+85	    if (!ingresoId) {
+86	      setErr("No se encontró el ID de ingreso para aprobar.");
+87	      return;
+88	    }
+89	    try {
+90	      setBusyId(ingresoId);
+91	      await api.post(`/api/quotes/${ingresoId}/aprobar/`);
+92	      await load();
+93	    } catch (e) {
+94	      setErr(e?.message || "No se pudo aprobar el presupuesto");
+95	    } finally {
+96	      setBusyId(null);
+97	    }
+98	  }
+99	
+100	  return (
+101	    <div className="card">
+102	      <div className="h1 mb-3">Presupuestados</div>
+103	
+104	      {err && (
+105	        <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">
+106	          {err}
+107	        </div>
+108	      )}
+109	
+110	      <div className="flex items-center gap-2 mb-3">
+111	        <input
+112	          type="text"
+113	          value={filter}
+114	          onChange={(e) => setFilter(e.target.value)}
+115	          placeholder="Filtrar por OS, cliente, equipo, estado, monto…"
+116	          className="border rounded p-2 w-full max-w-md"
+117	          aria-label="Filtrar presupuestados"
+118	        />
+119	        <button
+120	          className="btn"
+121	          onClick={load}
+122	          title="Recargar lista"
+123	          disabled={loading}
+124	          aria-busy={loading ? "true" : "false"}
+125	        >
+126	          Recargar
+127	        </button>
+128	      </div>
+129	
+130	      {loading ? (
+131	        "Cargando..."
+132	      ) : filtered.length === 0 ? (
+133	        <div className="text-sm text-gray-500">No hay presupuestos emitidos/enviados.</div>
+134	      ) : (
+135	        <div className="overflow-x-auto">
+136	          <table className="min-w-full text-sm">
+137	            <thead>
+138	              <tr className="text-left">
+139	                <th scope="col" className="p-2">OS</th>
+140	                <th scope="col" className="p-2">Cliente</th>
+141	                <th scope="col" className="p-2">Equipo</th>
+142	                <th scope="col" className="p-2">Serie</th>
+143	                <th scope="col" className="p-2">Estado</th>
+144	                <th scope="col" className="p-2">Monto</th>
+145	                <th scope="col" className="p-2">Fecha emisión</th>
+146	                <th scope="col" className="p-2 text-right">Acciones</th>
+147	              </tr>
+148	            </thead>
+149	            <tbody>
+150	              {filtered.map((row) => {
+151	                const moneda = row?.presupuesto_moneda ?? "ARS";
+152	                const monto = row?.presupuesto_monto ?? row?.presupuesto_total ?? null;
+153	                const ingresoId = ingresoIdOf(row);
+154	
+155	                return (
+156	                  <tr
+157	                    key={ingresoId}
+158	                    onClick={() => go(row)}
+159	                    onKeyDown={(e) => onRowKeyDown(e, row)}
+160	                    className="hover:bg-gray-50 cursor-pointer border-t"
+161	                    role="link"
+162	                    tabIndex={0}
+163	                    aria-label={`Abrir hoja de servicio de ${formatOS(row)}`}
+164	                    data-testid={`row-${ingresoId}`}
+165	                  >
+166	                    <td className="p-2 underline">{formatOS(row)}</td>
+167	                    <td className="p-2">
+168	                      {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
+169	                    </td>
+170	                    <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
+171	                    <td className="p-2">{nsPreferInternoOf(row)}</td>
+172	                    <td className="p-2">{row?.estado ?? "-"}</td>
+173	                    <td className="p-2">{formatMoney(monto, moneda)}</td>
+174	                    <td className="p-2 whitespace-nowrap">
+175	                      {formatDateTime(row?.presupuesto_fecha_emision ?? row?.fecha_emision)}
+176	                    </td>
+177	                    <td className="p-2">
+178	                      <div className="flex gap-2 justify-end">
+179	                        <button
+180	                          className="btn"
+181	                          onClick={(e) => {
+182	                            e.stopPropagation();
+183	                            aprobar(row);
+184	                          }}
+185	                          disabled={busyId === ingresoId}
+186	                          aria-busy={busyId === ingresoId ? "true" : "false"}
+187	                          title="Aprobar presupuesto"
+188	                        >
+189	                          Aprobar
+190	                        </button>
+191	                        {/* Si tu backend permite rechazar / anular, podés agregar acá otro botón */}
+192	                      </div>
+193	                    </td>
+194	                  </tr>
+195	                );
+196	              })}
+197	            </tbody>
+198	          </table>
+199	          <div className="text-xs text-gray-500 mt-2">
+200	            Mostrando {filtered.length} de {rows.length}.
+201	          </div>
+202	        </div>
+203	      )}
+204	    </div>
+205	  );
+206	}

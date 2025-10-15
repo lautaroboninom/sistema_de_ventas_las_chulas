@@ -68,7 +68,7 @@ export default function Derivados() {
                 <th className="p-2">Proveedor</th>
                 <th className="p-2">Equipo</th>
                 <th className="p-2">Serie</th>
-                <th className="p-2">Fecha derivaciÃ³n</th>
+                <th className="p-2">Fecha derivación</th>
                 <th className="p-2 text-right">Acciones</th>
               </tr>
             </thead>
@@ -88,7 +88,7 @@ export default function Derivados() {
                         value={fechaMap[ingresoIdOf(row)] || ''}
                         onChange={(e) => setFechaMap((m) => ({ ...m, [ingresoIdOf(row)]: e.target.value }))}
                         className="border rounded p-1"
-                        aria-label="Fecha devoluciÃ³n"
+                        aria-label="Fecha devolución"
                       />
                       <button className="btn" onClick={() => onDevuelto(row)}>
                         Devuelto

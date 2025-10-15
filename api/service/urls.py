@@ -7,6 +7,7 @@ from .views import (
     # flujo ingresos / t�cnico
     MisPendientesView,
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
+    NoAplicaPresupuestoView, QuitarNoAplicaPresupuestoView,
     PendientesPresupuestoView, PresupuestadosView,
     MarcarReparadoView, EntregarIngresoView, GarantiaReparacionCheckView, GarantiaFabricaCheckView,
     ListosParaRetiroView,
@@ -77,6 +78,8 @@ urlpatterns = [
     # presupuestos
     path("quotes/<int:ingreso_id>/emitir/", EmitirPresupuestoView.as_view()),
     path("quotes/<int:ingreso_id>/aprobar/", AprobarPresupuestoView.as_view()),
+    path("quotes/<int:ingreso_id>/no-aplica/", NoAplicaPresupuestoView.as_view()),
+    path("quotes/<int:ingreso_id>/no-aplica/quitar/", QuitarNoAplicaPresupuestoView.as_view()),
     path("presupuestos/pendientes/", PendientesPresupuestoView.as_view()),
     path("ingresos/presupuestados/", PresupuestadosView.as_view()),
 
@@ -107,7 +110,7 @@ urlpatterns = [
     path("ingresos/<int:ingreso_id>/derivaciones/", DerivacionesPorIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/<int:deriv_id>/devolver/", DevolverDerivacionView.as_view()),
 
-    # catÃƒÆ’Ã‚Â¡logos
+    # catálogos
     path("catalogos/marcas/", CatalogoMarcasView.as_view()),
     path("catalogos/modelos/", CatalogoModelosView.as_view()),                   # ?marca_id=#
     path("catalogos/ubicaciones/", CatalogoUbicacionesView.as_view()),

@@ -70,7 +70,7 @@ export default function BuscarNS() {
             </thead>
             <tbody>
               {rows.map((r) => {
-                const ingresoId = r?.id ?? r?.ingreso_id;
+                const ingresoId = r?.id;
                 return (
                   <tr
                     key={ingresoId}

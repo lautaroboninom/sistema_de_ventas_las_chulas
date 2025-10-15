@@ -464,6 +464,66 @@ class AnularPresupuestoView(APIView):
         return Response(QuoteDetailSerializer(data).data)
 
 
+class NoAplicaPresupuestoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, ingreso_id: int):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        row = q("SELECT presupuesto_estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+        if not row:
+            raise ValidationError("Ingreso no encontrado")
+        cur = (row.get("presupuesto_estado") or "").strip()
+        if cur in ("presupuestado", "aprobado"):
+            raise ValidationError("Primero debe anular el presupuesto para marcar 'No aplica'.")
+
+        qid = _ensure_quote(ingreso_id)
+        _set_audit_user(request)
+        exec_void(
+            """
+            UPDATE quotes
+               SET estado='no_aplica',
+                   fecha_emitido=NULL,
+                   fecha_aprobado=NULL,
+                   pdf_url=NULL
+             WHERE id=%s
+            """,
+            [qid],
+        )
+        exec_void("UPDATE ingresos SET presupuesto_estado='no_aplica' WHERE id=%s", [ingreso_id])
+        data = _load_quote_payload(ingreso_id)
+        return Response(QuoteDetailSerializer(data).data)
+
+
+class QuitarNoAplicaPresupuestoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, ingreso_id: int):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        row = q("SELECT presupuesto_estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+        if not row:
+            raise ValidationError("Ingreso no encontrado")
+        cur = (row.get("presupuesto_estado") or "").strip()
+        if cur != "no_aplica":
+            raise ValidationError("Solo se puede quitar cuando esta en 'no_aplica'.")
+
+        qid = _ensure_quote(ingreso_id)
+        _set_audit_user(request)
+        exec_void(
+            """
+            UPDATE quotes
+               SET estado='pendiente',
+                   fecha_emitido=NULL,
+                   fecha_aprobado=NULL,
+                   pdf_url=NULL
+             WHERE id=%s
+            """,
+            [qid],
+        )
+        exec_void("UPDATE ingresos SET presupuesto_estado='pendiente' WHERE id=%s", [ingreso_id])
+        data = _load_quote_payload(ingreso_id)
+        return Response(QuoteDetailSerializer(data).data)
+
+
 __all__ = [
     'QuoteDetailView',
     'QuoteItemsView',
@@ -473,4 +533,6 @@ __all__ = [
     'QuotePdfView',
     'AprobarPresupuestoView',
     'AnularPresupuestoView',
+    'NoAplicaPresupuestoView',
+    'QuitarNoAplicaPresupuestoView',
 ]

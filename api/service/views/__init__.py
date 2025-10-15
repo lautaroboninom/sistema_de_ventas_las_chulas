@@ -66,6 +66,8 @@ from .quotes_views import (
     QuotePdfView,
     AprobarPresupuestoView,
     AnularPresupuestoView,
+    NoAplicaPresupuestoView,
+    QuitarNoAplicaPresupuestoView,
 )
 
 from .media_views import (
@@ -193,6 +195,8 @@ __all__ = [
     "QuotePdfView",
     "AprobarPresupuestoView",
     "AnularPresupuestoView",
+    "NoAplicaPresupuestoView",
+    "QuitarNoAplicaPresupuestoView",
     # media
     "IngresoMediaListCreateView",
     "IngresoMediaDetailView",

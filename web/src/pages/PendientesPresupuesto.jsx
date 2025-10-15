@@ -118,7 +118,6 @@ export default function PendientesPresupuesto() {
                 <th scope="col" className="p-2">Equipo</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">N/S</th>
-                <th scope="col" className="p-2">Presupuesto</th>
                 <th scope="col" className="p-2">Fecha ingreso</th>
                 <th scope="col" className="p-2">Fecha servicio</th>
               </tr>
@@ -145,9 +144,8 @@ export default function PendientesPresupuesto() {
                     <td className="p-2 underline">{formatOS(row)}</td>
                     <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                     <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
-                    <td className="p-2"><StatusChip value={row?.estado} /></td>
+                    <td className="p-2"><StatusChip value={row?.estado} title="Estado del equipo" /></td>
                     <td className="p-2">{nsPreferInternoOf(row)}</td>
-                    <td className="p-2"><StatusChip value={presuLabel} title="Estado de Presupuesto" /></td>
                     <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
                     <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_servicio)}</td>
                   </tr>

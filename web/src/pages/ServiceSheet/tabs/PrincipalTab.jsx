@@ -353,7 +353,18 @@ export default function PrincipalTab(props) {
             <Row label="Motivo">{data.motivo}</Row>
             <Row label="Estado">{data.estado}</Row>
             <Row label="Presupuesto">
-              {data.presupuesto_estado === "presupuestado" ? "Presupuestado" : data.presupuesto_estado || "-"}
+              {(() => {
+                const v = data.presupuesto_estado;
+                if (!v) return "-";
+                if (v === "presupuestado") return "Presupuestado";
+                if (v === "no_aplica") return "No aplica";
+                try {
+                  const s = String(v);
+                  return s.charAt(0).toUpperCase() + s.slice(1);
+                } catch (_) {
+                  return String(v);
+                }
+              })()}
             </Row>
             <Row label="Resoluci\u00f3n">{data.resolucion ? resolutionLabel(data.resolucion) : "-"}</Row>
             <Row label="Fecha ingreso">{formatDateTimeHelper(resolveFechaIngreso(data))}</Row>

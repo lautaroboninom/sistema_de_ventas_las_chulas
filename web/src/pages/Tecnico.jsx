@@ -169,6 +169,7 @@ export default function Tecnico() {
                   <th className="p-2">Cliente</th>
                   <th className="p-2">Equipo</th>
                   <th className="p-2">Estado</th>
+                  <th className="p-2">Presupuesto</th>
                   <th className="p-2">Serie</th>
                   <th className="p-2 text-right">Diagnosticado</th>
                   <th className="p-2 text-right">Presupuestado</th>
@@ -220,6 +221,15 @@ export default function Tecnico() {
                       <td className="p-2">
                         <StatusChip value={row?.estado} />
                       </td>
+                      <td className="p-2">
+                        {(() => {
+                          const v = (row?.presupuesto_estado || '').trim();
+                          if (!v || v === 'pendiente') return '-';
+                          if (v === 'presupuestado') return 'Presupuestado';
+                          if (v === 'no_aplica') return 'No aplica';
+                          try { const s = String(v); return s.charAt(0).toUpperCase() + s.slice(1); } catch { return String(v); }
+                        })()}
+                      </td>
                       <td className="p-2">{nsPreferInternoOf(row)}</td>
 
                       <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
@@ -251,6 +261,12 @@ export default function Tecnico() {
                             return ["presupuestado", "aprobado", "rechazado"].includes(p);
                           })()}
                         />
+                        {(() => {
+                          const p = (row?.presupuesto_estado || "").toLowerCase();
+                          return p === "no_aplica" ? (
+                            <span className="ml-1 text-xs text-gray-500">N/A</span>
+                          ) : null;
+                        })()}
                       </td>
 
                       <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
