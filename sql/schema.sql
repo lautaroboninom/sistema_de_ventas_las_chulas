@@ -241,6 +241,18 @@ CREATE TABLE IF NOT EXISTS ingreso_media (
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Solicitudes de asignación de técnico (simple, una fila por solicitud)
+CREATE TABLE IF NOT EXISTS ingreso_assignment_requests (
+  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  ingreso_id  INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
+  usuario_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL DEFAULT 'pendiente',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  accepted_at TIMESTAMPTZ NULL,
+  canceled_at TIMESTAMPTZ NULL
+);
+CREATE INDEX IF NOT EXISTS ix_iars_ingreso_created ON ingreso_assignment_requests(ingreso_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS proveedores_externos (
   id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   nombre    TEXT NOT NULL,

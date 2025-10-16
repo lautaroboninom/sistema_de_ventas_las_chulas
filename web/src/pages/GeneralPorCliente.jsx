@@ -1,6 +1,6 @@
 // web/src/pages/GeneralPorCliente.jsx
 import { useEffect, useMemo, useState } from "react";
-import api, { getClientes } from "../lib/api";
+import api, { getClientes, downloadAuth } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 
@@ -16,6 +16,8 @@ export default function GeneralPorCliente() {
   const [loadingRows, setLoadingRows] = useState(false);
   const [errRows, setErrRows] = useState("");
   const [filter, setFilter] = useState("");
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [exporting, setExporting] = useState(false);
 
   const navigate = useNavigate();
 
@@ -78,6 +80,49 @@ export default function GeneralPorCliente() {
     });
   }, [rows, filter]);
 
+  const visibleIds = useMemo(() => new Set(filtered.map((r) => ingresoIdOf(r))), [filtered]);
+  const allVisibleSelected = useMemo(() => {
+    if (visibleIds.size === 0) return false;
+    for (const id of visibleIds) if (!selectedIds.has(id)) return false;
+    return true;
+  }, [visibleIds, selectedIds]);
+
+  const toggleSelectAllVisible = () => {
+    const next = new Set(selectedIds);
+    if (allVisibleSelected) {
+      for (const id of visibleIds) next.delete(id);
+    } else {
+      for (const id of visibleIds) next.add(id);
+    }
+    setSelectedIds(next);
+  };
+
+  const toggleRow = (e, row) => {
+    e.stopPropagation();
+    const id = ingresoIdOf(row);
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedIds(next);
+  };
+
+  async function exportGeneral(ids) {
+    if (!sel) return;
+    try {
+      setExporting(true);
+      const base = `/api/clientes/${sel}/general/export/`;
+      if (ids && ids.length) {
+        const qs = new URLSearchParams({ ids: ids.join(",") }).toString();
+        await downloadAuth(`${base}?${qs}`, `general_cliente_${sel}_${ids.length}.xlsx`);
+      } else {
+        await downloadAuth(base, `general_cliente_${sel}.xlsx`);
+      }
+    } catch (e) {
+      setErrRows(e?.message || "No se pudo exportar el Excel");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const go = (row) => {
     const id = ingresoIdOf(row);
     if (!id) return;
@@ -134,6 +179,35 @@ export default function GeneralPorCliente() {
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar resultados"
         />
+        <div className="flex items-center gap-2 ml-auto">
+          <button
+            className="btn"
+            onClick={() => exportGeneral()}
+            disabled={!sel || exporting || rows.length === 0}
+            aria-busy={exporting ? "true" : "false"}
+            title="Exportar todos los equipos del cliente"
+          >
+            Exportar todos
+          </button>
+          <button
+            className="btn"
+            onClick={() => exportGeneral(filtered.map(ingresoIdOf))}
+            disabled={!sel || exporting || filtered.length === 0}
+            aria-busy={exporting ? "true" : "false"}
+            title="Exportar resultados filtrados a Excel"
+          >
+            Exportar filtrados
+          </button>
+          <button
+            className="btn"
+            onClick={() => exportGeneral(Array.from(selectedIds))}
+            disabled={!sel || exporting || selectedIds.size === 0}
+            aria-busy={exporting ? "true" : "false"}
+            title="Exportar selección a Excel"
+          >
+            Exportar selección
+          </button>
+        </div>
       </div>
 
       {/* Errores de la búsqueda */}
@@ -156,6 +230,14 @@ export default function GeneralPorCliente() {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="text-left">
+                <th scope="col" className="p-2">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    aria-label="Seleccionar todos los visibles"
+                  />
+                </th>
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Equipo</th>
                 <th scope="col" className="p-2">Serie</th>
@@ -178,6 +260,14 @@ export default function GeneralPorCliente() {
                   aria-label={`Abrir hoja de servicio de ${formatOS(row)}`}
                   data-testid={`row-${ingresoIdOf(row)}`}
                 >
+                  <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(ingresoIdOf(row))}
+                      onChange={(e) => toggleRow(e, row)}
+                      aria-label={`Seleccionar ${formatOS(row)}`}
+                    />
+                  </td>
                   <td className="p-2 underline">{formatOS(row)}</td>
                   <td className="p-2">{catalogEquipmentLabel(row)}</td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>

@@ -72,6 +72,9 @@ EMAIL_LEGAL_FOOTER = os.getenv(
     ),
 )
 
+# Notificaciones: solicitudes de asignación de técnico
+ASSIGNMENT_REQUEST_RECIPIENTS = _csv("ASSIGNMENT_REQUEST_RECIPIENTS", "")
+
 # Zona horaria
 TIME_ZONE = os.getenv("TZ", "America/Argentina/Buenos_Aires")
 USE_TZ = True

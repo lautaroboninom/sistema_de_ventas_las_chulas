@@ -1,4 +1,5 @@
 from django.db import connection, transaction
+import os
 import json
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -6,6 +7,11 @@ from rest_framework import permissions
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.http import HttpResponse
+from io import BytesIO
+from openpyxl import Workbook
+from django.conf import settings
+from django.core.mail import send_mail
 
 from .helpers import (
     _fetchall_dicts,
@@ -168,6 +174,138 @@ class PresupuestadosView(APIView):
             return Response(_fetchall_dicts(cur))
 
 
+class PresupuestadosExportView(APIView):
+    """
+    Exporta a Excel (.xlsx) filas de 'presupuestados' dadas por sus IDs.
+
+    Parámetros query:
+      - ids: lista separada por comas de IDs de ingresos. Ej: ?ids=10,11,15
+
+    Columnas:
+      OS, Cliente, Equipo, N/S, Monto sin IVA, Fecha emisión
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        ids_raw = (request.GET.get("ids") or "").strip()
+        if not ids_raw:
+            return Response({"detail": "Parámetro 'ids' requerido"}, status=400)
+
+        try:
+            ids = [int(x) for x in ids_raw.split(",") if x.strip()]
+        except Exception:
+            return Response({"detail": "Parámetro 'ids' inválido"}, status=400)
+
+        # Evitar excesos accidentales
+        if len(ids) > 1000:
+            return Response({"detail": "Demasiados IDs (máximo 1000)"}, status=400)
+
+        # Traer datos necesarios. Reutilizamos estructura del listado 'presupuestados'.
+        with connection.cursor() as cur:
+            _set_audit_user(request)
+            cur.execute(
+                """
+                SELECT
+                  t.id,
+                  c.razon_social AS cliente,
+                  COALESCE(b.nombre,'') AS marca,
+                  COALESCE(m.nombre,'') AS modelo,
+                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  d.numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno,
+                  q.fecha_emitido AS fecha_emision,
+                  COALESCE((
+                    SELECT ROUND(SUM(qi.qty * qi.precio_u), 2)
+                      FROM quote_items qi
+                     WHERE qi.quote_id = q.id
+                  ), 0) AS subtotal_sin_iva
+                FROM ingresos t
+                JOIN devices d   ON d.id = t.device_id
+                JOIN customers c ON c.id = d.customer_id
+                LEFT JOIN marcas b ON b.id = d.marca_id
+                LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN quotes q ON q.ingreso_id = t.id
+               WHERE t.id = ANY(%s)
+               ORDER BY COALESCE(q.fecha_emitido, t.fecha_ingreso, NOW()) ASC
+                """,
+                [ids],
+            )
+            rows = _fetchall_dicts(cur)
+
+        # Construir Excel
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Presupuestados"
+
+        headers = [
+            "OS",
+            "Cliente",
+            "Equipo",
+            "N/S",
+            "Monto sin IVA",
+            "Fecha emisión",
+        ]
+        ws.append(headers)
+
+        def _equipolabel(r):
+            tipo = (r.get("tipo_equipo") or "").strip()
+            marca = (r.get("marca") or "").strip()
+            modelo = (r.get("modelo") or "").strip()
+            parts = [p for p in [tipo, marca, modelo] if p]
+            return " | ".join(parts) if parts else "-"
+
+        def _ns(r):
+            interno = (r.get("numero_interno") or "").strip()
+            serie = (r.get("numero_serie") or "").strip()
+            return interno or serie or "-"
+
+        for r in rows:
+            os_txt = os_label(r.get("id"))
+            equipo = _equipolabel(r)
+            ns_val = _ns(r)
+            monto = r.get("subtotal_sin_iva")
+            fecha = r.get("fecha_emision")
+            # Serializar fecha a texto corto si existe
+            if fecha is not None:
+                try:
+                    fecha_txt = fecha.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    fecha_txt = str(fecha)
+            else:
+                fecha_txt = "-"
+
+            ws.append([
+                os_txt,
+                r.get("cliente") or "-",
+                equipo,
+                ns_val,
+                float(monto) if (monto is not None) else None,
+                fecha_txt,
+            ])
+
+        # Ajuste simple de ancho de columnas (opcional)
+        try:
+            widths = [10, 40, 40, 20, 18, 20]
+            for idx, w in enumerate(widths, start=1):
+                col = ws.column_dimensions[chr(64 + idx)]
+                col.width = w
+        except Exception:
+            pass
+
+        # Serializar a binario y responder
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+
+        fname = f"presupuestados_{timezone.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        resp = HttpResponse(
+            bio.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        resp["Content-Disposition"] = f"attachment; filename=\"{fname}\""
+        return resp
+
+
 class MarcarReparadoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id: int):
@@ -294,6 +432,168 @@ class GeneralPorClienteView(APIView):
                 [customer_id, "taller"],
             )
             return Response(_fetchall_dicts(cur))
+
+
+class GeneralPorClienteExportView(APIView):
+    """
+    Exporta a Excel (.xlsx) el "general por cliente" (no entregados / no alquilados).
+
+    GET /api/clientes/<customer_id>/general/export/
+      Parámetros opcionales:
+        - ids: lista separada por comas para limitar la exportación a esos ingresos
+
+    Columnas del Excel:
+      OS, Cliente, Equipo, N/S, Estado, Fecha ingreso
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, customer_id):
+        ids_raw = (request.GET.get("ids") or "").strip()
+        ids = None
+        if ids_raw:
+            try:
+                ids = [int(x) for x in ids_raw.split(",") if x.strip()]
+            except Exception:
+                return Response({"detail": "Parámetro 'ids' inválido"}, status=400)
+            if len(ids) > 1000:
+                return Response({"detail": "Demasiados IDs (máximo 1000)"}, status=400)
+
+        with connection.cursor() as cur:
+            _set_audit_user(request)
+            if ids:
+                cur.execute(
+                    """
+                    SELECT
+                      t.id,
+                      c.razon_social AS cliente,
+                      COALESCE(b.nombre,'') AS marca,
+                      COALESCE(m.nombre,'') AS modelo,
+                      COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                      d.numero_serie,
+                      COALESCE(d.n_de_control,'') AS numero_interno,
+                      t.estado,
+                      t.presupuesto_estado,
+                      t.fecha_ingreso
+                    FROM ingresos t
+                    JOIN devices   d ON d.id = t.device_id
+                    JOIN customers c ON c.id = d.customer_id
+                    LEFT JOIN marcas b ON b.id = d.marca_id
+                    LEFT JOIN models m ON m.id = d.model_id
+                    LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                   WHERE c.id = %s
+                     AND t.id = ANY(%s)
+                     AND LOWER(loc.nombre) = LOWER(%s)
+                     AND t.estado NOT IN ('entregado','alquilado')
+                   ORDER BY t.fecha_ingreso DESC, t.id DESC
+                    """,
+                    [customer_id, ids, "taller"],
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT
+                      t.id,
+                      c.razon_social AS cliente,
+                      COALESCE(b.nombre,'') AS marca,
+                      COALESCE(m.nombre,'') AS modelo,
+                      COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                      d.numero_serie,
+                      COALESCE(d.n_de_control,'') AS numero_interno,
+                      t.estado,
+                      t.presupuesto_estado,
+                      t.fecha_ingreso
+                    FROM ingresos t
+                    JOIN devices   d ON d.id = t.device_id
+                    JOIN customers c ON c.id = d.customer_id
+                    LEFT JOIN marcas b ON b.id = d.marca_id
+                    LEFT JOIN models m ON m.id = d.model_id
+                    LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                   WHERE c.id = %s
+                     AND LOWER(loc.nombre) = LOWER(%s)
+                     AND t.estado NOT IN ('entregado','alquilado')
+                   ORDER BY t.fecha_ingreso DESC, t.id DESC
+                    """,
+                    [customer_id, "taller"],
+                )
+            rows = _fetchall_dicts(cur)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "General por cliente"
+        headers = ["OS", "Cliente", "Equipo", "N/S", "Estado", "Presupuesto", "Fecha ingreso"]
+        ws.append(headers)
+
+        def _equipolabel(r):
+            tipo = (r.get("tipo_equipo") or "").strip()
+            marca = (r.get("marca") or "").strip()
+            modelo = (r.get("modelo") or "").strip()
+            parts = [p for p in [tipo, marca, modelo] if p]
+            return " | ".join(parts) if parts else "-"
+
+        def _ns(r):
+            interno = (r.get("numero_interno") or "").strip()
+            serie = (r.get("numero_serie") or "").strip()
+            return interno or serie or "-"
+
+        def _presu_label(v):
+            if not v:
+                return "-"
+            try:
+                s = str(v).strip()
+            except Exception:
+                return str(v)
+            if not s:
+                return "-"
+            if s == "presupuestado":
+                return "Presupuestado"
+            if s == "no_aplica":
+                return "No aplica"
+            return s[:1].upper() + s[1:]
+
+        for r in rows:
+            os_txt = os_label(r.get("id"))
+            equipo = _equipolabel(r)
+            ns_val = _ns(r)
+            estado = (r.get("estado") or "-")
+            presu = _presu_label(r.get("presupuesto_estado"))
+            fecha = r.get("fecha_ingreso")
+            if fecha is not None:
+                try:
+                    fecha_txt = fecha.strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    fecha_txt = str(fecha)
+            else:
+                fecha_txt = "-"
+
+            ws.append([
+                os_txt,
+                r.get("cliente") or "-",
+                equipo,
+                ns_val,
+                estado,
+                presu,
+                fecha_txt,
+            ])
+
+        try:
+            widths = [10, 40, 40, 20, 16, 16, 20]
+            for idx, w in enumerate(widths, start=1):
+                col = ws.column_dimensions[chr(64 + idx)]
+                col.width = w
+        except Exception:
+            pass
+
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+
+        fname = f"general_cliente_{customer_id}_{timezone.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        resp = HttpResponse(
+            bio.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        resp["Content-Disposition"] = f"attachment; filename=\"{fname}\""
+        return resp
 
 
 class AprobadosParaRepararView(APIView):
@@ -551,7 +851,124 @@ class IngresoAsignarTecnicoView(APIView):
         if not ok:
             return Response({"detail": "Técnico inválido"}, status=400)
         exec_void("UPDATE ingresos SET asignado_a=%s WHERE id=%s", [tecnico_id, ingreso_id])
+        # Marcar solicitud aceptada si existe la tabla auxiliar
+        try:
+            exec_void(
+                """
+                UPDATE ingreso_assignment_requests
+                   SET accepted_at = now(), status = 'aceptado'
+                 WHERE ingreso_id = %s
+                   AND usuario_id = %s
+                   AND accepted_at IS NULL
+                   AND canceled_at IS NULL
+                """,
+                [ingreso_id, tecnico_id],
+            )
+        except Exception:
+            pass
         return Response({"ok": True, "asignado_a": tecnico_id})
+
+
+class IngresoSolicitarAsignacionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, ingreso_id: int):
+        # Solo técnicos pueden solicitar
+        require_roles(request, ["tecnico"])
+        uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
+        if not uid:
+            return Response({"detail": "Usuario inválido"}, status=400)
+
+        # Si ya está asignado a este técnico, responder OK y no hacer nada
+        try:
+            cur = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+            if cur and int(cur.get("asignado_a") or 0) == int(uid):
+                return Response({"ok": True, "already_assigned": True, "email_sent": False})
+        except Exception:
+            pass
+
+        # Intentar registrar solicitud en tabla auxiliar (si existe)
+        try:
+            exec_void(
+                """
+                INSERT INTO ingreso_assignment_requests(ingreso_id, usuario_id, status, created_at)
+                VALUES (%s, %s, 'pendiente', now())
+                """,
+                [ingreso_id, uid],
+            )
+        except Exception:
+            pass  # tabla puede no existir; continuar con notificación
+
+        # Enviar notificación por email (reportar éxito/fracaso)
+        email_sent = False
+        try:
+            # Datos del ingreso para el cuerpo
+            info = q(
+                """
+                SELECT c.razon_social AS cliente,
+                       COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                       COALESCE(b.nombre,'') AS marca,
+                       COALESCE(m.nombre,'') AS modelo,
+                       COALESCE(d.numero_serie,'') AS numero_serie
+                  FROM ingresos t
+                  JOIN devices d   ON d.id = t.device_id
+                  JOIN customers c ON c.id = d.customer_id
+                  LEFT JOIN marcas b ON b.id = d.marca_id
+                  LEFT JOIN models m ON m.id = d.model_id
+                 WHERE t.id=%s
+                """,
+                [ingreso_id],
+                one=True,
+            ) or {}
+            os_txt = os_label(ingreso_id)
+            tech_name = getattr(request.user, "nombre", "")
+            cliente = info.get("cliente") or ""
+            equipo = " | ".join([p for p in [info.get("tipo_equipo") or "", info.get("marca") or "", info.get("modelo") or ""] if p])
+            ns = info.get("numero_serie") or ""
+
+            subject = f"Solicitud de asignación {os_txt} - {cliente}"
+            lines = [
+                f"El técnico {tech_name} solicita asignación.",
+                f"OS: {os_txt}",
+                f"Cliente: {cliente}",
+                f"Equipo: {equipo or '-'}",
+                f"N/S: {ns or '-'}",
+            ]
+            # Agregar link al frontend si está configurado
+            fe = getattr(settings, "FRONTEND_ORIGIN", "") or ""
+            if fe:
+                lines.append("")
+                try:
+                    base = fe.rstrip('/')
+                except Exception:
+                    base = fe
+                lines.append(f"Abrir hoja: {base}/ingresos/{ingreso_id}")
+            body = "\n".join(lines)
+
+            # Destinatarios: ASSIGNMENT_REQUEST_RECIPIENTS (coma), o fallback a emails conocidos
+            recips = []
+            try:
+                raw = os.getenv("ASSIGNMENT_REQUEST_RECIPIENTS", "")
+            except Exception:
+                raw = ""
+            if raw:
+                recips = [x.strip() for x in raw.split(",") if x.strip()]
+            # Fallbacks
+            if not recips:
+                fallback1 = getattr(settings, "COMPANY_FOOTER_EMAIL_2", None)
+                fallback2 = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
+                recips = [x for x in [fallback1, fallback2] if x]
+
+            if recips:
+                try:
+                    sent = send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, fail_silently=False)
+                    email_sent = bool(sent and sent > 0)
+                except Exception:
+                    email_sent = False
+        except Exception:
+            email_sent = False
+
+        return Response({"ok": True, "email_sent": bool(email_sent)})
 
 
 class PendientesGeneralView(APIView):
@@ -1278,6 +1695,50 @@ class IngresoDetalleView(APIView):
             [ingreso_id],
         )
         row["accesorios_items"] = accs
+        # Resolver técnico solicitado (última solicitud pendiente si existe)
+        try:
+            req = q(
+                """
+                SELECT r.usuario_id AS uid, COALESCE(u.nombre,'') AS nombre
+                  FROM ingreso_assignment_requests r
+                  LEFT JOIN users u ON u.id = r.usuario_id
+                 WHERE r.ingreso_id = %s
+                   AND r.canceled_at IS NULL
+                   AND (r.accepted_at IS NULL)
+                 ORDER BY r.created_at DESC, r.id DESC
+                 LIMIT 1
+                """,
+                [ingreso_id],
+                one=True,
+            )
+        except Exception:
+            req = None
+        if not req:
+            # Fallback: usar audit_log si la auditoría está habilitada/cargada
+            try:
+                path1 = f"/api/ingresos/{ingreso_id}/solicitar-asignacion/"
+                path2 = f"/api/ingresos/{ingreso_id}/solicitar-asignacion"
+                req = q(
+                    """
+                    SELECT al.user_id AS uid, COALESCE(u.nombre,'') AS nombre
+                      FROM audit_log al
+                      LEFT JOIN users u ON u.id = al.user_id
+                     WHERE al.method = 'POST'
+                       AND (al.path = %s OR al.path = %s)
+                     ORDER BY al.ts DESC, al.id DESC
+                     LIMIT 1
+                    """,
+                    [path1, path2],
+                    one=True,
+                )
+            except Exception:
+                req = None
+        if req:
+            row["tecnico_solicitado_id"] = req.get("uid")
+            row["tecnico_solicitado_nombre"] = req.get("nombre") or ""
+        else:
+            row["tecnico_solicitado_id"] = None
+            row["tecnico_solicitado_nombre"] = ""
         return Response(IngresoDetailWithAccesoriosSerializer(row).data)
 
     def patch(self, request, ingreso_id: int):

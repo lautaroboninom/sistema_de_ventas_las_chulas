@@ -37,6 +37,18 @@
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">{qErr}</div>
       )}
 
+      {/* Panel informativo compacto: Diagnóstico y Trabajos (solo lectura) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+        <div className="border rounded p-2 bg-gray-50">
+          <div className="text-xs uppercase text-gray-500 mb-1">Diagnóstico</div>
+          <div className="whitespace-pre-wrap text-sm">{data.descripcion_problema || "-"}</div>
+        </div>
+        <div className="border rounded p-2 bg-gray-50">
+          <div className="text-xs uppercase text-gray-500 mb-1">Trabajos realizados</div>
+          <div className="whitespace-pre-wrap text-sm">{data.trabajos_realizados || "-"}</div>
+        </div>
+      </div>
+
       <div className="flex gap-3 items-end mb-4">
         <label className="block">
           <div className="text-sm text-gray-600">Autorizado por</div>
@@ -91,7 +103,7 @@
             <thead>
               <tr className="text-left">
                 <th className="p-2 w-28">IdRepuesto</th>
-                <th className="p-2">Descripcion</th>
+                <th className="p-2">Descripción</th>
                 <th className="p-2 w-24">Cantidad</th>
                 <th className="p-2 w-36">Precio unit.</th>
                 <th className="p-2 w-36 text-right">Subtotal</th>
@@ -123,7 +135,7 @@
                       <input
                         type="number"
                         step="0.01"
-                        min="0"
+                        //min="0"
                         className="border rounded p-1 w-24 text-right"
                         value={it.qty}
                         onChange={(e) => updateItem(it, { qty: Number(e.target.value || 0) })}
@@ -192,12 +204,12 @@
               <div className="text-lg font-semibold">{money(quote.mano_obra)}</div>
             </div>
             <div className="border rounded p-3">
-              <div className="text-gray-600 text-sm">Subtotal</div>
-              <div className="text-lg font-semibold">{money(quote.subtotal)}</div>
-            </div>
-            <div className="border rounded p-3">
               <div className="text-gray-600 text-sm">IVA 21%</div>
               <div className="text-lg font-semibold">{money(quote.iva_21)}</div>
+            </div>
+            <div className="border rounded p-3">
+              <div className="text-gray-600 text-sm">Total</div>
+              <div className="text-lg font-semibold">{money(quote.subtotal)}</div>
             </div>
             <div className="border rounded p-3">
               <div className="text-gray-600 text-sm">Costo cliente (con IVA)</div>
@@ -209,5 +221,4 @@
     </div>
   );
 }
-
 

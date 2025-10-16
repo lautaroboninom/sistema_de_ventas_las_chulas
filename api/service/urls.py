@@ -8,14 +8,14 @@ from .views import (
     MisPendientesView,
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     NoAplicaPresupuestoView, QuitarNoAplicaPresupuestoView,
-    PendientesPresupuestoView, PresupuestadosView,
+    PendientesPresupuestoView, PresupuestadosView, PresupuestadosExportView,
     MarcarReparadoView, EntregarIngresoView, GarantiaReparacionCheckView, GarantiaFabricaCheckView,
     ListosParaRetiroView,
 
     # listados / generales
     CustomersListView, PendientesGeneralView,
     AprobadosParaRepararView, AprobadosYReparadosView, AprobadosCombinadosView, LiberadosView,
-    GeneralEquiposView, GeneralPorClienteView,
+    GeneralEquiposView, GeneralPorClienteView, GeneralPorClienteExportView,
 
     # ingresos nuevos + derivaci�n
     NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView, DevolverDerivacionView,
@@ -49,6 +49,7 @@ from .views import (
 
     # detalle de ingreso
     IngresoDetalleView, IngresoAsignarTecnicoView, CatalogoTecnicosView,
+    IngresoSolicitarAsignacionView,
     MarcaTecnicoView,MarcaAplicarTecnicoAModelosView,ModeloTecnicoView,
     EquiposDerivadosView,
     IngresoMediaListCreateView, IngresoMediaDetailView, IngresoMediaFileView, IngresoMediaThumbnailView,
@@ -82,6 +83,7 @@ urlpatterns = [
     path("quotes/<int:ingreso_id>/no-aplica/quitar/", QuitarNoAplicaPresupuestoView.as_view()),
     path("presupuestos/pendientes/", PendientesPresupuestoView.as_view()),
     path("ingresos/presupuestados/", PresupuestadosView.as_view()),
+    path("ingresos/presupuestados/export/", PresupuestadosExportView.as_view()),
 
     # listados operativos
     path("clientes/", CustomersListView.as_view()),
@@ -100,6 +102,7 @@ urlpatterns = [
     path("equipos/", GeneralEquiposView.as_view()),
     path("ingresos/", GeneralEquiposView.as_view()),
     path("clientes/<int:customer_id>/general/", GeneralPorClienteView.as_view()),
+    path("clientes/<int:customer_id>/general/export/", GeneralPorClienteExportView.as_view()),
     # utilidades
     path("equipos/garantia-reparacion/", GarantiaReparacionCheckView.as_view()),
     path("equipos/garantia-fabrica/", GarantiaFabricaCheckView.as_view()),
@@ -141,6 +144,7 @@ urlpatterns = [
 
     # detalle de ingreso (GET, PATCH)
     path("ingresos/<int:ingreso_id>/", IngresoDetalleView.as_view()),
+    path("ingresos/<int:ingreso_id>/solicitar-asignacion/", IngresoSolicitarAsignacionView.as_view()),
     # accesorios por ingreso
     path("ingresos/<int:ingreso_id>/accesorios/", IngresoAccesoriosView.as_view()),
     path("ingresos/<int:ingreso_id>/accesorios/<int:item_id>/", IngresoAccesorioDetailView.as_view()),
@@ -213,5 +217,6 @@ urlpatterns = [
     path("metricas/feriados/", FeriadosView.as_view()),
     path("metricas/config/", MetricasConfigView.as_view()),
 ]
+
 
 

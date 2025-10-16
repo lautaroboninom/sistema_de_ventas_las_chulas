@@ -145,6 +145,10 @@ class IngresoDetailSerializer(serializers.Serializer):
 
     resolucion = serializers.CharField(allow_null=True, allow_blank=True)
 
+    # Solicitud de asignación (opcional, calculado desde logs/tabla auxiliar)
+    tecnico_solicitado_id = serializers.IntegerField(allow_null=True, required=False)
+    tecnico_solicitado_nombre = serializers.CharField(allow_blank=True, required=False)
+
 class IngresoAccesorioItemSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     accesorio_id = serializers.IntegerField()

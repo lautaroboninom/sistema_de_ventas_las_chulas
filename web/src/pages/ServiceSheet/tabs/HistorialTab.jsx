@@ -48,3 +48,4 @@ export default function HistorialTab({ hErr, hLoading, hist }) {
 }
 
 
+

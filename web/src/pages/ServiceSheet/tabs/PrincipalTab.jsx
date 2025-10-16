@@ -1,6 +1,5 @@
 import Row from "../../../components/Row";
 import { useMemo, useState, useEffect } from "react";
-import { useEffect } from "react";
 import { formatDateTime as formatDateTimeHelper, resolveFechaIngreso } from "../../../lib/ui-helpers";
 import { resolutionLabel } from "../../../lib/constants";
 import { getBlob, postEntregarIngreso, patchIngreso, checkGarantiaFabrica } from "../../../lib/api";

@@ -46,3 +46,42 @@ Operativa de remitos y presupuestos
   - Endpoint remito: `api/service/views/reportes_views.py`
   - Trigger de sincronización: `sql/schema.sql`
 
+## Diagramas de flujo
+
+### Aprobados: botón “Imprimir remito”
+```mermaid
+flowchart TD
+  A[Usuario con rol liberar<br/>(jefe/jefe_veedor/admin)] --> B{Fila estado = reparado?}
+  B -- No --> Z[No mostrar botón]
+  B -- Sí --> C[Click 'Imprimir remito']
+  C --> D[GET /api/ingresos/:id/remito/]
+  D --> E{resolución vacía y estado reparado?}
+  E -- Sí --> F[SET resolucion='reparado']
+  E -- No --> G
+  F --> G{resolución presente o estado liberado?}
+  G -- No --> H[409: falta resolución]
+  G -- Sí --> I[UPDATE estado='liberado' + registrar evento]
+  I --> J[Generar PDF]
+  J --> K[Frontend abre PDF y refresca lista]
+```
+
+### Hoja de Servicio (Presupuesto): aprobar + imprimir si ya está reparado
+```mermaid
+flowchart TD
+  A[Click 'Aprobar presupuesto'] --> B{estado actual = reparado?}
+  B -- No --> C[POST /quotes/:id/aprobar] --> D[Actualizar estado presupuesto] --> X[Fin]
+  B -- Sí --> E{Confirmar imprimir remito?}
+  E -- No --> C
+  E -- Sí --> C --> F[GET /ingresos/:id/remito/]
+  F --> G[Abrir PDF] --> H[Refrescar ingreso (pasa a liberado)]
+```
+
+### Presupuestados (lista): aprobar + imprimir si ya está reparado
+```mermaid
+flowchart TD
+  A[Click 'Aprobar'] --> B{row.estado = reparado?}
+  B -- No --> C[POST /quotes/:id/aprobar] --> D[Recargar lista]
+  B -- Sí --> E{Confirmar imprimir remito?}
+  E -- No --> C --> D
+  E -- Sí --> C --> F[GET /ingresos/:id/remito/] --> G[Abrir PDF] --> D
+```

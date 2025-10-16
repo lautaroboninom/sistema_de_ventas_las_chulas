@@ -1,6 +1,6 @@
 // web/src/pages/JefePresupuestos.jsx
 import { useEffect, useMemo, useState } from "react";
-import api, { getBlob } from "../lib/api";
+import api, { getBlob, downloadAuth } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf,
   formatOS,
@@ -19,6 +19,8 @@ export default function JefePresupuestos() {
   const [err, setErr] = useState("");
   const [filter, setFilter] = useState("");
   const [busyId, setBusyId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [exporting, setExporting] = useState(false);
 
   const navigate = useNavigate();
 
@@ -65,6 +67,44 @@ export default function JefePresupuestos() {
       return campos.some((c) => norm(c).includes(needle));
     });
   }, [rows, filter]);
+
+  const visibleIds = useMemo(() => new Set(filtered.map((r) => ingresoIdOf(r))), [filtered]);
+  const allVisibleSelected = useMemo(() => {
+    if (visibleIds.size === 0) return false;
+    for (const id of visibleIds) if (!selectedIds.has(id)) return false;
+    return true;
+  }, [visibleIds, selectedIds]);
+
+  const toggleSelectAllVisible = () => {
+    const next = new Set(selectedIds);
+    if (allVisibleSelected) {
+      for (const id of visibleIds) next.delete(id);
+    } else {
+      for (const id of visibleIds) next.add(id);
+    }
+    setSelectedIds(next);
+  };
+
+  const toggleRow = (e, row) => {
+    e.stopPropagation();
+    const id = ingresoIdOf(row);
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedIds(next);
+  };
+
+  async function exportByIds(ids, fnameHint = "presupuestados") {
+    if (!ids || ids.length === 0) return;
+    try {
+      setExporting(true);
+      const qs = new URLSearchParams({ ids: ids.join(",") }).toString();
+      await downloadAuth(`/api/ingresos/presupuestados/export/?${qs}`, `${fnameHint}.xlsx`);
+    } catch (e) {
+      setErr(e?.message || "No se pudo exportar el Excel");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const go = (row) => {
     const id = ingresoIdOf(row);
@@ -138,6 +178,26 @@ export default function JefePresupuestos() {
         >
           Recargar
         </button>
+        <div className="flex items-center gap-2 ml-auto">
+          <button
+            className="btn"
+            onClick={() => exportByIds(filtered.map(ingresoIdOf), `presupuestados_filtrados_${filtered.length}`)}
+            disabled={exporting || filtered.length === 0}
+            aria-busy={exporting ? "true" : "false"}
+            title="Exportar todos los filtrados a Excel"
+          >
+            Exportar filtrados
+          </button>
+          <button
+            className="btn"
+            onClick={() => exportByIds(Array.from(selectedIds), `presupuestados_seleccion_${selectedIds.size}`)}
+            disabled={exporting || selectedIds.size === 0}
+            aria-busy={exporting ? "true" : "false"}
+            title="Exportar selección a Excel"
+          >
+            Exportar selección
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -149,6 +209,14 @@ export default function JefePresupuestos() {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="text-left">
+                <th scope="col" className="p-2">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleSelectAllVisible}
+                    aria-label="Seleccionar todos los visibles"
+                  />
+                </th>
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Equipo</th>
@@ -176,6 +244,14 @@ export default function JefePresupuestos() {
                     aria-label={`Abrir hoja de servicio de ${formatOS(row)}`}
                     data-testid={`row-${ingresoId}`}
                   >
+                    <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(ingresoId)}
+                        onChange={(e) => toggleRow(e, row)}
+                        aria-label={`Seleccionar ${formatOS(row)}`}
+                      />
+                    </td>
                     <td className="p-2 underline">{formatOS(row)}</td>
                     <td className="p-2">
                       {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}

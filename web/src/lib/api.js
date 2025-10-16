@@ -452,6 +452,10 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const patchIngresoTecnico = (ingresoId, tecnico_id) =>
     api.patch(`/api/ingresos/${ingresoId}/asignar-tecnico/`, { tecnico_id });
 
+  // Solicitud de asignación por técnico
+  export const postSolicitarAsignacion = (ingresoId) =>
+    api.post(`/api/ingresos/${ingresoId}/solicitar-asignacion/`, {});
+
   export const patchModeloTecnico = (marcaId, modeloId, tecnico_id) =>
     api.patch(
       `/api/catalogos/marcas/${marcaId}/modelos/${modeloId}/tecnico/`,
