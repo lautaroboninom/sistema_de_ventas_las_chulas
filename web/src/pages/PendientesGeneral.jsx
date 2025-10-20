@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 
-// Ajustá si tu backend usa otro endpoint
+// Ajust si tu backend usa otro endpoint
 const ENDPOINT = "/api/ingresos/pendientes/";
 
 export default function PendientesGeneral() {
@@ -36,7 +36,7 @@ export default function PendientesGeneral() {
   // helper: detectar motivo urgente control
   const isUrgente = (row) => (row?.motivo || "").toLowerCase() === "urgente control";
 
-  // Aplico filtro y luego ordeno: devueltos primero, urgentes después, luego por fecha_creacion asc
+  // Aplico filtro y luego ordeno: devueltos primero, urgentes despus, luego por fecha_creacion asc
   const filteredAndSorted = useMemo(() => {
     const needle = norm(filter);
     const base = needle
@@ -56,12 +56,12 @@ export default function PendientesGeneral() {
       : rows;
 
     return [...base].sort((a, b) => {
-      // 1) Devueltos de derivación primero
+      // 1) Devueltos de derivacin primero
       const ad = a?.derivado_devuelto ? 1 : 0;
       const bd = b?.derivado_devuelto ? 1 : 0;
       if (ad !== bd) return bd - ad;
 
-      // 2) Urgentes después
+      // 2) Urgentes despus
       const au = isUrgente(a) ? 1 : 0;
       const bu = isUrgente(b) ? 1 : 0;
       if (au !== bu) return bu - au;
@@ -187,3 +187,4 @@ export default function PendientesGeneral() {
     </div>
   );
 }
+

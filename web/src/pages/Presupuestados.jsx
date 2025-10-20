@@ -30,7 +30,7 @@ export default function JefePresupuestos() {
       setLoading(true);
       const data = await api.get(ENDPOINT);
       const list = Array.isArray(data) ? data : [];
-      // Orden sugerido: más recientes primero por fecha de emisión/envío o ingreso
+      // Orden sugerido: ms recientes primero por fecha de emisin/envo o ingreso
       list.sort((a, b) => {
         const da = new Date(a?.presupuesto_fecha_envio ?? a?.presupuesto_fecha_emision ?? resolveFechaCreacion(a) ?? 0).getTime();
         const db = new Date(b?.presupuesto_fecha_envio ?? b?.presupuesto_fecha_emision ?? resolveFechaCreacion(b) ?? 0).getTime();
@@ -119,17 +119,17 @@ export default function JefePresupuestos() {
     }
   };
 
-  // Acción: Aprobar presupuesto (por ingreso_id)
+  // Accin: Aprobar presupuesto (por ingreso_id)
   async function aprobar(row) {
     const ingresoId = ingresoIdOf(row);
     if (!ingresoId) {
-      setErr("No se encontró el ID de ingreso para aprobar.");
+      setErr("No se encontr el ID de ingreso para aprobar.");
       return;
     }
     try {
       setBusyId(ingresoId);
       const shouldPrint = (row?.estado || "").toLowerCase() === "reparado" &&
-        window.confirm("Este equipo ya está reparado, ¿imprimir remito de salida?");
+        window.confirm("Este equipo ya est reparado, imprimir remito de salida?");
       await api.post(`/api/quotes/${ingresoId}/aprobar/`);
       if (shouldPrint) {
         try {
@@ -165,7 +165,7 @@ export default function JefePresupuestos() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, equipo, estado, monto…"
+          placeholder="Filtrar por OS, cliente, equipo, estado, monto"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar presupuestados"
         />
@@ -193,9 +193,9 @@ export default function JefePresupuestos() {
             onClick={() => exportByIds(Array.from(selectedIds), `presupuestados_seleccion_${selectedIds.size}`)}
             disabled={exporting || selectedIds.size === 0}
             aria-busy={exporting ? "true" : "false"}
-            title="Exportar selección a Excel"
+            title="Exportar seleccin a Excel"
           >
-            Exportar selección
+            Exportar seleccin
           </button>
         </div>
       </div>
@@ -223,7 +223,7 @@ export default function JefePresupuestos() {
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Monto</th>
-                <th scope="col" className="p-2">Fecha emisión</th>
+                <th scope="col" className="p-2">Fecha emisin</th>
                 <th scope="col" className="p-2 text-right">Acciones</th>
               </tr>
             </thead>
@@ -277,7 +277,7 @@ export default function JefePresupuestos() {
                         >
                           Aprobar
                         </button>
-                        {/* Si tu backend permite rechazar / anular, podés agregar acá otro botón */}
+                        {/* Si tu backend permite rechazar / anular, pods agregar ac otro botn */}
                       </div>
                     </td>
                   </tr>
@@ -293,3 +293,4 @@ export default function JefePresupuestos() {
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-﻿// web/src/pages/Login.jsx
+// web/src/pages/Login.jsx
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -95,7 +95,7 @@ export default function Login() {
             </button>
 
             <Link to="/recuperar" className="text-sm text-blue-700 underline inline-block mt-1">
-              ¿Olvidaste tu contrasena?
+              Olvidaste tu contrasena?
             </Link>
           </form>
         </div>
@@ -104,3 +104,4 @@ export default function Login() {
     </div>
   );
 }
+

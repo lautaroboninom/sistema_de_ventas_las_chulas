@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 
-// Ajustá si tu backend usa otra ruta
+// Ajust si tu backend usa otra ruta
 
 
 const ENDPOINT = "/api/ingresos/aprobados-reparados/";
@@ -81,7 +81,7 @@ export default function Reparados() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, marca, equipo, serie…"
+          placeholder="Filtrar por OS, cliente, marca, equipo, serie"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar reparados"
         />
@@ -110,7 +110,7 @@ export default function Reparados() {
                 <th scope="col" className="p-2">Equipo</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Fecha ingreso</th>
-                <th scope="col" className="p-2">Fecha reparación</th>
+                <th scope="col" className="p-2">Fecha reparacin</th>
               </tr>
             </thead>
             <tbody>
@@ -151,3 +151,4 @@ export default function Reparados() {
     </div>
   );
 }
+

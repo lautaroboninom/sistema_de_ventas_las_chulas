@@ -1,7 +1,7 @@
 //web\src\App.jsx
 import { Link, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
-//import Sidebar from "web\src\components\Sidebar.jsx"; // ⬅️ nuevo
+//import Sidebar from "web\src\components\Sidebar.jsx"; //  nuevo
 import Sidebar from "./components/Sidebar.jsx";
 import Footer from "./components/Footer.jsx";
 
@@ -16,7 +16,7 @@ export default function App() {
     <div className="min-h-screen flex flex-col">
       <header className="border-b bg-white">
         <div className="max-w-7xl mx-auto px-4 h-12 flex items-center gap-6">
-          <Link to="/" className="font-semibold">SEPID • Reparaciones</Link>
+          <Link to="/" className="font-semibold">SEPID  Reparaciones</Link>
 
           {/* Tabs generales */}
           <nav className="hidden md:flex items-center gap-6">
@@ -39,7 +39,7 @@ export default function App() {
             )}
             {user && (
               <span className="text-sm text-gray-500">
-                {user?.nombre} · {rol}
+                {user?.nombre}  {rol}
               </span>
             )}
             <button
@@ -63,3 +63,4 @@ export default function App() {
     </div>
   );
 }
+

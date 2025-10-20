@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getIngresoFotos,
   uploadIngresoFotos,
@@ -121,7 +121,7 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
         setFullSrc((prev) => ({ ...prev, [id]: url }));
       })
       .catch(() => {
-        // fallback: se verá la miniatura
+        // fallback: se ver la miniatura
       });
   }
 
@@ -194,7 +194,7 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
   };
 
   const confirmDelete = async (photoId) => {
-    if (!window.confirm("¿Eliminar el archivo seleccionado??")) return;
+    if (!window.confirm("Eliminar el archivo seleccionado??")) return;
     try {
       await deleteIngresoFoto(ingresoId, photoId);
       setPhotos((prev) => prev.filter((p) => p.id !== photoId));
@@ -278,7 +278,7 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold">Archivos del ingreso</h3>
-          <p className="text-sm text-gray-600">Subí imágenes, PDF y videos cortos.</p>
+          <p className="text-sm text-gray-600">Sub imgenes, PDF y videos cortos.</p>
         </div>
         {canManage && (
           <button
@@ -306,8 +306,8 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
             className="hidden"
             onChange={onFileChange}
           />
-          <p className="font-medium">Arrastrá y soltá archivos acá o usá el botón "Cargar archivos".</p>
-          <p className="mt-1 text-xs text-gray-500">Formatos: JPG/PNG, PDF y MP4 (máx. 10 MB c/u, hasta 50 archivos).</p>
+          <p className="font-medium">Arrastr y solt archivos ac o us el botn "Cargar archivos".</p>
+          <p className="mt-1 text-xs text-gray-500">Formatos: JPG/PNG, PDF y MP4 (mx. 10 MB c/u, hasta 50 archivos).</p>
         </div>
       )}
 
@@ -336,7 +336,7 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
           <span className="text-gray-600">Filtrar:</span>
           {[
             { v: 'all', label: 'Todos' },
-            { v: 'image', label: 'Imágenes' },
+            { v: 'image', label: 'Imgenes' },
             { v: 'pdf', label: 'PDF' },
             { v: 'video', label: 'Videos' },
           ].map((opt) => (
@@ -357,7 +357,7 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
           <div className="text-sm text-gray-500">Cargando archivos...</div>
         )}
         {!loading && visiblePhotos.length === 0 && (
-          <div className="text-sm text-gray-500">Aún no hay archivos asociados a este ingreso.</div>
+          <div className="text-sm text-gray-500">An no hay archivos asociados a este ingreso.</div>
         )}
         
         {visiblePhotos
@@ -475,7 +475,7 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
             type="button"
             disabled={loading}
           >
-            {loading ? "Cargando..." : "Ver más"}
+            {loading ? "Cargando..." : "Ver ms"}
           </button>
         </div>
       )}
@@ -528,6 +528,7 @@ export default function IngresoPhotos({ ingresoId, canManage, showFilters = fals
     </div>
   );
 }
+
 
 
 

@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion } from "../lib/ui-helpers";
 
-// Ajusta si tu backend usa otra ruta (histórico completo)
+// Ajusta si tu backend usa otra ruta (histrico completo)
 const ENDPOINT = "/api/equipos/";
 
 export default function GeneralEquipos() {
@@ -19,18 +19,18 @@ export default function GeneralEquipos() {
       setErr("");
       setLoading(true);
       const data = await api.get(ENDPOINT);
-      // Si tu API ya ordena por fecha, podés omitir el sort local
+      // Si tu API ya ordena por fecha, pods omitir el sort local
       const safe = Array.isArray(data) ? data : [];
       safe.sort((a, b) => {
         const da = new Date(resolveFechaCreacion(a) ?? 0).getTime();
         const db = new Date(resolveFechaCreacion(b) ?? 0).getTime();
-        return db - da; // más recientes primero
+        return db - da; // ms recientes primero
       });
       // Reordenar por OS descendente (mayor a menor)
       safe.sort((a, b) => Number(ingresoIdOf(b) ?? 0) - Number(ingresoIdOf(a) ?? 0));
       setRows(safe);
     } catch (e) {
-      setErr(e?.message || "No se pudo cargar el histórico de equipos");
+      setErr(e?.message || "No se pudo cargar el histrico de equipos");
       setRows([]);
     } finally {
       setLoading(false);
@@ -76,7 +76,7 @@ export default function GeneralEquipos() {
 
   return (
     <div className="card">
-      <div className="h1 mb-3">General de equipos (histórico)</div>
+      <div className="h1 mb-3">General de equipos (histrico)</div>
 
       {err && (
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">
@@ -91,7 +91,7 @@ export default function GeneralEquipos() {
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filtrar por OS, cliente, tipo de equipo, marca, modelo, variante, estado, serie..."
           className="border rounded p-2 w-full max-w-md"
-          aria-label="Filtrar histórico"
+          aria-label="Filtrar histrico"
         />
         <button
           className="btn"
@@ -124,7 +124,7 @@ export default function GeneralEquipos() {
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">N/S (serie)</th>
                 <th scope="col" className="p-2">MG</th>
-                <th scope="col" className="p-2">Ubicación</th>
+                <th scope="col" className="p-2">Ubicacin</th>
                 <th scope="col" className="p-2">Fecha ingreso</th>
                 <th scope="col" className="p-2">Fecha entrega</th>
               </tr>
@@ -167,3 +167,4 @@ export default function GeneralEquipos() {
     </div>
   );
 }
+

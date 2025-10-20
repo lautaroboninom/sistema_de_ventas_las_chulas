@@ -25,7 +25,7 @@ export default function Tecnico() {
   // helper: detectar motivo urgente control
   const isUrgente = (row) => (row?.motivo || "").toLowerCase() === "urgente control";
 
-  // ordena: devueltos de derivación primero, luego urgentes, luego por fecha_creacion asc
+  // ordena: devueltos de derivacin primero, luego urgentes, luego por fecha_creacion asc
   const sortPendientes = (arr) => {
     return [...arr].sort((a, b) => {
       const aDev = a?.derivado_devuelto ? 1 : 0;
@@ -96,7 +96,7 @@ export default function Tecnico() {
 
     return (
       <span className={cls} title={label} aria-label={`${label}: ${checked ? "si" : "no"}`}>
-        {checked ? "✓" : ""}
+        {checked ? "" : ""}
       </span>
     );
   };
@@ -147,7 +147,7 @@ export default function Tecnico() {
       {loading ? (
         "Cargando..."
       ) : rows.length === 0 ? (
-        <div className="text-sm text-gray-500">No tenés pendientes por ahora.</div>
+        <div className="text-sm text-gray-500">No tens pendientes por ahora.</div>
       ) : (
         <div className="overflow-x-auto">
           <div className="flex justify-end mb-2">
@@ -246,7 +246,7 @@ export default function Tecnico() {
                               "entregado",
                               "alquilado",
                             ];
-                            // Diagnosticado si el estado ya pasó por diagnóstico
+                            // Diagnosticado si el estado ya pas por diagnstico
                             // o si el presupuesto ya fue emitido/aprobado/rechazado
                             return diagChain.includes(e) || ["presupuestado", "aprobado", "rechazado"].includes(p);
                           })()}
@@ -286,4 +286,5 @@ export default function Tecnico() {
     </div>
   );
 }
+
 

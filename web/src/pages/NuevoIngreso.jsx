@@ -1,4 +1,4 @@
-﻿// web/src/pages/NuevoIngreso.jsx (reconstruido)
+// web/src/pages/NuevoIngreso.jsx (reconstruido)
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -25,7 +25,7 @@ const TextArea = (p) => <textarea {...p} className={`border rounded p-2 w-full $
 export default function NuevoIngreso() {
   const navigate = useNavigate();
 
-  // Catálogos base
+  // Catlogos base
   const [marcas, setMarcas] = useState([]);
   const [motivos, setMotivos] = useState([]);
   const [modelos, setModelos] = useState([]);
@@ -46,7 +46,7 @@ export default function NuevoIngreso() {
   // Variante (opcional)
   const [varianteTxt, setVarianteTxt] = useState("");
   const [varianteSugeridas, setVarianteSugeridas] = useState([]);
-  // Catálogo (tipos/modelos) para sugerir variantes
+  // Catlogo (tipos/modelos) para sugerir variantes
   const [catTipoId, setCatTipoId] = useState(null);
   const [catModelos, setCatModelos] = useState([]);
 
@@ -65,7 +65,7 @@ export default function NuevoIngreso() {
     comentarios: "",
     garantia_reparacion: false,
     remito_ingreso: "",
-    fecha_ingreso: "", // opcional: si viene vacía, se usará hoy() en el backend
+    fecha_ingreso: "", // opcional: si viene vaca, se usar hoy() en el backend
   });
 
   // Accesorios
@@ -73,7 +73,7 @@ export default function NuevoIngreso() {
   const [nuevoAcc, setNuevoAcc] = useState({ descripcion: "", referencia: "" });
   const [accItems, setAccItems] = useState([]);
 
-  // Propietario y técnico
+  // Propietario y tcnico
   const [propietario, setPropietario] = useState({ nombre: "", contacto: "", doc: "" });
   const [tecnicos, setTecnicos] = useState([]);
   const [tecnicoId, setTecnicoId] = useState(null);
@@ -126,7 +126,7 @@ export default function NuevoIngreso() {
     }
   }
 
-  // Garantía de reparación (por N/S o N° interno MG) - debounce 400ms
+  // Garanta de reparacin (por N/S o N interno MG) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const mg = (form.equipo.numero_interno || "").trim();
@@ -145,7 +145,7 @@ export default function NuevoIngreso() {
     return () => clearTimeout(h);
   }, [form.equipo.numero_serie, form.equipo.numero_interno]);
 
-  // Garantía de fábrica (por N/S en Excels) - debounce 400ms
+  // Garanta de fbrica (por N/S en Excels) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const marcaSel = (() => {
@@ -199,7 +199,7 @@ export default function NuevoIngreso() {
           setTecnicos(tecs || []);
         } catch {}
       } catch (e) {
-        setErr(e?.message || "Error cargando catálogos");
+        setErr(e?.message || "Error cargando catlogos");
       }
     })();
   }, []);
@@ -258,7 +258,7 @@ export default function NuevoIngreso() {
       .catch((e) => setErr(e?.message || "Error cargando modelos"));
   }, [marcaId, tipoSel]);
 
-  // Variantes desde catálogo según modelo interno seleccionado
+  // Variantes desde catlogo segn modelo interno seleccionado
   useEffect(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
     if (!m || !marcaId || !catTipoId) {
@@ -297,13 +297,13 @@ export default function NuevoIngreso() {
     })();
   }, [form.equipo.modelo_id, modelos, marcaId, catTipoId, catModelos]);
 
-  // Si el modelo define técnico por defecto
+  // Si el modelo define tcnico por defecto
   useEffect(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
     if (m?.tecnico_id) setTecnicoId(m.tecnico_id);
   }, [form.equipo.modelo_id, modelos]);
 
-  // Fallback: técnico por marca si el modelo no define
+  // Fallback: tcnico por marca si el modelo no define
   useEffect(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
     if (m?.tecnico_id) {
@@ -372,19 +372,19 @@ export default function NuevoIngreso() {
 
     if (!form.equipo.marca_id) {
       setLoading(false);
-      setErr("Seleccioná una marca válida de la lista.");
+      setErr("Seleccion una marca vlida de la lista.");
       return;
     }
     if (!form.equipo.modelo_id) {
       setLoading(false);
-      setErr("Seleccioná un modelo.");
+      setErr("Seleccion un modelo.");
       return;
     }
 
     const c = resolveCliente(clienteRsInput, clienteCodInput);
     if (!c?.id) {
       setLoading(false);
-      setErr("Debés seleccionar un cliente válido de la lista.");
+      setErr("Debs seleccionar un cliente vlido de la lista.");
       return;
     }
 
@@ -422,7 +422,7 @@ export default function NuevoIngreso() {
       setOut(r);
       if (r?.ingreso_id) navigate(`/ingresos/${r.ingreso_id}`);
 
-      // Reset básico
+      // Reset bsico
       setMarcaTxt("");
       setMarcaId(null);
       setModelos([]);
@@ -475,55 +475,55 @@ export default function NuevoIngreso() {
           <legend className="px-2 font-semibold">Cliente</legend>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="text-sm">Razón social</label>
+              <label className="text-sm">Razn social</label>
               <Input
                 list="clientes_rs"
                 value={clienteRsInput}
                 onChange={(e) => onClienteRsChange(e.target.value)}
-                placeholder="Escribí y elegí de la lista"
+                placeholder="Escrib y eleg de la lista"
                 required
               />
               <datalist id="clientes_rs">
-                {clientes.map((c) => (
+                {(Array.isArray(clientes) ? clientes : []).map((c) => (
                   <option key={c.id} value={c.razon_social} />
                 ))}
               </datalist>
               {clienteRsInput && !rsMatch && (
-                <div className="text-xs text-red-600 mt-1">Elegí una razón social de las sugeridas.</div>
+                <div className="text-xs text-red-600 mt-1">Eleg una razn social de las sugeridas.</div>
               )}
             </div>
             <div>
-              <label className="text-sm">Código empresa</label>
+              <label className="text-sm">Cdigo empresa</label>
               <Input
                 list="clientes_cod"
                 value={clienteCodInput}
                 onChange={(e) => onClienteCodChange(e.target.value)}
-                placeholder="Opcional: podés buscar por código"
+                placeholder="Opcional: pods buscar por cdigo"
               />
               <datalist id="clientes_cod">
-                {clientes
+                {(Array.isArray(clientes) ? clientes : [])
                   .filter((c) => c.cod_empresa)
                   .map((c) => (
                     <option key={c.id} value={c.cod_empresa} />
                   ))}
               </datalist>
               {clienteCodInput && !codMatch && (
-                <div className="text-xs text-red-600 mt-1">Elegí un código de las sugerencias.</div>
+                <div className="text-xs text-red-600 mt-1">Eleg un cdigo de las sugerencias.</div>
               )}
             </div>
             <div>
-              <label className="text-sm">Teléfono</label>
+              <label className="text-sm">Telfono</label>
               <Input value={form.cliente.telefono} readOnly placeholder="-" />
             </div>
           </div>
           {clienteMismatch && (
             <div className="text-xs text-red-600 mt-2">
-              El código no corresponde a la razón social seleccionada.
+              El cdigo no corresponde a la razn social seleccionada.
             </div>
           )}
           <p className="text-xs text-gray-600 mt-2">
-            Debés seleccionar un cliente existente. Podés buscar por <b>Razón social</b> o por
-            <b> Código</b>; si completás ambos, deben corresponder al mismo cliente.
+            Debs seleccionar un cliente existente. Pods buscar por <b>Razn social</b> o por
+            <b> Cdigo</b>; si complets ambos, deben corresponder al mismo cliente.
           </p>
         </fieldset>
 
@@ -547,9 +547,9 @@ export default function NuevoIngreso() {
             {/* Tipo de equipo */}
             <div className="md:col-span-4">
               <label className="text-sm">Tipo de equipo</label>
-              <Select value={tipoSel} onChange={(e) => setTipoSel(e.target.value || "")}>
+              <Select value={tipoSel} onChange={(e) => setTipoSel(e.target.value || "")}> 
                 <option value="">-- Seleccionar --</option>
-                {tiposEquipo.map((t, i) => (
+                {(Array.isArray(tiposEquipo) ? tiposEquipo : []).map((t, i) => (
                   <option key={i} value={t}>
                     {t}
                   </option>
@@ -572,7 +572,7 @@ export default function NuevoIngreso() {
                 ))}
               </datalist>
               {marcaTxt && !marcaId && (
-                <div className="text-xs text-red-600 mt-1">Elegí una marca de las sugeridas.</div>
+                <div className="text-xs text-red-600 mt-1">Eleg una marca de las sugeridas.</div>
               )}
             </div>
 
@@ -584,7 +584,7 @@ export default function NuevoIngreso() {
                 onChange={onChange("equipo.modelo_id")}
                 disabled={!marcaId || !modelos.length}
               >
-                <option value="">{!marcaId ? "Elegí marca primero" : "Seleccioná modelo"}</option>
+                <option value="">{!marcaId ? "Eleg marca primero" : "Seleccion modelo"}</option>
                 {modelos.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.nombre}
@@ -609,14 +609,14 @@ export default function NuevoIngreso() {
               </datalist>
             </div>
 
-            {/* Técnico asignado */}
+            {/* Tcnico asignado */}
             <div className="md:col-span-2">
-              <label className="text-sm">Técnico asignado</label>
+              <label className="text-sm">Tcnico asignado</label>
               <Select
                 value={tecnicoId ?? ""}
                 onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}
               >
-                <option value="">-- Seleccionar técnico --</option>
+                <option value="">-- Seleccionar tcnico --</option>
                 {tecnicos.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.nombre}
@@ -624,19 +624,19 @@ export default function NuevoIngreso() {
                 ))}
               </Select>
               <div className="text-xs text-gray-600 mt-1">
-                Si el modelo tiene técnico por defecto, se completa solo.
+                Si el modelo tiene tcnico por defecto, se completa solo.
               </div>
             </div>
 
-            {/* Número de serie */}
+            {/* Nmero de serie */}
             <div className="md:col-span-2">
-              <label className="text-sm">Número de serie</label>
+              <label className="text-sm">Nmero de serie</label>
               <Input value={form.equipo.numero_serie} onChange={onChange("equipo.numero_serie")} />
             </div>
 
-            {/* N° interno (MG) */}
+            {/* N interno (MG) */}
             <div className="md:col-span-2">
-              <label className="text-sm">N° interno (MG)</label>
+              <label className="text-sm">N interno (MG)</label>
               <Input
                 value={form.equipo.numero_interno}
                 onChange={onChange("equipo.numero_interno")}
@@ -644,7 +644,7 @@ export default function NuevoIngreso() {
               />
             </div>
 
-            {/* Garantías */}
+            {/* Garantas */}
             <div className="flex items-center gap-2">
               <input
                 id="gar"
@@ -652,7 +652,7 @@ export default function NuevoIngreso() {
                 checked={form.equipo.garantia}
                 onChange={onChange("equipo.garantia")}
               />
-              <label htmlFor="gar">En garantía</label>
+              <label htmlFor="gar">En garanta</label>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -660,7 +660,7 @@ export default function NuevoIngreso() {
                 checked={form.garantia_reparacion}
                 onChange={(e) => setForm((f) => ({ ...f, garantia_reparacion: e.target.checked }))}
               />
-              <span className="text-sm">Garantía de reparación</span>
+              <span className="text-sm">Garanta de reparacin</span>
             </div>
           </div>
         </fieldset>
@@ -670,7 +670,7 @@ export default function NuevoIngreso() {
           <legend className="px-2 font-semibold">Ingreso</legend>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="text-sm">N° de remito</label>
+              <label className="text-sm">N de remito</label>
               <Input
                 value={form.remito_ingreso}
                 onChange={onChange("remito_ingreso")}
@@ -684,12 +684,12 @@ export default function NuevoIngreso() {
                 value={form.fecha_ingreso}
                 onChange={onChange("fecha_ingreso")}
               />
-              <div className="text-xs text-gray-500 mt-1">Si se deja vacío, se usa la fecha de hoy.</div>
+              <div className="text-xs text-gray-500 mt-1">Si se deja vaco, se usa la fecha de hoy.</div>
             </div>
             <div>
               <label className="text-sm">Motivo</label>
               <Select value={form.motivo} onChange={onChange("motivo")}>
-                <option value="">Seleccioná motivo</option>
+                <option value="">Seleccion motivo</option>
                 {motivos.map((m) => (
                   <option key={m.value} value={m.value}>
                     {m.label}
@@ -698,7 +698,7 @@ export default function NuevoIngreso() {
               </Select>
             </div>
             <div className="text-sm text-gray-600 self-end">
-              Ubicación inicial: <b>Taller</b> (se puede modificar desde la hoja de servicio)
+              Ubicacin inicial: <b>Taller</b> (se puede modificar desde la hoja de servicio)
             </div>
             <div className="md:col-span-2">
               <label className="text-sm">Informe preliminar</label>
@@ -720,22 +720,22 @@ export default function NuevoIngreso() {
               <label className="text-sm font-medium">Accesorios</label>
               <div className="flex flex-wrap items-end gap-3 mb-2">
                 <div className="grow min-w-[260px]">
-                  <label className="block text-sm text-gray-600 mb-1">Descripción</label>
+                  <label className="block text-sm text-gray-600 mb-1">Descripcin</label>
                   <input
                     className="border rounded p-2 w-full"
                     list="accesorios_catalogo"
                     value={nuevoAcc.descripcion}
                     onChange={(e) => setNuevoAcc((s) => ({ ...s, descripcion: e.target.value }))}
-                    placeholder="Escribí y elegí de la lista"
+                    placeholder="Escrib y eleg de la lista"
                   />
                   <datalist id="accesorios_catalogo">
-                    {accesCatalogo.map((a) => (
+                    {(Array.isArray(accesCatalogo) ? accesCatalogo : []).map((a) => (
                       <option key={a.id} value={a.nombre} />
                     ))}
                   </datalist>
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-600 mb-1">N° referencia</label>
+                  <label className="block text-sm text-gray-600 mb-1">N referencia</label>
                   <Input
                     value={nuevoAcc.referencia}
                     onChange={(e) => setNuevoAcc((s) => ({ ...s, referencia: e.target.value }))}
@@ -752,7 +752,7 @@ export default function NuevoIngreso() {
                       (a) => (a.nombre || "").trim().toLowerCase() === d
                     );
                     if (!acc) {
-                      setErr("Elegí una descripción válida de la lista");
+                      setErr("Eleg una descripcin vlida de la lista");
                       return;
                     }
                     setAccItems((list) => [
@@ -775,13 +775,13 @@ export default function NuevoIngreso() {
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="text-left">
-                      <th className="p-2">Descripción</th>
-                      <th className="p-2">N° referencia</th>
+                      <th className="p-2">Descripcin</th>
+                      <th className="p-2">N referencia</th>
                       <th className="p-2" />
                     </tr>
                   </thead>
                   <tbody>
-                    {accItems.map((it, idx) => (
+                    {(Array.isArray(accItems) ? accItems : []).map((it, idx) => (
                       <tr key={idx} className="border-t">
                         <td className="p-2">
                           {it.accesorio_nombre ||
@@ -825,3 +825,4 @@ export default function NuevoIngreso() {
     </div>
   );
 }
+

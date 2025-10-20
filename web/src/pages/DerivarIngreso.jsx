@@ -19,7 +19,7 @@ export default function DerivarIngreso() {
     comentarios: "",
   });
   const [error, setError] = useState("");
-  const busyRef = useRef(false); // barrera sincrónica contra doble submit
+  const busyRef = useRef(false); // barrera sincrnica contra doble submit
 
   useEffect(() => {
     (async () => {
@@ -43,7 +43,7 @@ export default function DerivarIngreso() {
     busyRef.current = true;
     setError("");
     if (!form.external_service_id) {
-      setError("Seleccioná un proveedor externo.");
+      setError("Seleccion un proveedor externo.");
       busyRef.current = false;
       return;
     }
@@ -58,7 +58,7 @@ export default function DerivarIngreso() {
         fecha_deriv: form.fecha_deriv || null,
         comentarios: form.comentarios || null,
       });
-      // Intentar abrir el remito de derivación inmediatamente
+      // Intentar abrir el remito de derivacin inmediatamente
       try {
         const derivId = res?.deriv_id;
         if (derivId) {
@@ -68,7 +68,7 @@ export default function DerivarIngreso() {
           setTimeout(() => URL.revokeObjectURL(url), 20000);
         }
       } catch (_) {
-        // Fallback: abrir la derivación abierta si existe
+        // Fallback: abrir la derivacin abierta si existe
         try {
           const list = await getDerivacionesPorIngreso(id);
           const abierta = Array.isArray(list) ? list.find(d => !d.fecha_entrega) : null;
@@ -86,7 +86,7 @@ export default function DerivarIngreso() {
       nav(`/ingresos/${id}`, { state: { tab: "derivaciones" } });
     } catch (e) {
       setError(String(e));
-      // Si el POST falló (por ejemplo, 409 por derivación abierta), intentar abrir el PDF de la abierta
+      // Si el POST fall (por ejemplo, 409 por derivacin abierta), intentar abrir el PDF de la abierta
       try {
         const list = await getDerivacionesPorIngreso(id);
         const abierta = Array.isArray(list) ? list.find(d => !d.fecha_entrega) : null;
@@ -133,7 +133,7 @@ export default function DerivarIngreso() {
         </div>
 
         <div>
-          <label className="block text-sm mb-1">Fecha derivación</label>
+          <label className="block text-sm mb-1">Fecha derivacin</label>
           <input
             type="date"
             name="fecha_deriv"
@@ -170,3 +170,4 @@ export default function DerivarIngreso() {
     </div>
   );
 }
+

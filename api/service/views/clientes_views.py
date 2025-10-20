@@ -36,6 +36,37 @@ class ClientesView(APIView):
 class ClienteDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
+    def patch(self, request, cid):
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        d = request.data or {}
+        rs = (d.get("razon_social") or "").strip()
+        ce = (d.get("cod_empresa") or "").strip()
+        if not (rs and ce):
+            raise ValidationError("razon_social y cod_empresa son requeridos")
+        try:
+            exec_void(
+                """
+                UPDATE customers
+                   SET razon_social = %(rs)s,
+                       cod_empresa  = %(ce)s,
+                       telefono     = %(tel)s,
+                       telefono_2   = %(tel2)s,
+                       email        = %(email)s
+                 WHERE id = %(id)s
+                """,
+                {
+                    "id": cid,
+                    "rs": rs,
+                    "ce": ce,
+                    "tel": d.get("telefono"),
+                    "tel2": d.get("telefono_2"),
+                    "email": d.get("email"),
+                },
+            )
+            return Response({"ok": True})
+        except Exception as e:
+            raise ValidationError(str(e) or "No se pudo actualizar el cliente")
+
     def delete(self, request, cid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
         refs = q(

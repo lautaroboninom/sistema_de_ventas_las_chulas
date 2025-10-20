@@ -18,7 +18,7 @@ export const formatDateTime = (s, locale = "es-AR") =>
 export const resolveFechaIngreso = (row) => row?.fecha_ingreso ?? row?.fecha_creacion ?? null;
 export const resolveFechaCreacion = (row) => row?.fecha_creacion ?? row?.fecha_ingreso ?? null;
 
-// Parseador seguro para fechas "YYYY-MM-DD": trátalas como hora local 00:00
+// Parseador seguro para fechas "YYYY-MM-DD": trtalas como hora local 00:00
 export const parseDateLocal = (s) => {
   if (!s) return null;
   if (typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s)) {
@@ -54,7 +54,7 @@ export const modeloSerieVarianteOf = (row, fallback = "-") => {
     return [modelo, variante].filter(Boolean).join(" ").trim();
   }
 
-  // Fallback histórico: serie/variante consolidado
+  // Fallback histrico: serie/variante consolidado
   const serie = firstNonEmpty(
     row?.modelo_serie_variante,
     row?.modelo_serie,
@@ -98,7 +98,7 @@ export const catalogEquipmentLabel = (row, fallback = "-") => {
   return parts.length ? parts.join(" | ") : fallback;
 };
 
-// Devuelve la etiqueta de serie priorizando el número interno (MG) si existe.
+// Devuelve la etiqueta de serie priorizando el nmero interno (MG) si existe.
 // Reglas:
 //  - Si hay MG (numero_interno) -> mostrar MG
 //  - Si no hay MG pero hay N/S (numero_serie) -> mostrar N/S
@@ -118,7 +118,7 @@ export const nsPreferInternoOf = (row, fallback = "-") => {
 export const norm = (v) => {
   const s = (v ?? "").toString().toLowerCase().trim();
   try {
-    // Remover acentos/diacríticos para comparaciones robustas
+    // Remover acentos/diacrticos para comparaciones robustas
     return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   } catch {
     return s;
@@ -135,3 +135,4 @@ export const formatMoney = (amount, currency = "ARS", locale = "es-AR") => {
 };
 
 export const toNum = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
+

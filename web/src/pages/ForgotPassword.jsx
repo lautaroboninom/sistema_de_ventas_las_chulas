@@ -27,11 +27,11 @@ export default function ForgotPassword() {
     <div className="min-h-screen flex flex-col">
       <main className="flex-1">
         <div className="max-w-sm mx-auto mt-16 border rounded p-4 bg-white">
-          <h1 className="text-xl font-semibold mb-3">Recuperar contraseña</h1>
+          <h1 className="text-xl font-semibold mb-3">Recuperar contrasea</h1>
           {sent ? (
             <div className="text-sm text-gray-700">
-              Si el correo existe, te enviamos un enlace para restablecer la contraseña.
-              Revisá tu bandeja de entrada y el spam.
+              Si el correo existe, te enviamos un enlace para restablecer la contrasea.
+              Revis tu bandeja de entrada y el spam.
             </div>
           ) : (
             <form onSubmit={submit} className="space-y-3">
@@ -49,3 +49,4 @@ export default function ForgotPassword() {
     </div>
   );
 }
+

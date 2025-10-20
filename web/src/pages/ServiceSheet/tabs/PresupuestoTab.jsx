@@ -1,53 +1,205 @@
-﻿export default function PresupuestoTab({
-  id,
-  data,
-  canManagePresupuesto,
-  qErr,
-  qLoading,
-  quote,
-  abrirPdf,
-  autorizadoPor,
-  setAutorizadoPor,
-  formaPago,
-  setFormaPago,
-  emitiendo,
-  emitirPresupuesto,
-  aprobando,
-  aprobarPresupuesto,
-  anulando,
-  anularPresupuesto,
-  marcarNoAplica,
-  quitarNoAplica,
-  nuevoRep,
-  setNuevoRep,
-  addRepuesto,
-  updateItem,
-  handleRemoveItem,
-  manoObraStr,
-  setManoObraStr,
-  saveManoObra,
-  money,
-}) {
+import { useEffect, useState } from "react";
+import { getBlob } from "../../../lib/api";
+import {
+  getQuote,
+  postQuoteItem,
+  patchQuoteItem,
+  deleteQuoteItem,
+  patchQuoteResumen,
+  postQuoteEmitir,
+  postQuoteAprobar,
+  postQuoteAnular,
+  postQuoteNoAplica,
+  postQuoteQuitarNoAplica,
+} from "../../../lib/api";
+
+export default function PresupuestoTab({ id, data, canManagePresupuesto, money, refreshIngreso, setErr }) {
   const isAprobado = data.presupuesto_estado === "aprobado";
+
+  const [qErr, setQErr] = useState("");
+  const [qLoading, setQLoading] = useState(false);
+  const [quote, setQuote] = useState(null);
+
+  const [autorizadoPor, setAutorizadoPor] = useState("Cliente");
+  const [formaPago, setFormaPago] = useState("30 F.F.");
+  const [emitiendo, setEmitiendo] = useState(false);
+  const [aprobando, setAprobando] = useState(false);
+  const [anulando, setAnulando] = useState(false);
+
+  const [nuevoRep, setNuevoRep] = useState({ repuesto_id: "", descripcion: "", qty: "1", precio_u: "" });
+  const [manoObraStr, setManoObraStr] = useState("");
+
+  async function loadQuote() {
+    try {
+      setQErr("");
+      setQLoading(true);
+      const q = await getQuote(id);
+      setQuote(q);
+      setManoObraStr(String(q?.mano_obra ?? "0"));
+      setFormaPago(q?.forma_pago ?? "30 F.F.");
+    } catch (e) {
+      setQErr(e?.message || "No se pudo cargar el presupuesto");
+      setQuote(null);
+    } finally {
+      setQLoading(false);
+    }
+  }
+
+  useEffect(() => { loadQuote(); }, [id]);
+
+  async function abrirPdf() {
+    try {
+      setQErr("");
+      const blob = await getBlob(`/api/quotes/${id}/pdf/`);
+      if (!(blob instanceof Blob)) throw new Error("La respuesta del API no fue un Blob.");
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      setQErr(e?.message || "No se pudo abrir el PDF del presupuesto");
+    }
+  }
+
+  async function emitirPresupuesto() {
+    try {
+      setEmitiendo(true);
+      const r = await postQuoteEmitir(id, { autorizado_por: autorizadoPor, forma_pago: formaPago });
+      setQuote(r);
+      if (typeof refreshIngreso === "function") await refreshIngreso();
+      if (r?.pdf_url) await abrirPdf();
+    } catch (e) {
+      setQErr(e?.message || "No se pudo emitir el presupuesto");
+    } finally {
+      setEmitiendo(false);
+    }
+  }
+
+  async function anularPresupuesto() {
+    if (!confirm("Anular el presupuesto actual? Podrs editar y re-emitir luego.")) return;
+    try {
+      setAnulando(true);
+      setQErr("");
+      const r = await postQuoteAnular(id);
+      setQuote(r);
+      if (typeof refreshIngreso === "function") await refreshIngreso();
+    } catch (e) {
+      setQErr(e?.message || "No se pudo anular el presupuesto");
+    } finally {
+      setAnulando(false);
+    }
+  }
+
+  async function aprobarPresupuesto() {
+    try {
+      setAprobando(true);
+      setQErr("");
+      const shouldPrint = (data?.estado || "").toLowerCase() === "reparado" &&
+        window.confirm("Este equipo ya est reparado, imprimir remito de salida?");
+
+      const r = await postQuoteAprobar(id);
+      setQuote(r);
+      if (shouldPrint && typeof refreshIngreso === "function") {
+        try {
+          const blob = await getBlob(`/api/ingresos/${id}/remito/`);
+          if (!(blob instanceof Blob)) throw new Error("La respuesta no fue un PDF");
+          const url = URL.createObjectURL(blob);
+          window.open(url, "_blank", "noopener");
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
+          await refreshIngreso();
+        } catch (e) {
+          setQErr(e?.message || "No se pudo imprimir el remito de salida");
+        }
+      }
+      if (typeof refreshIngreso === "function") await refreshIngreso();
+    } catch (e) {
+      setQErr(e?.message || "No se pudo aprobar el presupuesto");
+    } finally {
+      setAprobando(false);
+    }
+  }
+
+  async function marcarNoAplica() {
+    try {
+      setQErr("");
+      setEmitiendo(true);
+      const r = await postQuoteNoAplica(id);
+      setQuote(r);
+      if (typeof refreshIngreso === "function") await refreshIngreso();
+    } catch (e) {
+      setQErr(e?.message || "No se pudo marcar 'No aplica'");
+    } finally {
+      setEmitiendo(false);
+    }
+  }
+
+  async function quitarNoAplica() {
+    try {
+      setQErr("");
+      setEmitiendo(true);
+      const r = await postQuoteQuitarNoAplica(id);
+      setQuote(r);
+      if (typeof refreshIngreso === "function") await refreshIngreso();
+    } catch (e) {
+      setQErr(e?.message || "No se pudo quitar 'No aplica'");
+    } finally {
+      setEmitiendo(false);
+    }
+  }
+
+  async function addRepuesto() {
+    const qty = Number(nuevoRep.qty || 0);
+    const pu  = Number(nuevoRep.precio_u || 0);
+    if (!nuevoRep.descripcion.trim()) { setQErr("Descripcin requerida"); return; }
+    if (qty <= 0) { setQErr("Cantidad > 0"); return; }
+    if (pu < 0) { setQErr("Precio invlido"); return; }
+    await postQuoteItem(id, {
+      tipo: "repuesto",
+      repuesto_id: nuevoRep.repuesto_id ? Number(nuevoRep.repuesto_id) : null,
+      descripcion: nuevoRep.descripcion.trim(),
+      qty, precio_u: pu,
+    });
+    setNuevoRep({ repuesto_id: "", descripcion: "", qty: "1", precio_u: "" });
+    await loadQuote();
+  }
+
+  async function updateItem(it, patchRow) { await patchQuoteItem(id, it.id, patchRow); await loadQuote(); }
+  async function handleRemoveItem(it) {
+    if (!confirm("Eliminar rengln?")) return;
+    try {
+      await deleteQuoteItem(id, it.id);
+      await loadQuote();
+    } catch (e) {
+      setQErr(e?.message || "No se pudo eliminar el rengln");
+    }
+  }
+  async function saveManoObra() {
+    const mo = Number(manoObraStr || 0);
+    if (mo < 0) { setQErr("Mano de obra invlida"); return; }
+    await patchQuoteResumen(id, { mano_obra: mo });
+    await loadQuote();
+  }
+
   return (
     <div className="border rounded p-4">
       <h2 className="font-semibold mb-3">Presupuesto</h2>
 
+      <div className="border rounded p-3 mb-4 bg-gray-50">
+        <h3 className="font-medium mb-2">Diagnóstico y trabajos</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <div className="text-sm text-gray-600">Diagnóstico</div>
+            <div className="whitespace-pre-wrap">{(data?.descripcion_problema || "-")}</div>
+          </div>
+          <div>
+            <div className="text-sm text-gray-600">Trabajos realizados</div>
+            <div className="whitespace-pre-wrap">{(data?.trabajos_realizados || "-")}</div>
+          </div>
+        </div>
+      </div>
+
       {qErr && (
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">{qErr}</div>
       )}
-
-      {/* Panel informativo compacto: Diagnóstico y Trabajos (solo lectura) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
-        <div className="border rounded p-2 bg-gray-50">
-          <div className="text-xs uppercase text-gray-500 mb-1">Diagnóstico</div>
-          <div className="whitespace-pre-wrap text-sm">{data.descripcion_problema || "-"}</div>
-        </div>
-        <div className="border rounded p-2 bg-gray-50">
-          <div className="text-xs uppercase text-gray-500 mb-1">Trabajos realizados</div>
-          <div className="whitespace-pre-wrap text-sm">{data.trabajos_realizados || "-"}</div>
-        </div>
-      </div>
 
       <div className="flex gap-3 items-end mb-4">
         <label className="block">
@@ -95,7 +247,7 @@
       ) : (
         <>
           {isAprobado && (
-            <div className="mb-3 text-sm text-emerald-700">Presupuesto aprobado - los items y valores ya no son editables.</div>
+            <div className="mb-3 text-sm text-emerald-700">Presupuesto aprobado - los tems y valores ya no son editables.</div>
           )}
 
           <h3 className="font-medium mb-2">Repuestos</h3>
@@ -103,7 +255,7 @@
             <thead>
               <tr className="text-left">
                 <th className="p-2 w-28">IdRepuesto</th>
-                <th className="p-2">Descripción</th>
+                <th className="p-2">Descripcin</th>
                 <th className="p-2 w-24">Cantidad</th>
                 <th className="p-2 w-36">Precio unit.</th>
                 <th className="p-2 w-36 text-right">Subtotal</th>
@@ -118,8 +270,8 @@
                     <td className="p-2">
                       <input
                         className="border rounded p-1 w-24"
-                        value={it.repuesto_id ?? ""}
-                        onChange={(e) => updateItem(it, { repuesto_id: e.target.value ? Number(e.target.value) : null })}
+                        value={it.repuesto_id || ""}
+                        onChange={(e) => updateItem(it, { repuesto_id: e.target.value })}
                         disabled={isAprobado}
                       />
                     </td>
@@ -135,7 +287,6 @@
                       <input
                         type="number"
                         step="0.01"
-                        //min="0"
                         className="border rounded p-1 w-24 text-right"
                         value={it.qty}
                         onChange={(e) => updateItem(it, { qty: Number(e.target.value || 0) })}
@@ -166,7 +317,7 @@
                   <input className="border rounded p-1 w-24" placeholder="(opcional)" value={nuevoRep.repuesto_id} onChange={(e) => setNuevoRep((s) => ({ ...s, repuesto_id: e.target.value }))} disabled={isAprobado} />
                 </td>
                 <td className="p-2">
-                  <input className="border rounded p-1 w-full" placeholder="Descripcion del repuesto" value={nuevoRep.descripcion} onChange={(e) => setNuevoRep((s) => ({ ...s, descripcion: e.target.value }))} disabled={isAprobado} />
+                  <input className="border rounded p-1 w-full" placeholder="Descripcin del repuesto" value={nuevoRep.descripcion} onChange={(e) => setNuevoRep((s) => ({ ...s, descripcion: e.target.value }))} disabled={isAprobado} />
                 </td>
                 <td className="p-2">
                   <input type="number" step="0.01" min="0" className="border rounded p-1 w-24 text-right" value={nuevoRep.qty} onChange={(e) => setNuevoRep((s) => ({ ...s, qty: e.target.value }))} disabled={isAprobado} />
@@ -221,4 +372,8 @@
     </div>
   );
 }
+
+
+
+
 

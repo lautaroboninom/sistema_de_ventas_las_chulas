@@ -6,7 +6,7 @@ import { getGeneralEquipos } from "../lib/api";
 import { ingresoIdOf, formatOS, norm, tipoEquipoOf, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import { useAuth } from "../context/AuthContext";
 
-// Catálogo (DB):
+// Catlogo (DB):
 const TARGET_ID = 2;
 const TARGET_NAME = "Estanteria de Alquiler";
 const ESTADOS_EXCLUIR = new Set(['entregado', 'alquilado']);
@@ -104,7 +104,7 @@ export default function StockAlquiler() {
           className="border rounded p-2 w-full max-w-md"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, marca, equipo, serie…"
+          placeholder="Filtrar por OS, marca, equipo, serie"
         />
       </div>
 
@@ -147,4 +147,5 @@ export default function StockAlquiler() {
     </div>
   );
 }
+
 

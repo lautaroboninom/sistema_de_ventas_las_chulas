@@ -91,7 +91,7 @@ export default function Aprobados() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, marca, equipo, serie…"
+          placeholder="Filtrar por OS, cliente, marca, equipo, serie"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar aprobados"
         />
@@ -182,3 +182,4 @@ export default function Aprobados() {
     </div>
   );
 }
+

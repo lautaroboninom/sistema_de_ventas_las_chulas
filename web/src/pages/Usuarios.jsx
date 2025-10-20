@@ -57,7 +57,7 @@ export default function Usuarios() {
     try {
       await postUsuario(nuevo); // crea o actualiza si el email ya existe
       setNuevo({ nombre:"", email:"", rol:"tecnico" });
-      setMsg("Usuario creado/actualizado. Se envió un mail de bienvenida (si es nuevo)");
+      setMsg("Usuario creado/actualizado. Se envi un mail de bienvenida (si es nuevo)");
       load();
     } catch(e){ setErr(normalizeErr(e)); }
   };
@@ -94,7 +94,7 @@ export default function Usuarios() {
   };
 
   const borrar = async (u) => {
-    if (!confirm(`¿Eliminar usuario ${u.email}?`)) return;
+    if (!confirm(`Eliminar usuario ${u.email}?`)) return;
     try { await deleteUsuario(u.id); setMsg("Usuario eliminado"); load(); }
     catch(e){ setErr(normalizeErr(e)); }
   };
@@ -129,7 +129,7 @@ export default function Usuarios() {
               {roles.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
             </Select>
           </div>
-          {/* Eliminado: carga de contraseña directa. Ahora se envía invitación por email. */}
+          {/* Eliminado: carga de contrasea directa. Ahora se enva invitacin por email. */}
           <div className="md:col-span-1 self-end">
             <Btn type="submit" className="w-full">Guardar</Btn>
           </div>
@@ -146,7 +146,7 @@ export default function Usuarios() {
               <th className="p-2">Rol</th>
               <th className="p-2">Perm. Ingresar</th>
               <th className="p-2">Activo</th>
-              <th className="p-2">Invitación/Reset</th>
+              <th className="p-2">Invitacin/Reset</th>
               <th className="p-2 text-right">Acciones</th>
             </tr>
           </thead>
@@ -169,11 +169,11 @@ export default function Usuarios() {
                   {soyJefe && u.rol === "admin" ? (
                     <label className="inline-flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={!!u.perm_ingresar} onChange={() => togglePermIngresar(u)} />
-                      <span className="text-sm">{u.perm_ingresar ? "Sí" : "No"}</span>
+                      <span className="text-sm">{u.perm_ingresar ? "S" : "No"}</span>
                     </label>
                   ) : (
                     <span className="text-sm text-gray-600">
-                      {u.rol === "admin" ? (u.perm_ingresar ? "Sí" : "No") : "-"}
+                      {u.rol === "admin" ? (u.perm_ingresar ? "S" : "No") : "-"}
                     </span>
                   )}
                 </td>
@@ -217,3 +217,4 @@ function normalizeErr(e) {
     return t.startsWith("{") ? JSON.parse(t).detail || t : t;
   } catch { return e.message || "Error"; }
 }
+

@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { getProveedoresExternos, postProveedorExterno, deleteProveedorExterno } from "../lib/api";
 
 const Input = (p) => <input {...p} className="border rounded p-2 w-full" />;
@@ -53,7 +53,7 @@ export default function CatalogoProveedores() {
   };
 
   const del = async (id) => {
-    if (!confirm("¿Eliminar proveedor externo?")) return;
+    if (!confirm("Eliminar proveedor externo?")) return;
     setErr("");
     try {
       await deleteProveedorExterno(id);
@@ -80,7 +80,7 @@ export default function CatalogoProveedores() {
           <Input value={f.contacto} onChange={on("contacto")} />
         </div>
         <div>
-          <label className="text-sm">Teléfono</label>
+          <label className="text-sm">Telfono</label>
           <Input value={f.telefono} onChange={on("telefono")} />
         </div>
         <div>
@@ -88,7 +88,7 @@ export default function CatalogoProveedores() {
           <Input type="email" value={f.email} onChange={on("email")} />
         </div>
         <div className="md:col-span-2">
-          <label className="text-sm">Dirección</label>
+          <label className="text-sm">Direccin</label>
           <Input value={f.direccion} onChange={on("direccion")} />
         </div>
         <div className="md:col-span-2">
@@ -106,9 +106,9 @@ export default function CatalogoProveedores() {
             <th className="p-2">ID</th>
             <th className="p-2">Nombre</th>
             <th className="p-2">Contacto</th>
-            <th className="p-2">Teléfono</th>
+            <th className="p-2">Telfono</th>
             <th className="p-2">Email</th>
-            <th className="p-2">Dirección</th>
+            <th className="p-2">Direccin</th>
             <th className="p-2">Notas</th>
             <th className="p-2 text-right"></th>
           </tr>
@@ -142,3 +142,4 @@ export default function CatalogoProveedores() {
     </div>
   );
 }
+

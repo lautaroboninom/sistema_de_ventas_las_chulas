@@ -1,14 +1,19 @@
 import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
+import { getDerivacionesPorIngreso, postDerivacionDevuelto } from "../../../lib/api";
 
-export default function DerivacionesTab({
-  id,
-  derivs,
-  fechaDevStr,
-  setFechaDevStr,
-  savingDev,
-  onMarcarDevuelto,
-}) {
+export default function DerivacionesTab({ id, setErr, refreshIngreso }) {
+  const [derivs, setDerivs] = useState([]);
+  const [fechaDevStr, setFechaDevStr] = useState(() => new Date().toISOString().slice(0,10));
+  const [savingDev, setSavingDev] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try { setDerivs(await getDerivacionesPorIngreso(id)); } catch (_) { setDerivs([]); }
+    })();
+  }, [id]);
+
   const hayDerivAbierta = Array.isArray(derivs) && derivs.find(d => !d.fecha_entrega);
   return (
     <div className="border rounded p-4"> 
@@ -23,12 +28,25 @@ export default function DerivacionesTab({
                 className="border rounded p-2"
                 value={fechaDevStr}
                 onChange={(e) => setFechaDevStr(e.target.value)}
-                aria-label="Fecha de devolución"
+                aria-label="Fecha de devolucin"
               />
               <button
                 className="bg-green-700 text-white px-3 py-2 rounded disabled:opacity-60"
                 disabled={savingDev}
-                onClick={onMarcarDevuelto}
+                onClick={async () => {
+                  try {
+                    const abierta = derivs.find(d => !d.fecha_entrega);
+                    if (!abierta) return;
+                    setSavingDev(true);
+                    await postDerivacionDevuelto(id, abierta.id, { fecha_entrega: fechaDevStr || null });
+                    try { setDerivs(await getDerivacionesPorIngreso(id)); } catch (_) {}
+                    if (typeof refreshIngreso === "function") await refreshIngreso();
+                  } catch (e) {
+                    if (typeof setErr === "function") setErr(e?.message || "No se pudo marcar como devuelto");
+                  } finally {
+                    setSavingDev(false);
+                  }
+                }}
                 type="button"
               >
                 {savingDev ? "Guardando..." : "Devuelto"}
@@ -46,7 +64,7 @@ export default function DerivacionesTab({
             <tr className="text-left">
               <th className="p-2">Proveedor</th>
               <th className="p-2">Remito</th>
-              <th className="p-2">Fecha derivación</th>
+              <th className="p-2">Fecha derivacin</th>
               <th className="p-2">Fecha entrega</th>
               <th className="p-2">Estado</th>
               <th className="p-2">Comentarios</th>
@@ -60,7 +78,7 @@ export default function DerivacionesTab({
                 <td className="p-2 whitespace-nowrap">{d.fecha_deriv ? formatDateTimeHelper(d.fecha_deriv) : "-"}</td>
                 <td className="p-2 whitespace-nowrap">{d.fecha_entrega ? formatDateTimeHelper(d.fecha_entrega) : "-"}</td>
                 <td className="p-2">{d.estado || "-"}</td>
-                <td className="p-2">{d.comentarios || "-"}</td>
+                <td className="p-2">{d.Comentarios || "-"}</td>
               </tr>
             ))}
           </tbody>
@@ -69,4 +87,7 @@ export default function DerivacionesTab({
     </div>
   );
 }
+
+
+
 

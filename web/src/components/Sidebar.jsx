@@ -64,7 +64,7 @@ export default function Sidebar() {
 
   return (
     <aside className="w-64 shrink-0 border-r bg-white hidden md:block">
-      <div className="p-3 text-sm text-gray-500">Menú</div>
+      <div className="p-3 text-sm text-gray-500">Men</div>
       <div className="px-3 pb-3 space-y-2">
         <div>
           <div className="text-xs uppercase text-gray-400 px-1 mb-1">Equipos</div>
@@ -74,7 +74,7 @@ export default function Sidebar() {
           )}
 
           {jefe && (
-            <LinkItem to="/pendientes-por-tecnico">Pendientes por técnico</LinkItem>
+            <LinkItem to="/pendientes-por-tecnico">Pendientes por tcnico</LinkItem>
           )}
 
           {techLike && !jefeVeedor && (
@@ -94,21 +94,21 @@ export default function Sidebar() {
 
           <LinkItem to="/listos">Liberados</LinkItem>
           <LinkItem to="/alquiler/stock">Stock de Alquiler</LinkItem>
-          <LinkItem to="/depositos">Depósitos</LinkItem>
+          <LinkItem to="/depositos">Depsitos</LinkItem>
         </div>
 
         <div className="pt-2">
           {showSistema && (
             <>
               <div className="text-xs uppercase text-gray-400 px-1 mb-1">Sistema</div>
-              {jefe && <LinkItem to="/metricas">Métricas</LinkItem>}
-              {jefe && <LinkItem to="/metricas/config">Config Métricas</LinkItem>}
+              {jefe && <LinkItem to="/metricas">Mtricas</LinkItem>}
+              {jefe && <LinkItem to="/metricas/config">Config Mtricas</LinkItem>}
               {showUsuarios && <LinkItem to="/usuarios">Usuarios</LinkItem>}
               <LinkItem to="/catalogo/clientes">Clientes</LinkItem>
               <LinkItem to="/catalogo/tipos-equipo">Tipos de equipo</LinkItem>
               <LinkItem to="/catalogo/marcas">Marcas &amp; Modelos</LinkItem>
               <LinkItem to="/catalogo/proveedores">Proveedores externos</LinkItem>
-              <LinkItem to="/garantias">Garantías</LinkItem>
+              <LinkItem to="/garantias">Garantas</LinkItem>
             </>
           )}
         </div>
@@ -116,3 +116,4 @@ export default function Sidebar() {
     </aside>
   );
 }
+

@@ -1,8 +1,8 @@
-﻿// web/src/lib/constants.js
-// CatÃ¡logos/constantes de dominio (Ãºnica fuente de verdad).
+// web/src/lib/constants.js
+// Catlogos/constantes de dominio (nica fuente de verdad).
 
 // =========================
-// ResoluciÃ³n de reparaciÃ³n
+// Resolucin de reparacin
 // =========================
 export const RESOLUCION = {
   REPARADO: "reparado",
@@ -14,11 +14,11 @@ export const RESOLUCION = {
 export const RESOLUCION_LABELS = {
   [RESOLUCION.REPARADO]: "Reparado",
   [RESOLUCION.NO_REPARADO]: "No reparado",
-  [RESOLUCION.NO_SE_ENCONTRO_FALLA]: "No se encontró falla",
+  [RESOLUCION.NO_SE_ENCONTRO_FALLA]: "No se encontr falla",
   [RESOLUCION.PRESUPUESTO_RECHAZADO]: "Presupuesto rechazado",
 };
 
-// Ãštil para armar selects sin repetir arrays en cada pantalla
+// til para armar selects sin repetir arrays en cada pantalla
 export const RESOLUCION_OPTIONS = Object.entries(RESOLUCION_LABELS).map(
   ([value, label]) => ({ value, label })
 );
@@ -49,11 +49,12 @@ export const ESTADO_OPTIONS = Object.entries(ESTADO_LABELS).map(
   ([value, label]) => ({ value, label })
 );
 
-// (opcional) por si querÃ©s habilitar â€œsiguiente pasoâ€ en UI
+// (opcional) por si quers habilitar siguiente paso en UI
 export const NEXT_STATE = {
   [ESTADO.DIAGNOSTICADO]: ESTADO.REPARAR,
   [ESTADO.REPARAR]: ESTADO.REPARADO,
   [ESTADO.REPARADO]: ESTADO.LIBERADO,
   [ESTADO.LIBERADO]: ESTADO.ENTREGADO,
 };
+
 

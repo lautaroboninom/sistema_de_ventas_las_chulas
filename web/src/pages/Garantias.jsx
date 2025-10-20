@@ -17,7 +17,7 @@ export default function Garantias() {
       const r = await checkGarantiaFabrica(ns.trim(), marca.trim());
       setOut(r || null);
     } catch (e) {
-      setErr(e?.message || "Error consultando garantía");
+      setErr(e?.message || "Error consultando garanta");
     } finally {
       setLoading(false);
     }
@@ -25,9 +25,9 @@ export default function Garantias() {
 
   return (
     <div className="p-4">
-      <h1 className="text-xl font-semibold mb-3">Garantías</h1>
+      <h1 className="text-xl font-semibold mb-3">Garantas</h1>
       <p className="text-sm text-gray-600 mb-4">
-        Vista preliminar para verificar garantía de fábrica por número de serie en trazabilidad.
+        Vista preliminar para verificar garanta de fbrica por nmero de serie en trazabilidad.
       </p>
       <form className="flex flex-wrap items-end gap-3 mb-4" onSubmit={probe}>
         <div>
@@ -40,7 +40,7 @@ export default function Garantias() {
           />
         </div>
         <div>
-          <label className="block text-sm mb-1">Número de serie</label>
+          <label className="block text-sm mb-1">Nmero de serie</label>
           <input
             className="border rounded p-2 w-64"
             value={ns}
@@ -63,7 +63,7 @@ export default function Garantias() {
       {out && (
         <div className="border rounded p-3 text-sm">
           <div>
-            <b>Dentro de 365 días:</b> {out.within_365_days ? "Sí" : "No"}
+            <b>Dentro de 365 das:</b> {out.within_365_days ? "S" : "No"}
           </div>
           <div>
             <b>Fecha de venta:</b> {out.fecha_venta || "-"}
@@ -79,9 +79,10 @@ export default function Garantias() {
       )}
 
       <div className="mt-6 text-xs text-gray-500">
-        Próximamente: políticas por marca/modelo y excepciones por N/S. Ver docs/TODO_garantias.md.
+        Prximamente: polticas por marca/modelo y excepciones por N/S. Ver docs/TODO_garantias.md.
       </div>
     </div>
   );
 }
+
 

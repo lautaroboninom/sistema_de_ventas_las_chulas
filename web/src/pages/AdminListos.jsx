@@ -7,7 +7,7 @@ import StatusChip from "../components/StatusChip.jsx";
 import { resolutionLabel } from "../lib/constants";
 
 
-// Ajustá si tu backend usa otra ruta
+// Ajust si tu backend usa otra ruta
 const ENDPOINT = "/api/listos-para-retiro/";
 
 
@@ -25,7 +25,7 @@ export default function AdminListos() {
       setLoading(true);
       const data = await api.get(ENDPOINT);
       const list = Array.isArray(data) ? data : [];
-      // Orden sugerido: primero los más recientes marcados como "listos"
+      // Orden sugerido: primero los ms recientes marcados como "listos"
       list.sort((a, b) => {
         const da =
           new Date(a?.fecha_entrega ?? a?.fecha_listo ?? a?.fecha_reparado ?? a?.fecha_estado ?? a?.estado_fecha ?? 0).getTime();
@@ -108,7 +108,7 @@ export default function AdminListos() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, equipo, serie, resolución"
+          placeholder="Filtrar por OS, cliente, equipo, serie, resolucin"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar listos para retiro"
         />
@@ -135,7 +135,7 @@ export default function AdminListos() {
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">Resolución</th>
+                <th scope="col" className="p-2">Resolucin</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Fecha listo</th>
                 <th scope="col" className="p-2 text-right">Acciones</th>
@@ -157,7 +157,7 @@ export default function AdminListos() {
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                   <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   <td className="p-2">
-                    <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolución" />
+                    <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolucin" />
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">
@@ -191,6 +191,7 @@ export default function AdminListos() {
     </div>
   );
 }
+
 
 
 

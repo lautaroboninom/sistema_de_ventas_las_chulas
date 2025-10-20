@@ -30,11 +30,11 @@ export default function Depositos() {
 
   return (
     <div className="p-4 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-3">Depósitos</h1>
+      <h1 className="text-2xl font-bold mb-3">Depsitos</h1>
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-sm">Depósito / Ubicación:</span>
+        <span className="text-sm">Depsito / Ubicacin:</span>
         <select className="border rounded p-2" value={ubicacionId} onChange={(e)=>setUbicacionId(e.target.value)}>
-          <option value="">Elegí una ubicación…</option>
+          <option value="">Eleg una ubicacin</option>
           {ubicaciones.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
         </select>
       </div>
@@ -50,7 +50,7 @@ export default function Depositos() {
                 <th className="p-2 text-left">Marca</th>
                 <th className="p-2 text-left">Modelo</th>
                 <th className="p-2 text-left">Tipo</th>
-                <th className="p-2 text-left">N° Serie</th>
+                <th className="p-2 text-left">N Serie</th>
                 <th className="p-2 text-left">Estado</th>
                 <th className="p-2 text-left">Fecha ingreso</th>
               </tr>
@@ -74,3 +74,4 @@ export default function Depositos() {
     </div>
   );
 }
+

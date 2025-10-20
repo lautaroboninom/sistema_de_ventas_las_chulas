@@ -46,7 +46,7 @@ export default function GeneralPorCliente() {
       setLoadingRows(true);
       const data = await api.get(`/api/clientes/${sel}/general/`);
       const list = Array.isArray(data) ? data : [];
-      // Si necesitás ordenar por fecha de ingreso (recientes primero):
+      // Si necesits ordenar por fecha de ingreso (recientes primero):
       list.sort((a, b) => {
         const da = new Date(resolveFechaCreacion(a) ?? 0).getTime();
         const db = new Date(resolveFechaCreacion(b) ?? 0).getTime();
@@ -155,7 +155,7 @@ export default function GeneralPorCliente() {
           disabled={loadingClientes}
           aria-label="Elegir cliente"
         >
-          <option value="">{loadingClientes ? "Cargando clientes…" : "-- Elegí cliente --"}</option>
+          <option value="">{loadingClientes ? "Cargando clientes" : "-- Eleg cliente --"}</option>
           {clientes.map((c) => (
             <option key={c.id} value={c.id}>
               {c.razon_social ?? c.nombre ?? `Cliente ${c.id}`}
@@ -167,7 +167,7 @@ export default function GeneralPorCliente() {
           onClick={buscar}
           disabled={!sel || loadingRows}
           aria-busy={loadingRows ? "true" : "false"}
-          title={!sel ? "Elegí un cliente para buscar" : "Buscar ingresos del cliente"}
+          title={!sel ? "Eleg un cliente para buscar" : "Buscar ingresos del cliente"}
         >
           Buscar
         </button>
@@ -175,7 +175,7 @@ export default function GeneralPorCliente() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar resultados por OS, equipo, serie, estado…"
+          placeholder="Filtrar resultados por OS, equipo, serie, estado"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar resultados"
         />
@@ -203,14 +203,14 @@ export default function GeneralPorCliente() {
             onClick={() => exportGeneral(Array.from(selectedIds))}
             disabled={!sel || exporting || selectedIds.size === 0}
             aria-busy={exporting ? "true" : "false"}
-            title="Exportar selección a Excel"
+            title="Exportar seleccin a Excel"
           >
-            Exportar selección
+            Exportar seleccin
           </button>
         </div>
       </div>
 
-      {/* Errores de la búsqueda */}
+      {/* Errores de la bsqueda */}
       {errRows && (
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">
           {errRows}
@@ -218,12 +218,12 @@ export default function GeneralPorCliente() {
       )}
 
       {loadingRows ? (
-        "Cargando…"
+        "Cargando"
       ) : rows.length === 0 && sel ? (
         <div className="text-sm text-gray-500">No hay resultados para este cliente.</div>
       ) : rows.length === 0 ? (
         <div className="text-sm text-gray-500">
-          Elegí un cliente y presioná <span className="font-medium">Buscar</span>.
+          Eleg un cliente y presion <span className="font-medium">Buscar</span>.
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -243,7 +243,7 @@ export default function GeneralPorCliente() {
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Presupuesto</th>
-                <th scope="col" className="p-2">Ubicación</th>
+                <th scope="col" className="p-2">Ubicacin</th>
                 <th scope="col" className="p-2">Fecha ingreso</th>
                 <th scope="col" className="p-2">Fecha presupuestado</th>
               </tr>
@@ -296,3 +296,4 @@ export default function GeneralPorCliente() {
     </div>
   );
 }
+

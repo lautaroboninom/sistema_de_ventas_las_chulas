@@ -293,8 +293,8 @@ export default function Metricas() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Métricas</h1>
-        <Link to="/metricas/clientes" className="text-blue-600 hover:underline">Ver métricas por clientes →</Link>
+        <h1 className="text-xl font-semibold">Mtricas</h1>
+        <Link to="/metricas/clientes" className="text-blue-600 hover:underline">Ver mtricas por clientes </Link>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
@@ -317,7 +317,7 @@ export default function Metricas() {
           />
         </div>
         <div>
-          <div className="text-sm text-gray-600">Técnico</div>
+          <div className="text-sm text-gray-600">Tcnico</div>
           <select className="mt-1 border rounded px-2 py-1 w-full" value={tecnicoId} onChange={(e) => setTecnicoId(e.target.value)}>
             <option value="">Todos</option>
             {tecnicos.map(t => (
@@ -354,33 +354,33 @@ export default function Metricas() {
           <button onClick={exportTablasCSV} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar tablas (CSV)</button>
           <button onClick={() => exportSeriesCSV('monthly')} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar series mensuales (CSV)</button>
           <button onClick={() => exportSeriesCSV('yearly')} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar series anuales (CSV)</button>
-          <button onClick={exportDetalleTecnicoMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por técnico</button>
+          <button onClick={exportDetalleTecnicoMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por tcnico</button>
           <button onClick={exportDetalleMarcaMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por marca</button>
           <button onClick={exportDetalleTipoMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por tipo</button>
-          <button onClick={exportCalibracionCSV} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar calibración (CSV)</button>
+          <button onClick={exportCalibracionCSV} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar calibracin (CSV)</button>
         </div>
       </div>
 
-      {loading && <div className="text-gray-500">Cargando métricas…</div>}
+      {loading && <div className="text-gray-500">Cargando mtricas</div>}
       {error && (
-        <div className="text-red-600">Error al cargar métricas: {error}</div>
+        <div className="text-red-600">Error al cargar mtricas: {error}</div>
       )}
 
       {data && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <StatCard
-              label="MTTR promedio (días)"
+              label="MTTR promedio (das)"
               value={data.mttr_dias != null ? Number(data.mttr_dias).toFixed(1) : "-"}
-              help="Desde iniciar reparación hasta reparado"
+              help="Desde iniciar reparacin hasta reparado"
             />
             <StatCard
-              label="SLA diagnóstico < 24h"
+              label="SLA diagnstico < 24h"
               value={formatPct(data.sla_diag_24h?.cumplimiento || 0)}
               help={`${data.sla_diag_24h?.dentro || 0} de ${data.sla_diag_24h?.total || 0}`}
             />
             <StatCard
-              label="Aprobación presupuestos"
+              label="Aprobacin presupuestos"
               value={formatPct(data.aprob_presupuestos?.tasa || 0)}
               help={`${data.aprob_presupuestos?.aprobados || 0} de ${data.aprob_presupuestos?.emitidos || 0}`}
             />
@@ -404,23 +404,23 @@ export default function Metricas() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <StatCard
-              label="Derivación → Devuelto (días)"
+              label="Derivacin  Devuelto (das)"
               value={data?.derivaciones?.t_deriv_a_devuelto_dias != null ? data.derivaciones.t_deriv_a_devuelto_dias.toFixed(1) : "-"}
             />
             <StatCard
-              label="Devuelto → Entregado (días)"
+              label="Devuelto  Entregado (das)"
               value={data?.derivaciones?.t_devuelto_a_entregado_dias != null ? data.derivaciones.t_devuelto_a_entregado_dias.toFixed(1) : "-"}
             />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <h2 className="font-semibold mb-2">Cerrados por técnico (7 días)</h2>
+              <h2 className="font-semibold mb-2">Cerrados por tcnico (7 das)</h2>
               <div className="border rounded bg-white">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Técnico</th>
+                      <th className="text-left p-2">Tcnico</th>
                       <th className="text-right p-2">Cerrados</th>
                     </tr>
                   </thead>
@@ -440,12 +440,12 @@ export default function Metricas() {
             </div>
 
             <div>
-              <h2 className="font-semibold mb-2">WIP por técnico</h2>
+              <h2 className="font-semibold mb-2">WIP por tcnico</h2>
               <div className="border rounded bg-white">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Técnico</th>
+                      <th className="text-left p-2">Tcnico</th>
                       <th className="text-right p-2">En curso</th>
                     </tr>
                   </thead>
@@ -466,12 +466,12 @@ export default function Metricas() {
           </div>
 
           <div>
-            <h2 className="font-semibold mb-2">Cerrados por técnico (30 días)</h2>
+            <h2 className="font-semibold mb-2">Cerrados por tcnico (30 das)</h2>
             <div className="border rounded bg-white">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-gray-600">
-                    <th className="text-left p-2">Técnico</th>
+                    <th className="text-left p-2">Tcnico</th>
                     <th className="text-right p-2">Cerrados</th>
                   </tr>
                 </thead>
@@ -492,12 +492,12 @@ export default function Metricas() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
             <div>
-              <h2 className="font-semibold mb-2">Facturación aprobada por técnico</h2>
+              <h2 className="font-semibold mb-2">Facturacin aprobada por tcnico</h2>
               <div className="border rounded bg-white">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Técnico</th>
+                      <th className="text-left p-2">Tcnico</th>
                       <th className="text-right p-2">$ Aprobado</th>
                     </tr>
                   </thead>
@@ -522,7 +522,7 @@ export default function Metricas() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Técnico</th>
+                      <th className="text-left p-2">Tcnico</th>
                       <th className="text-right p-2">$ MO</th>
                     </tr>
                   </thead>
@@ -544,12 +544,12 @@ export default function Metricas() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
             <div>
-              <h2 className="font-semibold mb-2">Repuestos facturados por técnico</h2>
+              <h2 className="font-semibold mb-2">Repuestos facturados por tcnico</h2>
               <div className="border rounded bg-white">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Técnico</th>
+                      <th className="text-left p-2">Tcnico</th>
                       <th className="text-right p-2">$ Repuestos</th>
                     </tr>
                   </thead>
@@ -571,10 +571,10 @@ export default function Metricas() {
 
           {series && (
             <>
-              {/* Gráficos ligeros */}
+              {/* Grficos ligeros */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <MiniSpark title="Entregados" values={(series.monthly||[]).map(m=>m.entregados||0)} fmt={(v)=>v} />
-                <MiniSpark title="MTTR (días)" values={(series.monthly||[]).map(m=>m.mttr_dias||0)} fmt={(v)=>v?.toFixed(1)} />
+                <MiniSpark title="MTTR (das)" values={(series.monthly||[]).map(m=>m.mttr_dias||0)} fmt={(v)=>v?.toFixed(1)} />
                 <MiniSpark title="SLA diag 24h (%)" values={(series.monthly||[]).map(m=>Math.round((m.sla_diag_24h?.cumplimiento||0)*100))} fmt={(v)=>`${v}%`} />
               </div>
               
@@ -586,13 +586,13 @@ export default function Metricas() {
                       <tr className="bg-gray-50 text-gray-600">
                         <th className="p-2 text-left">Periodo</th>
                         <th className="p-2 text-right">Entregados</th>
-                        <th className="p-2 text-right">MTTR (días)</th>
+                        <th className="p-2 text-right">MTTR (das)</th>
                         <th className="p-2 text-right">SLA diag 24h</th>
                         <th className="p-2 text-right">T. emitir (h)</th>
                         <th className="p-2 text-right">T. aprobar (h)</th>
                         <th className="p-2 text-right">Derivados ext</th>
                         <th className="p-2 text-right">Devueltos ext</th>
-                        <th className="p-2 text-right">T deriv→dev (d)</th>
+                        <th className="p-2 text-right">T derivdev (d)</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -620,15 +620,15 @@ export default function Metricas() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-gray-50 text-gray-600">
-                        <th className="p-2 text-left">Año</th>
+                        <th className="p-2 text-left">Ao</th>
                         <th className="p-2 text-right">Entregados</th>
-                        <th className="p-2 text-right">MTTR (días)</th>
+                        <th className="p-2 text-right">MTTR (das)</th>
                         <th className="p-2 text-right">SLA diag 24h</th>
                         <th className="p-2 text-right">T. emitir (h)</th>
                         <th className="p-2 text-right">T. aprobar (h)</th>
                         <th className="p-2 text-right">Derivados ext</th>
                         <th className="p-2 text-right">Devueltos ext</th>
-                        <th className="p-2 text-right">T deriv→dev (d)</th>
+                        <th className="p-2 text-right">T derivdev (d)</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -679,3 +679,4 @@ function MiniSpark({ title, values = [], fmt = (v)=>v }) {
     </div>
   );
 }
+

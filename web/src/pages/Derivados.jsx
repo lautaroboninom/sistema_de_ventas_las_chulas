@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api, { postDerivacionDevuelto } from "../lib/api";
 import { ingresoIdOf, formatOS, formatDateOnly, nsPreferInternoOf } from "../lib/ui-helpers";
 import { catalogEquipmentLabel } from "../lib/ui-helpers";
@@ -30,7 +30,7 @@ export default function Derivados() {
   useEffect(() => { load(); }, []);
 
   const sorted = useMemo(() => {
-    // más recientes primero por fecha_deriv (tratar YYYY-MM-DD como local)
+    // ms recientes primero por fecha_deriv (tratar YYYY-MM-DD como local)
     const toDate = (v) => (v && typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? new Date(`${v}T00:00:00`) : (v ? new Date(v) : new Date(0));
     return [...rows].sort((a,b) => toDate(b?.fecha_deriv) - toDate(a?.fecha_deriv));
   }, [rows]);
@@ -68,7 +68,7 @@ export default function Derivados() {
                 <th className="p-2">Proveedor</th>
                 <th className="p-2">Equipo</th>
                 <th className="p-2">Serie</th>
-                <th className="p-2">Fecha derivación</th>
+                <th className="p-2">Fecha derivacin</th>
                 <th className="p-2 text-right">Acciones</th>
               </tr>
             </thead>
@@ -88,7 +88,7 @@ export default function Derivados() {
                         value={fechaMap[ingresoIdOf(row)] || ''}
                         onChange={(e) => setFechaMap((m) => ({ ...m, [ingresoIdOf(row)]: e.target.value }))}
                         className="border rounded p-1"
-                        aria-label="Fecha devolución"
+                        aria-label="Fecha devolucin"
                       />
                       <button className="btn" onClick={() => onDevuelto(row)}>
                         Devuelto
@@ -104,6 +104,7 @@ export default function Derivados() {
     </div>
   );
 }
+
 
 
 

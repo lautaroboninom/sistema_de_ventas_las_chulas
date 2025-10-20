@@ -8,13 +8,14 @@ export default class ErrorBoundary extends React.Component {
     if (!this.state.hasError) return this.props.children;
     return (
       <div style={{padding:16}}>
-        <h1>Ocurrió un error en la UI</h1>
+        <h1>Ocurri un error en la UI</h1>
         {IS_DEV ? (
           <pre style={{whiteSpace:"pre-wrap"}}>{String(this.state.error || "")}</pre>
         ) : (
-          <p>Intenta recargar la página o comunícate con soporte si el problema persiste.</p>
+          <p>Intenta recargar la pgina o comuncate con soporte si el problema persiste.</p>
         )}
       </div>
     );
   }
 }
+

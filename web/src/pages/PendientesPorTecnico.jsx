@@ -43,17 +43,17 @@ export default function PendientesPorTecnico() {
 
   return (
     <div className="card">
-      <div className="h1 mb-3">Pendientes por técnico</div>
+      <div className="h1 mb-3">Pendientes por tcnico</div>
       {err && <div className="bg-red-100 text-red-700 p-2 rounded mb-3">{err}</div>}
       <div className="flex gap-2 mb-3 items-center">
         <select className="border rounded p-2" value={tecnicoId} onChange={e=>setTecnicoId(e.target.value)}>
-          <option value="">-- Seleccionar técnico --</option>
+          <option value="">-- Seleccionar tcnico --</option>
           {tecnicos.map(t=> <option key={t.id} value={t.id}>{t.nombre}</option>)}
         </select>
-        <input className="border rounded p-2 w-full max-w-md" placeholder="Filtrar por OS, cliente, marca, equipo, serie…" value={filter} onChange={e=>setFilter(e.target.value)} />
+        <input className="border rounded p-2 w-full max-w-md" placeholder="Filtrar por OS, cliente, marca, equipo, serie" value={filter} onChange={e=>setFilter(e.target.value)} />
       </div>
 
-      {!tecnicoId ? <div className="text-sm text-gray-500">Elegí un técnico para ver sus pendientes.</div> :
+      {!tecnicoId ? <div className="text-sm text-gray-500">Eleg un tcnico para ver sus pendientes.</div> :
       loading ? "Cargando..." :
       filtered.length === 0 ? <div className="text-sm text-gray-500">Sin pendientes.</div> : (
         <div className="overflow-x-auto">
@@ -81,5 +81,6 @@ export default function PendientesPorTecnico() {
     </div>
   );
 }
+
 
 

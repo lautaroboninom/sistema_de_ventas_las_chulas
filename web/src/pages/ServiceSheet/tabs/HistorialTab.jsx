@@ -1,4 +1,4 @@
-﻿import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
+import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
 
 export default function HistorialTab({ hErr, hLoading, hist }) {
   return (
@@ -17,7 +17,7 @@ export default function HistorialTab({ hErr, hLoading, hist }) {
               <th className="p-2">Entidad</th>
               <th className="p-2">Campo</th>
               <th className="p-2">Antes</th>
-              <th className="p-2">Después</th>
+              <th className="p-2">Despus</th>
             </tr>
           </thead>
           <tbody>
@@ -46,6 +46,10 @@ export default function HistorialTab({ hErr, hLoading, hist }) {
     </div>
   );
 }
+
+
+
+
 
 
 

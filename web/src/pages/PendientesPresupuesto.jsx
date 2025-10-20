@@ -6,7 +6,7 @@ import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFecha
 import StatusChip from "../components/StatusChip.jsx";
 
 
-// Ajustá si tu backend usa otra ruta
+// Ajust si tu backend usa otra ruta
 const ENDPOINT = "/api/presupuestos/pendientes/";
 
 export default function PendientesPresupuesto() {
@@ -21,7 +21,7 @@ export default function PendientesPresupuesto() {
       setErr("");
       setLoading(true);
       const list = await getPendientesPresupuesto();
-      // Ordenar por fecha de servicio: más antiguo primero
+      // Ordenar por fecha de servicio: ms antiguo primero
        list.sort((a, b) => {
         const da = new Date(a?.fecha_servicio ?? 0).getTime();
         const db = new Date(b?.fecha_servicio ?? 0).getTime();
@@ -89,7 +89,7 @@ export default function PendientesPresupuesto() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, equipo, NS, estado, presupuesto…"
+          placeholder="Filtrar por OS, cliente, equipo, NS, estado, presupuesto"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar pendientes de presupuesto"
         />
@@ -161,3 +161,4 @@ export default function PendientesPresupuesto() {
     </div>
   );
 }
+

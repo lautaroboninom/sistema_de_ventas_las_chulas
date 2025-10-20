@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getClientes, postCliente, deleteCliente } from "../lib/api";
+import { getClientes, postCliente, deleteCliente, patchCliente } from "../lib/api";
 
 const Input = (p) => <input {...p} className="border rounded p-2 w-full" />;
 
@@ -8,6 +8,9 @@ export default function CatalogoClientes() {
   const [f, setF] = useState({ razon_social: "", cod_empresa: "", telefono: "", telefono_2: "", email: "" });
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [ef, setEf] = useState({ razon_social: "", cod_empresa: "", telefono: "", telefono_2: "", email: "" });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const load = async () => {
     setErr("");
@@ -37,12 +40,51 @@ export default function CatalogoClientes() {
   };
 
   const del = async (id) => {
-    if (!confirm("¿Eliminar cliente?")) return;
+    if (!confirm("Eliminar cliente?")) return;
     try {
       await deleteCliente(id);
       load();
     } catch (e) {
       setErr(e.message);
+    }
+  };
+
+  const openEdit = (cliente) => {
+    setErr("");
+    setMsg("");
+    setEdit(cliente);
+    setEf({
+      razon_social: cliente.razon_social || "",
+      cod_empresa: cliente.cod_empresa || "",
+      telefono: cliente.telefono || "",
+      telefono_2: cliente.telefono_2 || "",
+      email: cliente.email || "",
+    });
+  };
+
+  const saveEdit = async (e) => {
+    e.preventDefault();
+    if (!edit) return;
+    try {
+      setSavingEdit(true);
+      setErr("");
+      setMsg("");
+      const payload = {
+        razon_social: ef.razon_social,
+        cod_empresa: ef.cod_empresa,
+        telefono: (ef.telefono || "").trim() || null,
+        telefono_2: (ef.telefono_2 || "").trim() || null,
+        email: (ef.email || "").trim() || null,
+      };
+      await patchCliente(edit.id, payload);
+      setMsg("Cliente actualizado");
+      setEdit(null);
+      setEf({ razon_social: "", cod_empresa: "", telefono: "", telefono_2: "", email: "" });
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -54,19 +96,19 @@ export default function CatalogoClientes() {
 
       <form onSubmit={add} className="border rounded p-3 grid grid-cols-1 md:grid-cols-4 gap-3">
         <div>
-          <label className="text-sm">Razón social</label>
+          <label className="text-sm">Razn social</label>
           <Input value={f.razon_social} onChange={on("razon_social")} required />
         </div>
         <div>
-          <label className="text-sm">Código empresa</label>
+          <label className="text-sm">Cdigo empresa</label>
           <Input value={f.cod_empresa} onChange={on("cod_empresa")} required />
         </div>
         <div>
-          <label className="text-sm">Teléfono</label>
+          <label className="text-sm">Telfono</label>
           <Input value={f.telefono} onChange={on("telefono")} />
         </div>
         <div>
-          <label className="text-sm">Teléfono 2</label>
+          <label className="text-sm">Telfono 2</label>
           <Input value={f.telefono_2} onChange={on("telefono_2")} />
         </div>
         <div className="md:col-span-2">
@@ -82,10 +124,10 @@ export default function CatalogoClientes() {
         <thead>
           <tr className="bg-gray-50">
             <th className="p-2 text-left">ID</th>
-            <th className="p-2 text-left">Razón social</th>
-            <th className="p-2 text-left">Código</th>
-            <th className="p-2 text-left">Teléfono</th>
-            <th className="p-2 text-left">Teléfono 2</th>
+            <th className="p-2 text-left">Razn social</th>
+            <th className="p-2 text-left">Cdigo</th>
+            <th className="p-2 text-left">Telfono</th>
+            <th className="p-2 text-left">Telfono 2</th>
             <th className="p-2 text-left">Email</th>
             <th></th>
           </tr>
@@ -100,9 +142,10 @@ export default function CatalogoClientes() {
               <td className="p-2">{c.telefono_2 || "-"}</td>
               <td className="p-2">{c.email || "-"}</td>
               <td className="p-2 text-right">
-                <button onClick={() => del(c.id)} className="px-3 py-1 border rounded">
-                  Eliminar
-                </button>
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => openEdit(c)} className="px-3 py-1 border rounded">Editar</button>
+                  <button onClick={() => del(c.id)} className="px-3 py-1 border rounded">Eliminar</button>
+                </div>
               </td>
             </tr>
           ))}
@@ -115,7 +158,63 @@ export default function CatalogoClientes() {
           )}
         </tbody>
       </table>
+
+      {edit && (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => !savingEdit && setEdit(null)}
+        >
+          <div
+            className="bg-white rounded shadow-xl w-full max-w-2xl p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold">Editar cliente</h2>
+              <button
+                type="button"
+                className="text-sm text-gray-600 hover:text-gray-900"
+                onClick={() => !savingEdit && setEdit(null)}
+                aria-label="Cerrar"
+              >
+                Cerrar
+              </button>
+            </div>
+            {err && <div className="bg-red-100 text-red-700 p-2 rounded mb-2">{err}</div>}
+            <form onSubmit={saveEdit} className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="md:col-span-2">
+                <label className="text-sm">Razn social</label>
+                <Input value={ef.razon_social} onChange={(e) => setEf({ ...ef, razon_social: e.target.value })} required />
+              </div>
+              <div>
+                <label className="text-sm">Cdigo empresa</label>
+                <Input value={ef.cod_empresa} onChange={(e) => setEf({ ...ef, cod_empresa: e.target.value })} required />
+              </div>
+              <div>
+                <label className="text-sm">Telfono</label>
+                <Input value={ef.telefono} onChange={(e) => setEf({ ...ef, telefono: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-sm">Telfono 2</label>
+                <Input value={ef.telefono_2} onChange={(e) => setEf({ ...ef, telefono_2: e.target.value })} />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-sm">Email</label>
+                <Input type="email" value={ef.email} onChange={(e) => setEf({ ...ef, email: e.target.value })} />
+              </div>
+              <div className="md:col-span-2 flex justify-end gap-2 mt-2">
+                <button type="button" className="px-4 py-2 border rounded" onClick={() => setEdit(null)} disabled={savingEdit}>Cancelar</button>
+                <button type="submit" className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-60" disabled={savingEdit}>
+                  {savingEdit ? "Guardando..." : "Guardar"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 

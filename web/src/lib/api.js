@@ -1,15 +1,15 @@
-﻿  // web/src/lib/api.js
+  // web/src/lib/api.js
 
   // === BASE del API robusto ===
-  // 1) Si está definida VITE_API_URL, la usamos.
-  // 2) Si no, caemos al host actual pero en puerto 8000 (útil en LAN).
+  // 1) Si est definida VITE_API_URL, la usamos.
+  // 2) Si no, caemos al host actual pero en puerto 8000 (til en LAN).
   const API_FALLBACK = `${window.location.protocol}//${window.location.hostname}:8000`;
   const isDevVite = window.location.port === "5173";
   const BASE =
     import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ||
     (isDevVite
       ? `${window.location.protocol}//${window.location.hostname}:8000`
-      : ""); // producción: mismo origen + rutas /api/ relativas
+      : ""); // produccin: mismo origen + rutas /api/ relativas
 
   /* ===== Token en memoria (compatibilidad) ===== */
   let token = null;
@@ -26,13 +26,13 @@
       setToken(null);
     } finally {
       const path = window.location.pathname || "";
-      // No redirigir si estamos en rutas públicas de auth
+      // No redirigir si estamos en rutas pblicas de auth
       const safePaths = new Set(["/login", "/restablecer", "/recuperar"]);
       if (!safePaths.has(path)) {
         window.location.replace("/login");
         return;
       }
-      // Mantenernos en la ruta pública actual
+      // Mantenernos en la ruta pblica actual
       forcingLogout = false;
     }
   }
@@ -55,7 +55,7 @@
     const data = isJSON ? await res.json() : await res.text();
 
     if (res.status === 401) {
-      // Evitar redirigir desde páginas públicas de auth
+      // Evitar redirigir desde pginas pblicas de auth
       const p = window.location.pathname || "";
       const publicAuth = p.startsWith("/restablecer") || p.startsWith("/recuperar") || p === "/login";
       if (!publicAuth) forceLogout();
@@ -94,14 +94,14 @@
   export const postUsuario = (payload) => api.post("/api/usuarios/", payload);
   export const patchUsuarioActivo = (id, activo) =>
     api.patch(`/api/usuarios/${id}/activar/`, { activo });
-  // Enviar enlace de restablecimiento/invitación por email
+  // Enviar enlace de restablecimiento/invitacin por email
   export const patchUsuarioReset = (id) =>
     api.patch(`/api/usuarios/${id}/reset-pass/`, {});
   export const patchUsuarioRolePerm = (id, payload) =>
     api.patch(`/api/usuarios/${id}/roleperm/`, payload);
   export const deleteUsuario = (id) => api.del(`/api/usuarios/${id}/`);
 
-  /* =============== CATÁLOGOS =============== */
+  /* =============== catalogos =============== */
 
 
 const catalogCache = {
@@ -225,6 +225,8 @@ export const deleteCatalogVariante = (varianteId) =>
   export const getClientes = () => api.get("/api/catalogos/clientes/");
   export const postCliente = (payload) =>
     api.post("/api/catalogos/clientes/", payload);
+  export const patchCliente = (id, payload) =>
+    api.patch(`/api/catalogos/clientes/${id}/`, payload);
   export const deleteCliente = (id) =>
     api.del(`/api/catalogos/clientes/${id}/`);
   export const getRoles = () => api.get("/api/catalogos/roles/");
@@ -233,7 +235,7 @@ export const deleteCatalogVariante = (varianteId) =>
     api.post("/api/catalogos/marcas/", { nombre });
   export const deleteMarca = (id) =>
     api.del(`/api/catalogos/marcas/${id}/`);
-  // Eliminaci�n en cascada: borra la marca y TODOS sus modelos
+  // Eliminacin en cascada: borra la marca y TODOS sus modelos
   export const deleteMarcaCascade = (id) =>
     api.del(`/api/catalogos/marcas/${id}/eliminar-con-modelos/`);
   export const patchMarca = (id, payload) =>
@@ -246,7 +248,7 @@ export const deleteCatalogVariante = (varianteId) =>
   export const getTiposEquipo = () =>
     api.get("/api/catalogos/tipos-equipo/");
 
-  // ABM Tipos de equipo (cat�logo general)
+  // ABM Tipos de equipo (catlogo general)
   export const getTiposEquipoAdmin = () =>
     api.get("/api/catalogos/tipos-equipo-admin/");
   export const postTipoEquipo = (nombre) =>
@@ -335,7 +337,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
     return data;
   }
 
-  // ---- Descarga/lectura de binarios con autorización ----
+  // ---- Descarga/lectura de binarios con autorizacin ----
   function toAbsoluteUrl(pathOrUrl) {
     if (!pathOrUrl) return "";
     if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
@@ -402,7 +404,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const deleteIngresoFoto = (ingresoId, mediaId) =>
     api.del(`/api/ingresos/${ingresoId}/fotos/${mediaId}/`);
 
-  // Búsqueda por referencia de accesorio
+  // Bsqueda por referencia de accesorio
   export const buscarAccesorioPorRef = (ref) =>
     api.get(`/api/accesorios/buscar/?ref=${encodeURIComponent(ref||"")}`);
   // Entregar (requiere remito; opcional factura y fecha)
@@ -421,7 +423,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/equipos/${qs ? `?${qs}` : ""}`);
   };
-  // Check garantía de reparación por N/S
+  // Check garanta de reparacin por N/S
   export const checkGarantiaReparacion = (numero_serie, numero_interno) => {
     const params = new URLSearchParams();
     if (numero_serie) params.set("numero_serie", numero_serie);
@@ -430,7 +432,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
     return api.get(`/api/equipos/garantia-reparacion/${qs ? `?${qs}` : ""}`);
   };
 
-  // Check garantía de fábrica (por N/S en Excels de trazabilidad)
+  // Check garanta de fbrica (por N/S en Excels de trazabilidad)
   export const checkGarantiaFabrica = (numero_serie, marca) => {
     const params = new URLSearchParams();
     if (numero_serie) params.set("numero_serie", numero_serie);
@@ -452,7 +454,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const patchIngresoTecnico = (ingresoId, tecnico_id) =>
     api.patch(`/api/ingresos/${ingresoId}/asignar-tecnico/`, { tecnico_id });
 
-  // Solicitud de asignación por técnico
+  // Solicitud de asignacin por tcnico
   export const postSolicitarAsignacion = (ingresoId) =>
     api.post(`/api/ingresos/${ingresoId}/solicitar-asignacion/`, {});
 
@@ -472,7 +474,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const patchMarcaTecnico = (marcaId, tecnico_id) =>
     api.patch(`/api/catalogos/marcas/${marcaId}/tecnico/`, { tecnico_id });
 
-  // Aplica el técnico de la marca a TODOS los modelos (sobrescribe)
+  // Aplica el tcnico de la marca a TODOS los modelos (sobrescribe)
   export const postMarcaAplicarTecnico = (marcaId) =>
     api.post(`/api/catalogos/marcas/${marcaId}/tecnico/aplicar-a-modelos/`);
 
@@ -529,7 +531,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const postQuoteAnular = (ingresoId) =>
     api.post(`/api/quotes/${ingresoId}/anular/`);
 
-  // Cerrar reparación (setea la resolución)
+  // Cerrar reparacin (setea la resolucin)
   export async function postCerrarReparacion(id, body) {
     // body = { resolucion: "reparado" | "no_reparado" | "no_se_encontro_falla" | "presupuesto_rechazado" }
     return api.post(`/api/ingresos/${id}/cerrar/`, body);
@@ -544,7 +546,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
     api.get(`/api/ingresos/${ingresoId}/historial/`);
 
 
-  /* =============== M�TRICAS ================= */
+  /* =============== Mtricas ================= */
   export const getMetricasResumen = (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/metricas/resumen/${qs ? `?${qs}` : ""}`);
@@ -561,4 +563,8 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const getFeriados = () => api.get(`/api/metricas/feriados/`);
   export const postFeriado = (fecha, nombre) => api.post(`/api/metricas/feriados/`, { fecha, nombre });
   export const deleteFeriado = (fecha) => api.del(`/api/metricas/feriados/?fecha=${encodeURIComponent(fecha||"")}`);
+
+
+
+
 

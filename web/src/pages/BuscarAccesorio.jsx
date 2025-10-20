@@ -23,7 +23,7 @@ export default function BuscarAccesorio() {
     })();
   }, [ref]);
 
-  const titulo = ref ? `Servicios con referencia: ${ref}` : "Búsqueda por referencia de accesorio";
+  const titulo = ref ? `Servicios con referencia: ${ref}` : "Bsqueda por referencia de accesorio";
 
   return (
     <div className="max-w-5xl mx-auto p-4 space-y-4">
@@ -72,4 +72,5 @@ export default function BuscarAccesorio() {
     </div>
   );
 }
+
 

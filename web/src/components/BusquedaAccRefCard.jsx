@@ -14,14 +14,14 @@ export default function BusquedaAccRefCard() {
 
   return (
     <div className="border rounded p-4 mt-4">
-      <div className="font-semibold mb-2">Búsqueda por N° de referencia de accesorio</div>
+      <div className="font-semibold mb-2">Bsqueda por N de referencia de accesorio</div>
       <form onSubmit={onSubmit} className="flex gap-2">
         <input
           className="border rounded p-2 w-full max-w-md"
           placeholder="Ej.: ref A123, 001-XYZ, etc."
           value={ref}
           onChange={(e) => setRef(e.target.value)}
-          aria-label="Búsqueda por referencia de accesorio"
+          aria-label="Bsqueda por referencia de accesorio"
         />
         <button className="bg-blue-600 text-white px-3 py-2 rounded">
           Buscar
@@ -30,4 +30,5 @@ export default function BusquedaAccRefCard() {
     </div>
   );
 }
+
 

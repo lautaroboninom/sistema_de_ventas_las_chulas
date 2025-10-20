@@ -77,8 +77,8 @@ export default function MetricasClientes() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Métricas por clientes</h1>
-        <Link to="/metricas" className="text-blue-600 hover:underline">← Volver a Métricas</Link>
+        <h1 className="text-xl font-semibold">Mtricas por clientes</h1>
+        <Link to="/metricas" className="text-blue-600 hover:underline"> Volver a Mtricas</Link>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
@@ -91,7 +91,7 @@ export default function MetricasClientes() {
           <input type="date" value={hasta} onChange={e=>setHasta(e.target.value)} className="mt-1 border rounded px-2 py-1" />
         </div>
         <div>
-          <div className="text-sm text-gray-600">Técnico</div>
+          <div className="text-sm text-gray-600">Tcnico</div>
           <select className="mt-1 border rounded px-2 py-1 w-full" value={tecnicoId} onChange={e=>setTecnicoId(e.target.value)}>
             <option value="">Todos</option>
             {tecnicos.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
@@ -116,8 +116,9 @@ export default function MetricasClientes() {
         </div>
       </div>
 
-      <div className="text-sm text-gray-500">Esta vista está centrada en exportar. Si querés visual, abrimos otra iteración con top clientes.</div>
+      <div className="text-sm text-gray-500">Esta vista est centrada en exportar. Si quers visual, abrimos otra iteracin con top clientes.</div>
     </div>
   );
 }
+
 

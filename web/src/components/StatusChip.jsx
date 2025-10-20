@@ -70,7 +70,7 @@ function variantOf(value) {
 }
 
 function labelOf(value) {
-  // Si coincide con etiquetas oficiales, úsalas; sino capitaliza básica
+  // Si coincide con etiquetas oficiales, salas; sino capitaliza bsica
   const raw = String(value ?? "");
   const lower = raw.toLowerCase();
   // Buscar en labels conocidos
@@ -102,3 +102,4 @@ export default function StatusChip({ value, title }) {
     </span>
   );
 }
+

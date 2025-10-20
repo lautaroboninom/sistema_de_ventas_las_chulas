@@ -1,8 +1,8 @@
-import Row from "../../../components/Row";
+﻿import Row from "../../../components/Row";
 import { useMemo, useState, useEffect } from "react";
 import { formatDateTime as formatDateTimeHelper, resolveFechaIngreso } from "../../../lib/ui-helpers";
 import { resolutionLabel } from "../../../lib/constants";
-import { getBlob, postEntregarIngreso, patchIngreso, checkGarantiaFabrica } from "../../../lib/api";
+import { getBlob, postEntregarIngreso, patchIngreso, checkGarantiaFabrica, patchIngresoTecnico, postSolicitarAsignacion } from "../../../lib/api";
 
 export default function PrincipalTab(props) {
   const {
@@ -25,16 +25,18 @@ export default function PrincipalTab(props) {
     ubicaciones,
     ubicacionId,
     setUbicacionId,
-    savingUb,
-    saveUbicacion,
-    ubDirty,
+    // savingUb,
+    // saveUbicacion,
+    // ubDirty,
     tecnicos,
     tecnicoId,
     setTecnicoId,
-    saveTecnico,
-    savingTech,
-    techDirty,
+    // saveTecnico,
+    // savingTech,
+    // techDirty,
     canAssignTecnico,
+    isTech,
+    userId,
     // entrega
     canEditEntrega,
     editEntrega,
@@ -51,7 +53,56 @@ export default function PrincipalTab(props) {
     toDatetimeLocalStr,
   } = props;
 
-  // Auto-chequeo de garantía de fábrica cuando se edita N/S
+  // Estados/dirty locales (encapsulados en el tab)
+  const [savingTech, setSavingTech] = useState(false);
+  const [savingUb, setSavingUb] = useState(false);
+  const [mailEnviado, setMailEnviado] = useState(false);
+  const [solicitando, setSolicitando] = useState(false);
+  const techDirty = Boolean(canAssignTecnico && (tecnicoId ?? null) !== (data?.asignado_a ?? null));
+  const _selUb = (ubicacionId ? Number(ubicacionId) : null);
+  const _curUb = (data?.ubicacion_id ?? null);
+  const ubDirty = _selUb !== null && _selUb !== _curUb;
+  // Labels auxiliares (evitar expresiones JSX complejas)
+  const pendingLabel = (() => {
+    if (data?.tecnico_solicitado_nombre) return `Solicitud de asignación pendiente: ${data.tecnico_solicitado_nombre}`;
+    if (data?.tecnico_solicitado_id) return `Solicitud de asignación pendiente (ID ${data.tecnico_solicitado_id})`;
+    return "Solicitud de asignación pendiente";
+  })();
+  const otherTechLabel = (() => {
+    const name = data?.tecnico_solicitado_nombre;
+    const id = data?.tecnico_solicitado_id;
+    const quien = name ? name : (id ? `ID ${id}` : "otro técnico");
+    return `Ya hay una solicitud pendiente para ${quien}.`;
+  })();
+
+  async function saveTecnico() {
+    if (!canAssignTecnico || !techDirty || tecnicoId == null) return;
+    try {
+      setSavingTech(true);
+      await patchIngresoTecnico(id, Number(tecnicoId));
+      await refreshIngreso();
+      setErr("");
+    } catch (e) {
+      setErr(e?.message || "No se pudo asignar el técnico");
+    } finally {
+      setSavingTech(false);
+    }
+  }
+
+  async function saveUbicacion() {
+    if (!ubDirty) return;
+    try {
+      setSavingUb(true);
+      await patch({ ubicacion_id: _selUb });
+      setErr("");
+    } catch (e) {
+      setErr(e?.message || "No se pudo actualizar la ubicacion");
+    } finally {
+      setSavingUb(false);
+    }
+  }
+
+  // Auto-chequeo de garanta de fbrica cuando se edita N/S
   useEffect(() => {
     if (!editBasics) return;
     const ns = (formBasics?.numero_serie || "").trim();
@@ -79,7 +130,7 @@ export default function PrincipalTab(props) {
         <div className="border rounded p-4">
           <h2 className="font-semibold mb-2">Cliente</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
-            <Row label="Raz\u00f3n social">
+            <Row label="Razn social">
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-64"
@@ -90,7 +141,7 @@ export default function PrincipalTab(props) {
                 data.razon_social
               )}
             </Row>
-            <Row label="C\u00f3digo empresa">
+            <Row label="Cdigo empresa">
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-40"
@@ -101,7 +152,7 @@ export default function PrincipalTab(props) {
                 data.cod_empresa || "-"
               )}
             </Row>
-            <Row label="Tel\u00e9fono">
+            <Row label="Telfono">
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-48"
@@ -260,7 +311,7 @@ export default function PrincipalTab(props) {
                 data.equipo_variante || "-"
               )}
             </Row>
-            <Row label={"N\u00B0 serie"}>
+            <Row label={"N serie"}>
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-60"
@@ -271,7 +322,7 @@ export default function PrincipalTab(props) {
                 <span>{numeroSerie || "-"}</span>
               )}
             </Row>
-            <Row label="Garant\u00eda (f\u00e1brica)">
+            <Row label="Garanta (fbrica)">
               {editBasics ? (
                 <input
                   type="checkbox"
@@ -279,10 +330,10 @@ export default function PrincipalTab(props) {
                   onChange={(e) => setFormBasics((s) => ({ ...(s || {}), garantia: e.target.checked }))}
                 />
               ) : (
-                <span>{data.garantia ? "S\u00ed" : "No"}</span>
+                <span>{data.garantia ? "Sí" : "No"}</span>
               )}
             </Row>
-            <Row label="Garant\u00eda de reparaci\u00f3n">
+            <Row label="Garanta de reparacin">
               {editBasics ? (
                 <input
                   type="checkbox"
@@ -290,10 +341,10 @@ export default function PrincipalTab(props) {
                   onChange={(e) => setFormBasics((s) => ({ ...(s || {}), garantia_reparacion: e.target.checked }))}
                 />
               ) : (
-                <span>{data?.garantia_reparacion ? "S\u00ed" : "No"}</span>
+                <span>{data?.garantia_reparacion ? "Sí" : "No"}</span>
               )}
             </Row>
-            <Row label={"N\u00B0 interno (MG)"}>
+            <Row label={"N interno (MG)"}>
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-60"
@@ -304,7 +355,7 @@ export default function PrincipalTab(props) {
                 <span>{data.numero_interno || ""}</span>
               )}
             </Row>
-            <Row label={"N\u00B0 de remito"}>
+            <Row label={"N de remito"}>
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-60"
@@ -345,7 +396,7 @@ export default function PrincipalTab(props) {
           </Row>
         </div>
 
-        {/* Columna derecha: Estado/Asignacion/Ubicacion */}
+        {/* Columna derecha: Estado/Asignacin/ubicacion */}
         <div className="border rounded p-4">
           <h2 className="font-semibold mb-2">Estado</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
@@ -365,14 +416,14 @@ export default function PrincipalTab(props) {
                 }
               })()}
             </Row>
-            <Row label="Resoluci\u00f3n">{data.resolucion ? resolutionLabel(data.resolucion) : "-"}</Row>
+            <Row label="Resolución">{data.resolucion ? resolutionLabel(data.resolucion) : "-"}</Row>
             <Row label="Fecha ingreso">{formatDateTimeHelper(resolveFechaIngreso(data))}</Row>
             <Row label="Fecha servicio">{data.fecha_servicio ? formatDateTimeHelper(data.fecha_servicio) : "-"}</Row>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
             <div>
-              <h2 className="font-semibold mb-2">Asignaci\u00f3n</h2>
+              <h2 className="font-semibold mb-2">Asignación</h2>
               <div className="flex flex-col items-start gap-2">
                 {canAssignTecnico ? (
                   <>
@@ -381,7 +432,7 @@ export default function PrincipalTab(props) {
                       value={tecnicoId ?? ""}
                       onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}
                     >
-                      <option value="">-- Seleccionar t\u00e9cnico --</option>
+                      <option value="">-- Seleccionar técnico --</option>
                       {tecnicos.map((t) => (
                         <option key={t.id} value={t.id}>
                           {t.nombre}
@@ -397,9 +448,47 @@ export default function PrincipalTab(props) {
                     >
                       {savingTech ? "Guardando..." : "Guardar"}
                     </button>
+                    {(data?.tecnico_solicitado_id && data?.tecnico_solicitado_id !== (data?.asignado_a ?? null)) && (
+                      <div className="text-xs text-amber-700 mt-1">{pendingLabel}</div>
+                    )}
                   </>
                 ) : (
-                  <div className="text-sm text-gray-500">No tenes permiso para reasignar tecnicos.</div>
+                  <div className="text-sm text-gray-500">
+                    {mailEnviado && (<div className="text-xs text-emerald-700">Se envió el mail</div>)}
+                    <div>No tenés permiso para reasignar técnicos.</div>
+                    {isTech && (data?.estado || "") !== "entregado" && Number(userId || 0) > 0 && (
+                      <div className="mt-2">
+                        {data?.asignado_a === userId ? (
+                          <div className="text-xs text-gray-600">Ya estás asignado a este ingreso.</div>
+                        ) : data?.tecnico_solicitado_id === userId ? (
+                          <div className="text-xs text-amber-700">Solicitud de asignación enviada</div>
+                        ) : data?.tecnico_solicitado_id ? (
+                          <div className="text-xs text-gray-600">{otherTechLabel}</div>
+                        ) : (
+                          <button hidden={mailEnviado}
+                            className="bg-neutral-800 text-white px-3 py-2 rounded disabled:opacity-60"
+                            disabled={solicitando}
+                            onClick={async () => {
+                              try {
+                                setSolicitando(true);
+                                await postSolicitarAsignacion(id);
+                                await refreshIngreso();
+                                setMailEnviado(true);
+                                setErr("");
+                              } catch (e) {
+                                setErr(e?.message || "No se pudo solicitar la asignación");
+                              } finally {
+                                setSolicitando(false);
+                              }
+                            }}
+                            type="button"
+                          >
+                            {solicitando ? "Enviando..." : "Solicitar asignación"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
                 <div className="text-xs text-gray-500">
                   Actual: <b>{data.asignado_a_nombre || "-"}</b>
@@ -407,16 +496,16 @@ export default function PrincipalTab(props) {
               </div>
             </div>
             <div>
-              <h2 className="font-semibold mb-2">Ubicaci\u00f3n</h2>
+              <h2 className="font-semibold mb-2">Ubicación</h2>
               <div className="flex flex-col items-start gap-2">
                 <select
                   className="border rounded p-2"
                   value={ubicacionId}
                   onChange={(e) => setUbicacionId(e.target.value)}
-                  aria-label="Seleccionar ubicacion"
+                  aria-label="Seleccionar ubicación"
                 >
                   <option value="" disabled>
-                    Seleccione la ubicacion.
+                    Seleccione la ubicación.
                   </option>
                   {ubicaciones.map((u) => (
                     <option key={u.id} value={String(u.id)}>
@@ -434,7 +523,7 @@ export default function PrincipalTab(props) {
                   {savingUb ? "Guardando..." : "Guardar"}
                 </button>
               </div>
-              <div className="text-xs text-gray-500">La ubicaci\u00f3n puede modificarse desde aqu\u00ed.</div>
+              <div className="text-xs text-gray-500">La ubicación puede modificarse desde aquí.</div>
             </div>
             {numeroSerie && (
               <div className="flex justify-end mb-2 w-full">
@@ -451,7 +540,7 @@ export default function PrincipalTab(props) {
         </div>
       </div>
 
-      {/* Bot\u00f3n de orden de salida (liberar) */}
+      {/* Botón de orden de salida (liberar) */}
       {release && (Boolean(data?.resolucion) || data?.estado === "liberado") && (
         <button
           className="bg-neutral-800 text-white px-3 py-2 rounded mt-4"
@@ -463,6 +552,7 @@ export default function PrincipalTab(props) {
               window.open(url, "_blank", "noopener");
               setTimeout(() => URL.revokeObjectURL(url), 60_000);
               await refreshIngreso();
+                                setMailEnviado(true);
             } catch (e) {
               setErr(e?.message || "No se pudo imprimir la orden de salida");
             }
@@ -516,6 +606,7 @@ export default function PrincipalTab(props) {
                     }
                     await postEntregarIngreso(id, entrega);
                     await refreshIngreso();
+                                setMailEnviado(true);
                   } catch (e) {
                     setErr(e?.message || "No se pudo marcar como entregado");
                   }
@@ -594,6 +685,7 @@ export default function PrincipalTab(props) {
                         };
                         await patchIngreso(id, payload);
                         await refreshIngreso();
+                                setMailEnviado(true);
                         setEditEntrega(false);
                         setErr("");
                       } catch (e) {
@@ -629,10 +721,10 @@ export default function PrincipalTab(props) {
       {/* Alquiler */}
       <div className="border rounded p-4 mt-4">
         <h2 className="font-semibold mb-2">Alquiler</h2>
-        <Row label="\u00bfSe alquil\u00f3?">
+        <Row label="Se alquil?">
           <input type="checkbox" checked={!!data.alquilado} onChange={(e) => patch({ alquilado: e.target.checked })} />
         </Row>
-        <Row label="\u00bfA qui\u00e9n?">
+        <Row label="A quin?">
           <input className="border rounded p-1 w-80" value={data.alquiler_a || ""} onChange={(e) => patch({ alquiler_a: e.target.value })} />
         </Row>
         <Row label="Remito">
@@ -650,4 +742,15 @@ export default function PrincipalTab(props) {
     </>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
 

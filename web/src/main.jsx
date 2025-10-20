@@ -44,13 +44,13 @@ import Garantias from "./pages/Garantias.jsx";
 function NotFound() {
   return (
     <div className="p-8 text-center text-gray-600">
-      Página no encontrada
+      Pgina no encontrada
     </div>
   );
 }
 
 const router = createBrowserRouter([
-  // públicas
+  // pblicas
   { path: "/login", element: <Login /> },
   { path: "/recuperar", element: <ForgotPassword /> },
   { path: "/restablecer", element: <ResetPassword /> },
@@ -65,7 +65,7 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
             <div className="p-6">
-              <h1 className="text-2xl font-bold">Bienvenido 👋</h1>
+              <h1 className="text-2xl font-bold">Bienvenido </h1>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <BusquedaNSCard />
                 <BusquedaAccRefCard />
@@ -75,7 +75,7 @@ const router = createBrowserRouter([
         ),
       },
 
-      // Operación
+      // Operacin
       {
         path: "buscar-ns",
         element: (
@@ -338,3 +338,4 @@ if (import.meta.env.PROD && import.meta.env.VITE_SW === '1' && 'serviceWorker' i
     });
   });
 }
+
