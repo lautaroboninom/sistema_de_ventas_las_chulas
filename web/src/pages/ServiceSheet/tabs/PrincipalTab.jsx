@@ -1,4 +1,4 @@
-﻿import Row from "../../../components/Row";
+import Row from "../../../components/Row";
 import { useMemo, useState, useEffect } from "react";
 import { formatDateTime as formatDateTimeHelper, resolveFechaIngreso } from "../../../lib/ui-helpers";
 import { resolutionLabel } from "../../../lib/constants";

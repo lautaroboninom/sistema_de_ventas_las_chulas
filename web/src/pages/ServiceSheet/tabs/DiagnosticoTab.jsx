@@ -1,4 +1,4 @@
-﻿import Row from "../../../components/Row";
+import Row from "../../../components/Row";
 import IngresoPhotos from "../../../components/IngresoPhotos";
 import { RESOLUCION_OPTIONS } from "../../../lib/constants";
 import { postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso } from "../../../lib/api";
