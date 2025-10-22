@@ -1,4 +1,4 @@
-﻿const runtimeFlags = {};
+const runtimeFlags = {};
 
 export function registerFeatures(serverFlags = {}) {
   if (!serverFlags || typeof serverFlags !== "object") return;

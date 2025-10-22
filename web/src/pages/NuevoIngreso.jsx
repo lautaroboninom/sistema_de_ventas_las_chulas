@@ -1,4 +1,4 @@
-// web/src/pages/NuevoIngreso.jsx (reconstruido)
+﻿// web/src/pages/NuevoIngreso.jsx (reconstruido)
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -25,7 +25,7 @@ const TextArea = (p) => <textarea {...p} className={`border rounded p-2 w-full $
 export default function NuevoIngreso() {
   const navigate = useNavigate();
 
-  // Catlogos base
+  // Catálogos base
   const [marcas, setMarcas] = useState([]);
   const [motivos, setMotivos] = useState([]);
   const [modelos, setModelos] = useState([]);
@@ -46,7 +46,7 @@ export default function NuevoIngreso() {
   // Variante (opcional)
   const [varianteTxt, setVarianteTxt] = useState("");
   const [varianteSugeridas, setVarianteSugeridas] = useState([]);
-  // Catlogo (tipos/modelos) para sugerir variantes
+  // Catálogo (tipos/modelos) para sugerir variantes
   const [catTipoId, setCatTipoId] = useState(null);
   const [catModelos, setCatModelos] = useState([]);
 
@@ -73,7 +73,7 @@ export default function NuevoIngreso() {
   const [nuevoAcc, setNuevoAcc] = useState({ descripcion: "", referencia: "" });
   const [accItems, setAccItems] = useState([]);
 
-  // Propietario y tcnico
+  // Propietario y técnico
   const [propietario, setPropietario] = useState({ nombre: "", contacto: "", doc: "" });
   const [tecnicos, setTecnicos] = useState([]);
   const [tecnicoId, setTecnicoId] = useState(null);
@@ -126,7 +126,7 @@ export default function NuevoIngreso() {
     }
   }
 
-  // Garanta de reparacin (por N/S o N interno MG) - debounce 400ms
+  // Garantía de reparación (por N/S o N interno MG) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const mg = (form.equipo.numero_interno || "").trim();
@@ -145,7 +145,7 @@ export default function NuevoIngreso() {
     return () => clearTimeout(h);
   }, [form.equipo.numero_serie, form.equipo.numero_interno]);
 
-  // Garanta de fbrica (por N/S en Excels) - debounce 400ms
+  // Garantía de fbrica (por N/S en Excels) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const marcaSel = (() => {
@@ -199,7 +199,7 @@ export default function NuevoIngreso() {
           setTecnicos(tecs || []);
         } catch {}
       } catch (e) {
-        setErr(e?.message || "Error cargando catlogos");
+        setErr(e?.message || "Error cargando Catálogos");
       }
     })();
   }, []);
@@ -258,7 +258,7 @@ export default function NuevoIngreso() {
       .catch((e) => setErr(e?.message || "Error cargando modelos"));
   }, [marcaId, tipoSel]);
 
-  // Variantes desde catlogo segn modelo interno seleccionado
+  // Variantes desde Catálogo segn modelo interno seleccionado
   useEffect(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
     if (!m || !marcaId || !catTipoId) {
@@ -297,13 +297,13 @@ export default function NuevoIngreso() {
     })();
   }, [form.equipo.modelo_id, modelos, marcaId, catTipoId, catModelos]);
 
-  // Si el modelo define tcnico por defecto
+  // Si el modelo define técnico por defecto
   useEffect(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
     if (m?.tecnico_id) setTecnicoId(m.tecnico_id);
   }, [form.equipo.modelo_id, modelos]);
 
-  // Fallback: tcnico por marca si el modelo no define
+  // Fallback: técnico por marca si el modelo no define
   useEffect(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
     if (m?.tecnico_id) {
@@ -372,19 +372,19 @@ export default function NuevoIngreso() {
 
     if (!form.equipo.marca_id) {
       setLoading(false);
-      setErr("Seleccion una marca vlida de la lista.");
+      setErr("Seleccioná una marca válida de la lista.");
       return;
     }
     if (!form.equipo.modelo_id) {
       setLoading(false);
-      setErr("Seleccion un modelo.");
+      setErr("Seleccioná un modelo.");
       return;
     }
 
     const c = resolveCliente(clienteRsInput, clienteCodInput);
     if (!c?.id) {
       setLoading(false);
-      setErr("Debs seleccionar un cliente vlido de la lista.");
+      setErr("Debés seleccionar un cliente válido de la lista.");
       return;
     }
 
@@ -522,7 +522,7 @@ export default function NuevoIngreso() {
             </div>
           )}
           <p className="text-xs text-gray-600 mt-2">
-            Debs seleccionar un cliente existente. Pods buscar por <b>Razn social</b> o por
+            Debés seleccionar un cliente existente. Pods buscar por <b>Razn social</b> o por
             <b> Cdigo</b>; si complets ambos, deben corresponder al mismo cliente.
           </p>
         </fieldset>
@@ -609,14 +609,14 @@ export default function NuevoIngreso() {
               </datalist>
             </div>
 
-            {/* Tcnico asignado */}
+            {/* técnico asignado */}
             <div className="md:col-span-2">
-              <label className="text-sm">Tcnico asignado</label>
+              <label className="text-sm">técnico asignado</label>
               <Select
                 value={tecnicoId ?? ""}
                 onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}
               >
-                <option value="">-- Seleccionar tcnico --</option>
+                <option value="">-- Seleccionar técnico --</option>
                 {tecnicos.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.nombre}
@@ -624,7 +624,7 @@ export default function NuevoIngreso() {
                 ))}
               </Select>
               <div className="text-xs text-gray-600 mt-1">
-                Si el modelo tiene tcnico por defecto, se completa solo.
+                Si el modelo tiene técnico por defecto, se completa solo.
               </div>
             </div>
 
@@ -644,7 +644,7 @@ export default function NuevoIngreso() {
               />
             </div>
 
-            {/* Garantas */}
+            {/* Garantías */}
             <div className="flex items-center gap-2">
               <input
                 id="gar"
@@ -652,7 +652,7 @@ export default function NuevoIngreso() {
                 checked={form.equipo.garantia}
                 onChange={onChange("equipo.garantia")}
               />
-              <label htmlFor="gar">En garanta</label>
+              <label htmlFor="gar">En Garantía</label>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -660,7 +660,7 @@ export default function NuevoIngreso() {
                 checked={form.garantia_reparacion}
                 onChange={(e) => setForm((f) => ({ ...f, garantia_reparacion: e.target.checked }))}
               />
-              <span className="text-sm">Garanta de reparacin</span>
+              <span className="text-sm">Garantía de reparación</span>
             </div>
           </div>
         </fieldset>
@@ -752,7 +752,7 @@ export default function NuevoIngreso() {
                       (a) => (a.nombre || "").trim().toLowerCase() === d
                     );
                     if (!acc) {
-                      setErr("Eleg una descripcin vlida de la lista");
+                      setErr("Eleg una descripcin válida de la lista");
                       return;
                     }
                     setAccItems((list) => [
@@ -825,4 +825,5 @@ export default function NuevoIngreso() {
     </div>
   );
 }
+
 

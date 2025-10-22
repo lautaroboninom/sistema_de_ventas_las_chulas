@@ -47,14 +47,14 @@ export default function BuscarNS() {
     })();
   }, [ns]);
 
-  const titulo = ns ? `Resultados para N/S o MG: ${ns}` : "Bsqueda por N/S o MG";
+  const titulo = ns ? `Resultados para N/S o MG: ${ns}` : "Búsqueda por N/S o MG";
 
   return (
     <div className="max-w-5xl mx-auto p-4 space-y-4">
       <h1 className="text-2xl font-bold">{titulo}</h1>
       {err && <div className="bg-red-100 text-red-700 border border-red-300 p-2 rounded">{err}</div>}
       {loading ? "Cargando..." :
-        rows.length === 0 ? <div className="text-sm text-gray-500">No se encontraron ingresos con ese N de serie o MG.</div> :
+        rows.length === 0 ? <div className="text-sm text-gray-500">No se encontraron ingresos con ese N° de serie o MG.</div> :
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
@@ -63,7 +63,7 @@ export default function BuscarNS() {
                 <th className="p-2">Marca</th>
                 <th className="p-2">Modelo</th>
                 <th className="p-2">MG</th>
-                <th className="p-2">N serie</th>
+                <th className="p-2">N° serie</th>
                 <th className="p-2">Tipo</th>
                 <th className="p-2">Fecha de ingreso</th>
               </tr>

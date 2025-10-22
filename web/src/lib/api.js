@@ -443,8 +443,9 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const getGeneralPorCliente = (customerId) =>
     api.get(`/api/clientes/${customerId}/general/`);
 
-  export async function getIngreso(id) {
-    return api.get(`/api/ingresos/${id}/`);
+  export async function getIngreso(id, params = null) {
+    const qs = params ? new URLSearchParams(params).toString() : "";
+    return api.get(`/api/ingresos/${id}/${qs ? `?${qs}` : ""}`);
   }
 
   export async function patchIngreso(id, payload) {

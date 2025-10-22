@@ -17,14 +17,14 @@ export default function BusquedaNSCard() {
 
   return (
     <div className="border rounded p-4 mt-4">
-      <div className="font-semibold mb-2">Bsqueda por N/S o MG</div>
+      <div className="font-semibold mb-2">Búsqueda por N/S o MG</div>
       <form onSubmit={onSubmit} className="flex gap-2">
         <input
           className="border rounded p-2 w-full max-w-md"
-          placeholder="Ingres el N de serie o MG"
+          placeholder="Ingresá el N° de serie o MG"
           value={ns}
           onChange={(e) => setNs(e.target.value)}
-          aria-label="Bsqueda por nmero de serie o MG"
+          aria-label="Búsqueda por número de serie o MG"
         />
         <button className="bg-blue-600 text-white px-3 py-2 rounded">
           Buscar
@@ -42,10 +42,10 @@ export default function BusquedaNSCard() {
         >
           <input
             className="border rounded p-2 w-full max-w-md"
-            placeholder="Ingres el N de Orden (OS)"
+            placeholder="Ingresá el N° de Orden (OS)"
             value={os}
             onChange={(e) => setOs(e.target.value)}
-            aria-label="Bsqueda por nmero de orden"
+            aria-label="Búsqueda por número de orden"
           />
           <button className="bg-blue-600 text-white px-3 py-2 rounded">
             Ir

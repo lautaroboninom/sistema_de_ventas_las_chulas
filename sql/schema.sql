@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS locations (
 INSERT INTO locations(nombre) VALUES
   ('Taller'),
   ('Sarmiento'),
-  ('Estantería alquiler'),
+  ('Estantería de Alquiler'),
   ('Desguace')
 ON CONFLICT DO NOTHING;
 

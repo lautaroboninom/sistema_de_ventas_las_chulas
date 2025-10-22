@@ -1,4 +1,4 @@
-import Row from "../../../components/Row";
+﻿import Row from "../../../components/Row";
 import IngresoPhotos from "../../../components/IngresoPhotos";
 import { RESOLUCION_OPTIONS } from "../../../lib/constants";
 import { postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso } from "../../../lib/api";
@@ -34,22 +34,22 @@ export default function DiagnosticoTab({
   setErr,
   refreshIngreso,
   setShowReparadoToast,
+  savingDiag,
   // fotos
   canManagePhotos,
 }) {
-  // Estados locales migrados
   const [addingAcc, setAddingAcc] = useState(false);
   const [deletingAccId, setDeletingAccId] = useState(null);
   const [savingAll, setSavingAll] = useState(false);
   const [savingResol, setSavingResol] = useState(false);
 
-  // Accesorios
+
   async function addAccesorio() {
     try {
       const d = (nuevoAcc?.descripcion || "").trim().toLowerCase();
-      if (!d) { setErr("Escrib una descripcin"); return; }
+      if (!d) { setErr("Escribí­ una descripción"); return; }
       const acc = (accesCatalogo || []).find(a => (a?.nombre || "").trim().toLowerCase() === d);
-      if (!acc) { setErr("Eleg una descripcin vlida de la lista"); return; }
+      if (!acc) { setErr("Elegí­ una descripción válida de la lista"); return; }
       setAddingAcc(true);
       await postAccesorioIngreso(id, {
         accesorio_id: Number(acc.id),
@@ -78,7 +78,6 @@ export default function DiagnosticoTab({
     }
   }
 
-  // Diagnstico y trabajos
   async function saveDiagYreparacion() {
     try {
       setSavingAll(true);
@@ -97,16 +96,15 @@ export default function DiagnosticoTab({
     }
   }
 
-  // Resolucin
   async function saveResolucion() {
     try {
-      if (!resolucion) { setErr("Seleccion una resolucin."); return; }
+      if (!resolucion) { setErr("Seleccioná una resolución."); return; }
       setSavingResol(true);
       await postCerrarReparacion(id, { resolucion });
       await refreshIngreso();
       setErr("");
     } catch (e) {
-      setErr(e?.message || "No se pudo guardar la resolucin");
+      setErr(e?.message || "No se pudo guardar la resolución");
     } finally {
       setSavingResol(false);
     }
@@ -137,7 +135,7 @@ export default function DiagnosticoTab({
                         disabled={deletingAccId === it.id}
                         type="button"
                       >
-                        {deletingAccId === it.id ? "quitando..." : "quitar"}
+                        {deletingAccId === it.id ? "Quitando..." : "Quitar"}
                       </button>
                     )}
                   </li>
@@ -155,7 +153,7 @@ export default function DiagnosticoTab({
                 <input
                   className="border rounded p-2 min-w-[240px]"
                   list="accesorios_catalogo"
-                  placeholder="Descripcin (eleg de la lista)"
+                  placeholder="Descripción (elegí­ de la lista)"
                   value={nuevoAcc.descripcion}
                   onChange={(e) => setNuevoAcc((s) => ({ ...s, descripcion: e.target.value }))}
                 />
@@ -166,7 +164,7 @@ export default function DiagnosticoTab({
                 </datalist>
                 <input
                   className="border rounded p-2 w-40"
-                  placeholder="Nro referencia (opcional)"
+                  placeholder="Nro de referencia (opcional)"
                   value={nuevoAcc.referencia}
                   onChange={(e) => setNuevoAcc((s) => ({ ...s, referencia: e.target.value }))}
                 />
@@ -176,7 +174,7 @@ export default function DiagnosticoTab({
                   disabled={addingAcc || !(nuevoAcc.descripcion || "").trim()}
                   type="button"
                 >
-                  {addingAcc ? "agregando..." : "agregar"}
+                  {addingAcc ? "Agregando..." : "Agregar"}
                 </button>
               </div>
             </div>
@@ -184,7 +182,7 @@ export default function DiagnosticoTab({
         </div>
       </div>
 
-      <h2 className="font-semibold mb-2">Descripcin del problema (diagnstico)</h2>
+      <h2 className="font-semibold mb-2">Descripción del problema (diagnóstico)</h2>
 
       <div className="flex flex-wrap items-end gap-3 mb-3">
         <div>
@@ -209,7 +207,7 @@ export default function DiagnosticoTab({
           {canResolve && (
             <>
               <div className="min-w-[260px]">
-                <label className="block text-sm text-gray-600 mb-1">Resolucin de reparacin</label>
+                <label className="block text-sm text-gray-600 mb-1">Resolución de reparación</label>
                 <select
                   className="border rounded p-2 w-full"
                   value={resolucion}
@@ -231,7 +229,7 @@ export default function DiagnosticoTab({
                 onClick={saveResolucion}
                 type="button"
               >
-                {savingResol ? "Guardando..." : "Guardar resolucin"}
+                {savingResol ? "Guardando..." : "Guardar resolución"}
               </button>
             </>
           )}
@@ -261,8 +259,8 @@ export default function DiagnosticoTab({
         className="w-full border rounded p-2 min-h-[180px]"
         value={descripcion}
         onChange={(e) => setDescripcion(e.target.value)}
-        placeholder="Ej.: Ingreso de agua; placa de control con xido; vlvula X no abre..."
         disabled={typeof canEditDiag === 'boolean' ? !canEditDiag : false}
+        placeholder="Ej.: Ingreso de agua; placa de control con óxido; válvula X no abre..."
       />
 
       <div className="border rounded p-4 mt-4">
@@ -272,16 +270,16 @@ export default function DiagnosticoTab({
           value={trabajos}
           onChange={(e) => setTrabajos(e.target.value)}
           disabled={typeof canEditDiag === 'boolean' ? !canEditDiag : false}
-          placeholder="Ej.: Cambio de turbina; limpieza y secado; resoldado de conector; calibracin; pruebas OK."
+          placeholder="Ej.: Cambio de turbina; limpieza y secado; resoldado de conector; calibración; pruebas OK."
         />
         <div className="mt-2 text-xs text-gray-500" aria-live="polite">
-          {savingAll ? "Guardando..." : "Los cambios se guardan automticamente"}
+          {(savingDiag || savingAll) ? "Guardando..." : "Los cambios se guardan automǭticamente"}
         </div>
       </div>
 
       <IngresoPhotos ingresoId={Number(id)} canManage={canManagePhotos} />
 
-      <Row label="Faja de garanta Nro">
+      <Row label="Faja de garantí­a Nro">
         <input
           className="border rounded p-1 w-60"
           value={data.faja_garantia || ""}
@@ -291,7 +289,4 @@ export default function DiagnosticoTab({
     </div>
   );
 }
-
-
-
 

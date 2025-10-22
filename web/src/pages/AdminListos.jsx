@@ -108,7 +108,7 @@ export default function AdminListos() {
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filtrar por OS, cliente, equipo, serie, resolucin"
+          placeholder="Filtrar por OS, cliente, equipo, serie, resolución"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar listos para retiro"
         />

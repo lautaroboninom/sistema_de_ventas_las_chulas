@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getUbicaciones, getGeneralEquipos } from "../lib/api";
 import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, nsPreferInternoOf } from "../lib/ui-helpers";
 import { useNavigate } from "react-router-dom";
@@ -15,26 +15,34 @@ export default function Depositos() {
     getUbicaciones().then(setUbicaciones).catch(e => setErr(e.message||"Error ubicaciones"));
   }, []);
 
+  const ubicacionNombre = useMemo(() => {
+    const u = ubicaciones.find(x => String(x.id) === String(ubicacionId));
+    return u?.nombre || "";
+  }, [ubicaciones, ubicacionId]);
+
   useEffect(() => {
     if (!ubicacionId) { setRows([]); return; }
     (async () => {
       setLoading(true); setErr("");
       try {
-        const data = await getGeneralEquipos({ ubicacion_id: ubicacionId, solo_taller: false });
+        // La API filtra por nombre (param "ubicacion"), no por id
+        const params = {};
+        if (ubicacionNombre) params["ubicacion"] = ubicacionNombre;
+        const data = await getGeneralEquipos(params);
         setRows(data);
       } catch (e) {
         setErr(e.message || "Error cargando equipos");
       } finally { setLoading(false); }
     })();
-  }, [ubicacionId]);
+  }, [ubicacionId, ubicacionNombre]);
 
   return (
     <div className="p-4 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-3">Depsitos</h1>
+      <h1 className="text-2xl font-bold mb-3">Depósitos</h1>
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-sm">Depsito / Ubicacin:</span>
+        <span className="text-sm">Depósito / Ubicación:</span>
         <select className="border rounded p-2" value={ubicacionId} onChange={(e)=>setUbicacionId(e.target.value)}>
-          <option value="">Eleg una ubicacin</option>
+          <option value="">Elegí una Ubicación</option>
           {ubicaciones.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
         </select>
       </div>
@@ -50,7 +58,7 @@ export default function Depositos() {
                 <th className="p-2 text-left">Marca</th>
                 <th className="p-2 text-left">Modelo</th>
                 <th className="p-2 text-left">Tipo</th>
-                <th className="p-2 text-left">N Serie</th>
+                <th className="p-2 text-left">N° Serie</th>
                 <th className="p-2 text-left">Estado</th>
                 <th className="p-2 text-left">Fecha ingreso</th>
               </tr>

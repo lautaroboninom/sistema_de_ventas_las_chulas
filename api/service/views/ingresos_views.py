@@ -1,6 +1,8 @@
 from django.db import connection, transaction
+import time
 import os
 import json
+import logging
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import permissions
@@ -11,7 +13,7 @@ from django.http import HttpResponse
 from io import BytesIO
 from openpyxl import Workbook
 from django.conf import settings
-from django.core.mail import send_mail
+from django.core.mail import send_mail, get_connection, EmailMessage
 
 from .helpers import (
     _fetchall_dicts,
@@ -28,6 +30,8 @@ from .helpers import (
     q,
     require_roles,
 )
+
+logger = logging.getLogger(__name__)
 from ..serializers import (
     IngresoDetailSerializer,
     IngresoDetailWithAccesoriosSerializer,
@@ -94,6 +98,7 @@ class PendientesPresupuestoView(APIView):
                 SELECT t.id, t.estado, t.presupuesto_estado,
                        c.razon_social,
                        d.numero_serie,
+                       d.n_de_control AS numero_interno,
                        COALESCE(b.nombre,'') AS marca,
                        COALESCE(m.nombre,'') AS modelo,
                        COALESCE(m.tipo_equipo,'') AS tipo_equipo,
@@ -783,6 +788,7 @@ class GeneralEquiposView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         ubic = (request.GET.get("ubicacion") or "").strip()
+        ubic_id_raw = (request.GET.get("ubicacion_id") or "").strip()
         estado_raw = (request.GET.get("estado") or "").strip()
         q_raw = (request.GET.get("q") or "").strip()
         estados = [e.strip() for e in estado_raw.split(",") if e.strip()] if estado_raw else []
@@ -793,6 +799,14 @@ class GeneralEquiposView(APIView):
             if ubic:
                 wh.append("LOWER(loc.nombre) = LOWER(%s)")
                 params.append(ubic)
+            else:
+                # Compat: permitir filtrar por ubicacion_id (numérico)
+                try:
+                    if ubic_id_raw and str(int(ubic_id_raw)) == ubic_id_raw:
+                        wh.append("t.ubicacion_id = %s")
+                        params.append(int(ubic_id_raw))
+                except Exception:
+                    pass
             if estados:
                 placeholders = ",".join(["%s"] * len(estados))
                 wh.append(f"t.estado IN ({placeholders})")
@@ -850,23 +864,180 @@ class IngresoAsignarTecnicoView(APIView):
                 [tecnico_id], one=True)
         if not ok:
             return Response({"detail": "Técnico inválido"}, status=400)
-        exec_void("UPDATE ingresos SET asignado_a=%s WHERE id=%s", [tecnico_id, ingreso_id])
-        # Marcar solicitud aceptada si existe la tabla auxiliar
         try:
-            exec_void(
-                """
-                UPDATE ingreso_assignment_requests
-                   SET accepted_at = now(), status = 'aceptado'
-                 WHERE ingreso_id = %s
-                   AND usuario_id = %s
-                   AND accepted_at IS NULL
-                   AND canceled_at IS NULL
-                """,
-                [ingreso_id, tecnico_id],
-            )
+            prev = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+            logger.info(f"[AsignarTecnico] ingreso={ingreso_id} prev={prev and prev.get('asignado_a')} new={tecnico_id}")
+        except Exception:
+            logger.warning(f"[AsignarTecnico] ingreso={ingreso_id} could not read previous asignado_a")
+        exec_void("UPDATE ingresos SET asignado_a=%s WHERE id=%s", [tecnico_id, ingreso_id])
+        # Log post-commit para verificar persistencia real en DB
+        try:
+            def _post_commit_log():
+                try:
+                    row_pc = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+                    logger.info(f"[AsignarTecnico][post_commit] ingreso={ingreso_id} persisted={row_pc and row_pc.get('asignado_a')}")
+                except Exception:
+                    logger.warning(f"[AsignarTecnico][post_commit] ingreso={ingreso_id} read failed after commit")
+            transaction.on_commit(_post_commit_log)
         except Exception:
             pass
-        return Response({"ok": True, "asignado_a": tecnico_id})
+        try:
+            post = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+            logger.info(f"[AsignarTecnico] ingreso={ingreso_id} after_update={post and post.get('asignado_a')}")
+        except Exception:
+            logger.warning(f"[AsignarTecnico] ingreso={ingreso_id} could not read asignado_a after update")
+        # Marcar solicitud aceptada si existe la tabla auxiliar (aislado en savepoint)
+        try:
+            with transaction.atomic():
+                exec_void(
+                    """
+                    UPDATE ingreso_assignment_requests
+                       SET accepted_at = now(), status = 'aceptado'
+                     WHERE ingreso_id = %s
+                       AND usuario_id = %s
+                       AND accepted_at IS NULL
+                       AND canceled_at IS NULL
+                    """,
+                    [ingreso_id, tecnico_id],
+                )
+        except Exception:
+            # si la tabla no existe o falla, no romper la transacción principal
+            pass
+        try:
+            who = q("SELECT COALESCE(nombre,'') AS nombre, COALESCE(email,'') AS email FROM users WHERE id=%s", [tecnico_id], one=True)
+            nombre = (who and who.get("nombre")) or ""
+            email_to = (who and who.get("email")) or ""
+        except Exception:
+            nombre = ""
+            email_to = ""
+        email_sent = False
+        email_debug = {}
+        try:
+            notify_on_assign = getattr(settings, "ASSIGNMENT_NOTIFY_ON_ASSIGN", "1")
+            notify_on_assign = str(notify_on_assign).lower() in ("1", "true", "yes")
+        except Exception:
+            notify_on_assign = True
+        try:
+            prev_id = prev and prev.get("asignado_a")
+        except Exception:
+            prev_id = None
+        if notify_on_assign and email_to and (str(prev_id or "") != str(tecnico_id)):
+            try:
+                info = q(
+                    """
+                    SELECT c.razon_social AS cliente,
+                           COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                           COALESCE(b.nombre,'') AS marca,
+                           COALESCE(m.nombre,'') AS modelo,
+                           COALESCE(d.numero_serie,'') AS numero_serie
+                      FROM ingresos t
+                      JOIN devices d   ON d.id = t.device_id
+                      JOIN customers c ON c.id = d.customer_id
+                      LEFT JOIN marcas b ON b.id = d.marca_id
+                      LEFT JOIN models m ON m.id = d.model_id
+                     WHERE t.id=%s
+                    """,
+                    [ingreso_id],
+                    one=True,
+                ) or {}
+                os_txt = os_label(ingreso_id)
+                cliente = info.get("cliente") or ""
+                equipo = " | ".join([p for p in [info.get("tipo_equipo") or "", info.get("marca") or "", info.get("modelo") or ""] if p])
+                ns = info.get("numero_serie") or ""
+                subject = f"NS: {ns or os_txt} fue reasignado a vos"
+                lines = [
+                    f"Te asignaron/reasignaron un ingreso.",
+                    f"OS: {os_txt}",
+                    f"Cliente: {cliente}",
+                    f"Equipo: {equipo or '-'}",
+                    f"N/S: {ns or '-'}",
+                ]
+                fe = getattr(settings, "FRONTEND_ORIGIN", "") or ""
+                if fe:
+                    try:
+                        base = fe.rstrip('/')
+                    except Exception:
+                        base = fe
+                    lines.append("")
+                    lines.append(f"Abrir hoja: {base}/ingresos/{ingreso_id}?tab=principal")
+                body = "\n".join(lines)
+                cc_list = getattr(settings, "ASSIGNMENT_NOTIFY_CC", []) or []
+                if not isinstance(cc_list, (list, tuple)):
+                    cc_list = [str(cc_list)] if cc_list else []
+                recips = [email_to] + [x for x in cc_list if x]
+                try:
+                    email_debug.update({
+                        "backend": getattr(settings, "EMAIL_BACKEND", None),
+                        "host": getattr(settings, "EMAIL_HOST", None),
+                        "port": getattr(settings, "EMAIL_PORT", None),
+                        "use_tls": getattr(settings, "EMAIL_USE_TLS", None),
+                        "use_ssl": getattr(settings, "EMAIL_USE_SSL", None),
+                        "from": getattr(settings, "DEFAULT_FROM_EMAIL", None),
+                        "recipients": list(recips),
+                    })
+                except Exception:
+                    pass
+                if recips:
+                    try:
+                        sent = send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, fail_silently=False)
+                        email_sent = bool(sent and sent > 0)
+                        logger.info("assign_notify sent=%s ingreso_id=%s to=%s", email_sent, ingreso_id, email_to)
+                    except Exception as e:
+                        try:
+                            email_debug["error"] = str(e)
+                            email_debug["exception"] = e.__class__.__name__
+                        except Exception:
+                            pass
+                        logger.exception("assign_notify failed", extra={"ingreso_id": ingreso_id, "to": email_to, "recipients": recips})
+                        email_sent = False
+                        try:
+                            port_cfg = int(getattr(settings, "EMAIL_PORT", 0) or 0)
+                        except Exception:
+                            port_cfg = 0
+                        if port_cfg == 587:
+                            try:
+                                conn = get_connection(
+                                    backend="django.core.mail.backends.smtp.EmailBackend",
+                                    host=getattr(settings, "EMAIL_HOST", None),
+                                    port=465,
+                                    username=getattr(settings, "EMAIL_HOST_USER", None),
+                                    password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
+                                    use_tls=False,
+                                    use_ssl=True,
+                                    fail_silently=False,
+                                )
+                                msg = EmailMessage(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, connection=conn)
+                                sent2 = msg.send()
+                                email_sent = bool(sent2 and sent2 > 0)
+                                email_debug["fallback"] = {"mode": "ssl_465", "sent": email_sent}
+                                logger.info("assign_notify fallback ssl_465 sent=%s ingreso_id=%s to=%s", email_sent, ingreso_id, email_to)
+                            except Exception as e2:
+                                try:
+                                    email_debug.setdefault("fallback", {})["error"] = str(e2)
+                                    email_debug.setdefault("fallback", {})["exception"] = e2.__class__.__name__
+                                except Exception:
+                                    pass
+                                logger.exception("assign_notify fallback ssl_465 failed", extra={"ingreso_id": ingreso_id, "to": email_to})
+                else:
+                    logger.warning("assign_notify no recipient email configured", extra={"ingreso_id": ingreso_id})
+            except Exception as e:
+                try:
+                    email_debug["error"] = str(e)
+                    email_debug["exception"] = e.__class__.__name__
+                except Exception:
+                    pass
+                email_sent = False
+        try:
+            tecnico_id_int = int(tecnico_id)
+        except Exception:
+            tecnico_id_int = tecnico_id
+        resp = {"ok": True, "asignado_a": tecnico_id_int, "asignado_a_nombre": nombre, "email_sent": bool(email_sent)}
+        try:
+            if getattr(settings, "DEBUG", False) or _rol(request) in ("jefe", "admin"):
+                resp["email_debug"] = email_debug
+        except Exception:
+            pass
+        return Response(resp)
 
 
 class IngresoSolicitarAsignacionView(APIView):
@@ -889,18 +1060,20 @@ class IngresoSolicitarAsignacionView(APIView):
 
         # Intentar registrar solicitud en tabla auxiliar (si existe)
         try:
-            exec_void(
+            with transaction.atomic():
+                exec_void(
                 """
                 INSERT INTO ingreso_assignment_requests(ingreso_id, usuario_id, status, created_at)
                 VALUES (%s, %s, 'pendiente', now())
                 """,
                 [ingreso_id, uid],
-            )
+                )
         except Exception:
             pass  # tabla puede no existir; continuar con notificación
 
         # Enviar notificación por email (reportar éxito/fracaso)
         email_sent = False
+        email_debug = {}
         try:
             # Datos del ingreso para el cuerpo
             info = q(
@@ -942,33 +1115,117 @@ class IngresoSolicitarAsignacionView(APIView):
                     base = fe.rstrip('/')
                 except Exception:
                     base = fe
-                lines.append(f"Abrir hoja: {base}/ingresos/{ingreso_id}")
+                qs_parts = ["tab=principal"]
+                try:
+                    if uid:
+                        qs_parts.append(f"tecnico_id={int(uid)}")
+                except Exception:
+                    pass
+                qs = ("?" + "&".join(qs_parts)) if qs_parts else ""
+                lines.append(f"Abrir hoja: {base}/ingresos/{ingreso_id}{qs}")
             body = "\n".join(lines)
 
-            # Destinatarios: ASSIGNMENT_REQUEST_RECIPIENTS (coma), o fallback a emails conocidos
-            recips = []
-            try:
-                raw = os.getenv("ASSIGNMENT_REQUEST_RECIPIENTS", "")
-            except Exception:
-                raw = ""
-            if raw:
-                recips = [x.strip() for x in raw.split(",") if x.strip()]
+            # Destinatarios: desde settings.ASSIGNMENT_REQUEST_RECIPIENTS (lista),
+            # con fallback a emails conocidos de la empresa
+            recips = getattr(settings, "ASSIGNMENT_REQUEST_RECIPIENTS", []) or []
+            if not isinstance(recips, (list, tuple)):
+                recips = [str(recips)] if recips else []
             # Fallbacks
             if not recips:
                 fallback1 = getattr(settings, "COMPANY_FOOTER_EMAIL_2", None)
                 fallback2 = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
                 recips = [x for x in [fallback1, fallback2] if x]
 
+            # Debug info (sin secretos)
+            try:
+                email_debug.update({
+                    "backend": getattr(settings, "EMAIL_BACKEND", None),
+                    "host": getattr(settings, "EMAIL_HOST", None),
+                    "port": getattr(settings, "EMAIL_PORT", None),
+                    "use_tls": getattr(settings, "EMAIL_USE_TLS", None),
+                    "use_ssl": getattr(settings, "EMAIL_USE_SSL", None),
+                    "from": getattr(settings, "DEFAULT_FROM_EMAIL", None),
+                    "recipients": list(recips),
+                })
+            except Exception:
+                pass
+
             if recips:
                 try:
                     sent = send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, fail_silently=False)
                     email_sent = bool(sent and sent > 0)
-                except Exception:
+                    logger.info(
+                        "assignment_request_email sent=%s ingreso_id=%s user_id=%s recipients=%s backend=%s",
+                        email_sent, ingreso_id, uid, recips, getattr(settings, "EMAIL_BACKEND", ""),
+                    )
+                except Exception as e:
+                    try:
+                        email_debug["error"] = str(e)
+                        email_debug["exception"] = e.__class__.__name__
+                    except Exception:
+                        pass
+                    logger.exception(
+                        "assignment_request_email failed",
+                        extra={"ingreso_id": ingreso_id, "user_id": uid, "recipients": recips},
+                    )
                     email_sent = False
-        except Exception:
+
+                    # Fallback: si el puerto configurado es 587 (STARTTLS), intentar 465 (SSL implícito)
+                    try:
+                        port_cfg = int(getattr(settings, "EMAIL_PORT", 0) or 0)
+                    except Exception:
+                        port_cfg = 0
+                    if port_cfg == 587:
+                        try:
+                            conn = get_connection(
+                                backend="django.core.mail.backends.smtp.EmailBackend",
+                                host=getattr(settings, "EMAIL_HOST", None),
+                                port=465,
+                                username=getattr(settings, "EMAIL_HOST_USER", None),
+                                password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
+                                use_tls=False,
+                                use_ssl=True,
+                                fail_silently=False,
+                            )
+                            msg = EmailMessage(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, connection=conn)
+                            sent2 = msg.send()
+                            email_sent = bool(sent2 and sent2 > 0)
+                            email_debug["fallback"] = {"mode": "ssl_465", "sent": email_sent}
+                            logger.info(
+                                "assignment_request_email fallback ssl_465 sent=%s ingreso_id=%s user_id=%s recipients=%s",
+                                email_sent, ingreso_id, uid, recips,
+                            )
+                        except Exception as e2:
+                            try:
+                                email_debug.setdefault("fallback", {})["error"] = str(e2)
+                                email_debug.setdefault("fallback", {})["exception"] = e2.__class__.__name__
+                            except Exception:
+                                pass
+                            logger.exception(
+                                "assignment_request_email fallback ssl_465 failed",
+                                extra={"ingreso_id": ingreso_id, "user_id": uid, "recipients": recips},
+                            )
+            else:
+                logger.warning(
+                    "assignment_request_email no recipients configured",
+                    extra={"ingreso_id": ingreso_id, "user_id": uid},
+                )
+        except Exception as e:
+            try:
+                email_debug["error"] = str(e)
+                email_debug["exception"] = e.__class__.__name__
+            except Exception:
+                pass
             email_sent = False
 
-        return Response({"ok": True, "email_sent": bool(email_sent)})
+        # Solo exponer debug a roles altos o en DEBUG
+        resp = {"ok": True, "email_sent": bool(email_sent)}
+        try:
+            if getattr(settings, "DEBUG", False) or _rol(request) in ("jefe", "admin"):
+                resp["email_debug"] = email_debug
+        except Exception:
+            pass
+        return Response(resp)
 
 
 class PendientesGeneralView(APIView):
@@ -1611,6 +1868,16 @@ class IngresoDetalleView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, ingreso_id: int):
+        try:
+            strong = str(request.GET.get("strong", "")).strip().lower() in ("1","true","yes")
+        except Exception:
+            strong = False
+        if strong:
+            # Pequeño delay best-effort para evitar carrera read-after-write
+            try:
+                time.sleep(0.12)
+            except Exception:
+                pass
         row = q(
             """
             SELECT
@@ -1739,6 +2006,12 @@ class IngresoDetalleView(APIView):
         else:
             row["tecnico_solicitado_id"] = None
             row["tecnico_solicitado_nombre"] = ""
+        try:
+            logger.info(
+                f"[IngresoDetalle] ingreso={ingreso_id} asignado_a={row.get('asignado_a')} nombre={row.get('asignado_a_nombre')}"
+            )
+        except Exception:
+            pass
         return Response(IngresoDetailWithAccesoriosSerializer(row).data)
 
     def patch(self, request, ingreso_id: int):

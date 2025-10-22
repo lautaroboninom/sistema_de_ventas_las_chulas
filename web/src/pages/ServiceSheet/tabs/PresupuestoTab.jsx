@@ -75,7 +75,7 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
   }
 
   async function anularPresupuesto() {
-    if (!confirm("Anular el presupuesto actual? Podrs editar y re-emitir luego.")) return;
+    if (!confirm("Anular el presupuesto actual? Podrás editar y re-emitir luego.")) return;
     try {
       setAnulando(true);
       setQErr("");
@@ -94,7 +94,7 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
       setAprobando(true);
       setQErr("");
       const shouldPrint = (data?.estado || "").toLowerCase() === "reparado" &&
-        window.confirm("Este equipo ya est reparado, imprimir remito de salida?");
+        window.confirm("Este equipo ya está reparado, imprimir remito de salida?");
 
       const r = await postQuoteAprobar(id);
       setQuote(r);
@@ -149,9 +149,9 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
   async function addRepuesto() {
     const qty = Number(nuevoRep.qty || 0);
     const pu  = Number(nuevoRep.precio_u || 0);
-    if (!nuevoRep.descripcion.trim()) { setQErr("Descripcin requerida"); return; }
+    if (!nuevoRep.descripcion.trim()) { setQErr("Descripción requerida"); return; }
     if (qty <= 0) { setQErr("Cantidad > 0"); return; }
-    if (pu < 0) { setQErr("Precio invlido"); return; }
+    if (pu < 0) { setQErr("Precio inválido"); return; }
     await postQuoteItem(id, {
       tipo: "repuesto",
       repuesto_id: nuevoRep.repuesto_id ? Number(nuevoRep.repuesto_id) : null,
@@ -164,27 +164,25 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
 
   async function updateItem(it, patchRow) { await patchQuoteItem(id, it.id, patchRow); await loadQuote(); }
   async function handleRemoveItem(it) {
-    if (!confirm("Eliminar rengln?")) return;
+    if (!confirm("Eliminar renglón?")) return;
     try {
       await deleteQuoteItem(id, it.id);
       await loadQuote();
     } catch (e) {
-      setQErr(e?.message || "No se pudo eliminar el rengln");
+      setQErr(e?.message || "No se pudo eliminar el renglón");
     }
   }
   async function saveManoObra() {
     const mo = Number(manoObraStr || 0);
-    if (mo < 0) { setQErr("Mano de obra invlida"); return; }
+    if (mo < 0) { setQErr("Mano de obra inválida"); return; }
     await patchQuoteResumen(id, { mano_obra: mo });
     await loadQuote();
   }
 
   return (
     <div className="border rounded p-4">
-      <h2 className="font-semibold mb-3">Presupuesto</h2>
 
       <div className="border rounded p-3 mb-4 bg-gray-50">
-        <h3 className="font-medium mb-2">Diagnóstico y trabajos</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <div className="text-sm text-gray-600">Diagnóstico</div>
@@ -255,7 +253,7 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
             <thead>
               <tr className="text-left">
                 <th className="p-2 w-28">IdRepuesto</th>
-                <th className="p-2">Descripcin</th>
+                <th className="p-2">Descripción</th>
                 <th className="p-2 w-24">Cantidad</th>
                 <th className="p-2 w-36">Precio unit.</th>
                 <th className="p-2 w-36 text-right">Subtotal</th>
@@ -317,7 +315,7 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
                   <input className="border rounded p-1 w-24" placeholder="(opcional)" value={nuevoRep.repuesto_id} onChange={(e) => setNuevoRep((s) => ({ ...s, repuesto_id: e.target.value }))} disabled={isAprobado} />
                 </td>
                 <td className="p-2">
-                  <input className="border rounded p-1 w-full" placeholder="Descripcin del repuesto" value={nuevoRep.descripcion} onChange={(e) => setNuevoRep((s) => ({ ...s, descripcion: e.target.value }))} disabled={isAprobado} />
+                  <input className="border rounded p-1 w-full" placeholder="Descripción del repuesto" value={nuevoRep.descripcion} onChange={(e) => setNuevoRep((s) => ({ ...s, descripcion: e.target.value }))} disabled={isAprobado} />
                 </td>
                 <td className="p-2">
                   <input type="number" step="0.01" min="0" className="border rounded p-1 w-24 text-right" value={nuevoRep.qty} onChange={(e) => setNuevoRep((s) => ({ ...s, qty: e.target.value }))} disabled={isAprobado} />

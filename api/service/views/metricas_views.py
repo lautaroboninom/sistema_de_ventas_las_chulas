@@ -189,14 +189,18 @@ class MetricasSeriesView(APIView):
             "entregados": 0,
             "_mttr_sum_min": 0,
             "_mttr_n": 0,
+            "_mttr_vals": [],
             "sla_diag_total": 0,
             "sla_diag_dentro": 0,
             "aprob_emitidos": 0,
             "aprob_aprobados": 0,
             "t_emitir_min_sum": 0,
             "t_emitir_n": 0,
+            "t_emitir_hours_vals": [],
             "t_aprobar_min_sum": 0,
             "t_aprobar_n": 0,
+            "t_aprobar_hours_vals": [],
+            "tat_days_vals": [],
         } for k in months}
 
         # Entregados por mes
@@ -233,6 +237,10 @@ class MetricasSeriesView(APIView):
                 mins = max(0, int((r["reparado_ts"] - r["reparar_ts"]).total_seconds() // 60))
                 data[k]["_mttr_sum_min"] += mins
                 data[k]["_mttr_n"] += 1
+                try:
+                    data[k]["_mttr_vals"].append(mins / 60.0 / 24.0)
+                except Exception:
+                    pass
 
         # SLA diag por mes
         holi = _holidays_between((since - dt.timedelta(days=7)).date(), (until + dt.timedelta(days=7)).date())
@@ -277,10 +285,44 @@ class MetricasSeriesView(APIView):
             if diag_ts and fei:
                 data[k]["t_emitir_min_sum"] += int(max(0, (fei - diag_ts).total_seconds() // 60))
                 data[k]["t_emitir_n"] += 1
+                try:
+                    data[k]["t_emitir_hours_vals"].append(max(0.0, (fei - diag_ts).total_seconds() / 3600.0))
+                except Exception:
+                    pass
             if fa:
                 data[k]["aprob_aprobados"] += 1
                 data[k]["t_aprobar_min_sum"] += int(max(0, (fa - fei).total_seconds() // 60))
                 data[k]["t_aprobar_n"] += 1
+
+        # Distribución mensual: emitir->aprobar (horas)
+        mins_emit_aprob = _sql_mins('q.fecha_emitido','q.fecha_aprobado')
+        aprobar_rows = q((
+            f"SELECT {ym_emit} AS ym, {mins_emit_aprob} AS mins\n"
+            "FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
+            f"{join_dm}\n"
+            "WHERE q.fecha_emitido BETWEEN %s AND %s AND q.fecha_aprobado IS NOT NULL"
+            f"{where_i}\n"
+        ), [since, until, *where_params]) or []
+        for r in aprobar_rows:
+            k = r.get("ym")
+            if k in data:
+                data[k]["t_aprobar_hours_vals"].append(max(0.0, (r.get("mins") or 0) / 60.0))
+
+        # TAT (Ingreso -> Entregado) por mes (días calendario)
+        tat_rows = q((
+            f"SELECT {ym_e} AS ym, i.fecha_ingreso, e.ts AS entregado_ts\n"
+            "FROM ingreso_events e JOIN ingresos i ON i.id=e.ingreso_id\n"
+            f"{join_dm}\n"
+            "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+            f"{where_i}\n"
+        ), [since, until, *where_params]) or []
+        for r in tat_rows:
+            k = r.get("ym")
+            if k not in data:
+                continue
+            fi = r.get("fecha_ingreso"); et = r.get("entregado_ts")
+            if fi and et and et >= fi:
+                data[k]["tat_days_vals"].append((et - fi).total_seconds() / 86400.0)
 
         series = []
         for k in months:
@@ -288,6 +330,7 @@ class MetricasSeriesView(APIView):
                 "period": k,
                 "entregados": data[k]["entregados"],
                 "mttr_dias": (data[k]["_mttr_sum_min"] / 60 / 24 / data[k]["_mttr_n"]) if data[k]["_mttr_n"] else None,
+                "mttr_percentiles": _pctiles(data[k]["_mttr_vals"], (25,50,75,90,95)) if data[k]["_mttr_vals"] else {"p25": None, "p50": None, "p75": None, "p90": None, "p95": None, "avg": None, "count": 0},
                 "sla_diag_24h": {
                     "total": data[k]["sla_diag_total"],
                     "dentro": data[k]["sla_diag_dentro"],
@@ -299,7 +342,11 @@ class MetricasSeriesView(APIView):
                     "tasa": (data[k]["aprob_aprobados"] / data[k]["aprob_emitidos"]) if data[k]["aprob_emitidos"] else 0.0,
                     "t_emitir_horas": (data[k]["t_emitir_min_sum"] / 60 / data[k]["t_emitir_n"]) if data[k]["t_emitir_n"] else None,
                     "t_aprobar_horas": (data[k]["t_aprobar_min_sum"] / 60 / data[k]["t_aprobar_n"]) if data[k]["t_aprobar_n"] else None,
+                    "t_emitir_percentiles": _pctiles(data[k]["t_emitir_hours_vals"], (25,50,75,90,95)) if data[k]["t_emitir_hours_vals"] else {"p25": None, "p50": None, "p75": None, "p90": None, "p95": None, "avg": None, "count": 0},
+                    "t_aprobar_percentiles": _pctiles(data[k]["t_aprobar_hours_vals"], (25,50,75,90,95)) if data[k]["t_aprobar_hours_vals"] else {"p25": None, "p50": None, "p75": None, "p90": None, "p95": None, "avg": None, "count": 0},
                 },
+                "tat_dias": (sum(data[k]["tat_days_vals"]) / len(data[k]["tat_days_vals"])) if data[k]["tat_days_vals"] else None,
+                "tat_percentiles": _pctiles(data[k]["tat_days_vals"], (25,50,75,90,95)) if data[k]["tat_days_vals"] else {"p25": None, "p50": None, "p75": None, "p90": None, "p95": None, "avg": None, "count": 0},
             })
 
         # Yearly agregados
@@ -710,6 +757,34 @@ class MetricasResumenView(APIView):
             "ORDER BY wip DESC"
         ), where_params) or []
 
+        # Aging WIP (días hábiles desde ingreso hasta ahora)
+        now_ts = timezone.now()
+        open_rows = q((
+            "SELECT i.id, i.fecha_ingreso\n"
+            "FROM ingresos i\n"
+            f"{join_dm}\n"
+            "WHERE i.estado IN ('ingresado','diagnosticado','presupuestado','reparar','reparado')"
+            f"{where_i}\n"
+        ), where_params) or []
+        holi = _holidays_between((since - dt.timedelta(days=7)).date(), (until + dt.timedelta(days=7)).date())
+        buckets = {"0-2": 0, "3-5": 0, "6-10": 0, "11-15": 0, "16+": 0}
+        for r in open_rows:
+            fi = r.get("fecha_ingreso")
+            if not fi:
+                continue
+            mins = business_minutes_between(fi, now_ts, holidays=holi)
+            days = (mins or 0) / (60.0 * 24.0)
+            if days <= 2:
+                buckets["0-2"] += 1
+            elif days <= 5:
+                buckets["3-5"] += 1
+            elif days <= 10:
+                buckets["6-10"] += 1
+            elif days <= 15:
+                buckets["11-15"] += 1
+            else:
+                buckets["16+"] += 1
+
         # MTTR (reparar -> reparado) en rango (por reparado_ts)
         reparado_rows = q((
             "SELECT r.ingreso_id, r.reparar_ts, d.reparado_ts\n"
@@ -909,6 +984,7 @@ class MetricasResumenView(APIView):
             "cerrados_por_tecnico_7d": cerrados_7d,
             "cerrados_por_tecnico_30d": cerrados_30d,
             "wip_por_tecnico": wip,
+            "wip_aging_buckets": buckets,
             "facturacion_por_tecnico": fact_rows,
             "utilidad_mo_por_tecnico": util_mo_rows,
             "repuestos_por_tecnico": rep_rows,

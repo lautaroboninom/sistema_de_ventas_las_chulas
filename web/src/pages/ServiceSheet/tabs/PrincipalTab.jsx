@@ -20,6 +20,8 @@ export default function PrincipalTab(props) {
     modelos,
     modeloIdSel,
     setModeloIdSel,
+    tipoSel,
+    setTipoSel,
     variantes,
     // ubicacion/tecnico
     ubicaciones,
@@ -53,12 +55,65 @@ export default function PrincipalTab(props) {
     toDatetimeLocalStr,
   } = props;
 
+  // Derivados del catlogo (para filtros de equipo)
+  const tiposDisponibles = useMemo(() => {
+    const norm = (s) => (s || "").toString().trim().toUpperCase();
+    const set = new Set();
+    (modelos || []).forEach((m) => {
+      const t = norm(m?.tipo_equipo);
+      if (t) set.add(t);
+    });
+    return Array.from(set);
+  }, [modelos]);
+  const modelosFiltrados = useMemo(() => {
+    const norm = (s) => (s || "").toString().trim().toUpperCase();
+    const all = modelos || [];
+    if (!tipoSel) return all;
+    return all.filter((m) => norm(m?.tipo_equipo) === norm(tipoSel));
+  }, [modelos, tipoSel]);
+
   // Estados/dirty locales (encapsulados en el tab)
   const [savingTech, setSavingTech] = useState(false);
+  const [selTecnicoId, setSelTecnicoId] = useState(tecnicoId ?? null);
+  useEffect(() => {
+    console.log('[PrincipalTab] sync selTecnicoId from prop', { tecnicoIdProp: tecnicoId });
+    setSelTecnicoId(tecnicoId ?? null);
+  }, [tecnicoId]);
   const [savingUb, setSavingUb] = useState(false);
   const [mailEnviado, setMailEnviado] = useState(false);
+  const [mailFallo, setMailFallo] = useState(false);
+  const [emailDebug, setEmailDebug] = useState(null);
   const [solicitando, setSolicitando] = useState(false);
-  const techDirty = Boolean(canAssignTecnico && (tecnicoId ?? null) !== (data?.asignado_a ?? null));
+  const [assignedNameHint, setAssignedNameHint] = useState(null);
+  const techDirty = Boolean(
+    canAssignTecnico && Number(selTecnicoId ?? -1) !== Number(data?.asignado_a ?? -1)
+  );
+  useEffect(() => {
+    console.log('[PrincipalTab] data asignado_a changed', { asignado_a: data?.asignado_a, asignado_a_nombre: data?.asignado_a_nombre });
+  }, [data?.asignado_a, data?.asignado_a_nombre]);
+  useEffect(() => {
+    // Si el backend ya refleja el nombre, descartamos el hint local
+    if (data?.asignado_a_nombre) setAssignedNameHint(null);
+  }, [data?.asignado_a_nombre]);
+  useEffect(() => {
+    console.log('[PrincipalTab] techDirty recalculated', {
+      canAssignTecnico,
+      selTecnicoId,
+      asignado_a: data?.asignado_a,
+      techDirty,
+    });
+  }, [canAssignTecnico, selTecnicoId, data?.asignado_a, techDirty]);
+
+  useEffect(() => {
+    const disabled = (savingTech || !techDirty || selTecnicoId == null);
+    console.log('[PrincipalTab] guardar disabled state', { savingTech, techDirty, selTecnicoId, disabled });
+  }, [savingTech, techDirty, selTecnicoId]);
+
+  useEffect(() => {
+    try {
+      console.log('[PrincipalTab] tecnicos options', { count: (tecnicos || []).length, ids: (tecnicos || []).map(t => t.id) });
+    } catch {}
+  }, [tecnicos]);
   const _selUb = (ubicacionId ? Number(ubicacionId) : null);
   const _curUb = (data?.ubicacion_id ?? null);
   const ubDirty = _selUb !== null && _selUb !== _curUb;
@@ -76,15 +131,33 @@ export default function PrincipalTab(props) {
   })();
 
   async function saveTecnico() {
-    if (!canAssignTecnico || !techDirty || tecnicoId == null) return;
+    console.log('[PrincipalTab] saveTecnico called', { canAssignTecnico, selTecnicoId, asignado_a: data?.asignado_a, techDirty, id });
+    if (!canAssignTecnico || selTecnicoId == null) { console.log('[PrincipalTab] saveTecnico aborted: sin permiso o sin selección', { canAssignTecnico, selTecnicoId }); return; }
+    if (!techDirty) { console.log('[PrincipalTab] saveTecnico aborted: sin cambios', { selTecnicoId, current: data?.asignado_a }); return; }
     try {
       setSavingTech(true);
-      await patchIngresoTecnico(id, Number(tecnicoId));
-      await refreshIngreso();
+      console.log('[PrincipalTab] calling patchIngresoTecnico', { id, selTecnicoId: Number(selTecnicoId) });
+      const resp = await patchIngresoTecnico(id, Number(selTecnicoId));
+      console.log('[PrincipalTab] patchIngresoTecnico done', resp);
+      try {
+        setMailEnviado(!!(resp && resp.email_sent));
+      } catch {}
+      try {
+        const name = resp && (resp.asignado_a_nombre || resp.nombre);
+        if (name) setAssignedNameHint(name);
+        else {
+          const t = (tecnicos || []).find(x => Number(x.id) === Number(selTecnicoId));
+          if (t && t.nombre) setAssignedNameHint(t.nombre);
+        }
+      } catch {}
+      await refreshIngreso({ strong: 1 });
+      console.log('[PrincipalTab] refreshIngreso done');
       setErr("");
     } catch (e) {
+      console.log('[PrincipalTab] saveTecnico error', e);
       setErr(e?.message || "No se pudo asignar el técnico");
     } finally {
+      console.log('[PrincipalTab] saveTecnico finally -> setSavingTech(false)');
       setSavingTech(false);
     }
   }
@@ -102,7 +175,7 @@ export default function PrincipalTab(props) {
     }
   }
 
-  // Auto-chequeo de garanta de fbrica cuando se edita N/S
+  // Auto-chequeo de garantía de fábrica cuando se edita N/S
   useEffect(() => {
     if (!editBasics) return;
     const ns = (formBasics?.numero_serie || "").trim();
@@ -130,7 +203,7 @@ export default function PrincipalTab(props) {
         <div className="border rounded p-4">
           <h2 className="font-semibold mb-2">Cliente</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
-            <Row label="Razn social">
+            <Row label="Razón  social">
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-64"
@@ -141,7 +214,7 @@ export default function PrincipalTab(props) {
                 data.razon_social
               )}
             </Row>
-            <Row label="Cdigo empresa">
+            <Row label="Código empresa">
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-40"
@@ -152,7 +225,7 @@ export default function PrincipalTab(props) {
                 data.cod_empresa || "-"
               )}
             </Row>
-            <Row label="Telfono">
+            <Row label="Teléfono">
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-48"
@@ -206,92 +279,59 @@ export default function PrincipalTab(props) {
 
           <h2 className="font-semibold mt-4 mb-2">Equipo</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
-            {(() => {
-              const tiposDisponibles = useMemo(() => {
-                const norm = (s) => (s || "").toString().trim().toUpperCase();
-                const set = new Set();
-                (modelos || []).forEach((m) => {
-                  const t = norm(m?.tipo_equipo);
-                  if (t) set.add(t);
-                });
-                return Array.from(set);
-              }, [modelos]);
-              const [tipoSel, setTipoSel] = useState(() => {
-                const raw = (data?.tipo_equipo_nombre || data?.tipo_equipo || "").toString().trim().toUpperCase();
-                return raw || "";
-              });
-              useEffect(() => {
-                const raw = (data?.tipo_equipo_nombre || data?.tipo_equipo || "").toString().trim().toUpperCase();
-                if (!tipoSel && raw) setTipoSel(raw);
-                // eslint-disable-next-line react-hooks/exhaustive-deps
-              }, [data?.tipo_equipo, data?.tipo_equipo_nombre]);
-              const modelosFiltrados = useMemo(() => {
-                const norm = (s) => (s || "").toString().trim().toUpperCase();
-                const all = modelos || [];
-                if (!tipoSel) return all;
-                return all.filter((m) => norm(m?.tipo_equipo) === tipoSel);
-              }, [modelos, tipoSel]);
-              return (
-                <>
-                  <Row label="Tipo de equipo">
-                    {editBasics ? (
-                      <select
-                        className="border rounded p-1 w-60"
-                        value={tipoSel}
-                        onChange={(e) => {
-                          setTipoSel(e.target.value);
-                          setModeloIdSel(null);
-                        }}
-                      >
-                        <option value="">(todos)</option>
-                        {tiposDisponibles.map((t) => (
-                          <option key={t} value={t}>{t}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      data.tipo_equipo_nombre || data.tipo_equipo || "-"
-                    )}
-                  </Row>
-                  {/* Marca / Modelo */}
-                  <Row label="Marca">
-                    {editBasics ? (
-                      <select
-                        className="border rounded p-1 w-60"
-                        value={marcaIdSel == null ? "" : String(marcaIdSel)}
-                        onChange={(e) => { const v = e.target.value === "" ? null : Number(e.target.value); setMarcaIdSel(v); setModeloIdSel(null); }}
-                      >
-                        <option value="">(sin marca)</option>
-                        {(marcas || []).map((m) => (
-                          <option key={m.id} value={String(m.id)}>
-                            {m.nombre}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      data.marca
-                    )}
-                  </Row>
-                  <Row label="Modelo">
-                    {editBasics ? (
-                      <select
-                        className="border rounded p-1 w-60"
-                        value={modeloIdSel == null ? "" : String(modeloIdSel)}
-                        onChange={(e) => setModeloIdSel(e.target.value === "" ? null : Number(e.target.value))}
-                      >
-                        <option value="">(sin modelo)</option>
-                        {(modelosFiltrados || []).map((m) => (
-                          <option key={m.id} value={String(m.id)}>
-                            {m.nombre}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      data.modelo || "-"
-                    )}
-                  </Row>
-                </>
-              );
-            })()}
+            <Row label="Tipo de equipo">
+              {editBasics ? (
+                <select
+                  className="border rounded p-1 w-60"
+                  value={tipoSel}
+                  onChange={(e) => { setTipoSel(e.target.value); setModeloIdSel(null); }}
+                >
+                  <option value="">(todos)</option>
+                  {tiposDisponibles.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              ) : (
+                data.tipo_equipo_nombre || data.tipo_equipo || "-"
+              )}
+            </Row>
+            {/* Marca / Modelo */}
+            <Row label="Marca">
+              {editBasics ? (
+                <select
+                  className="border rounded p-1 w-60"
+                  value={marcaIdSel == null ? "" : String(marcaIdSel)}
+                  onChange={(e) => { const v = e.target.value === "" ? null : Number(e.target.value); setMarcaIdSel(v); setModeloIdSel(null); }}
+                >
+                  <option value="">(sin marca)</option>
+                  {(marcas || []).map((m) => (
+                    <option key={m.id} value={String(m.id)}>
+                      {m.nombre}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                data.marca
+              )}
+            </Row>
+            <Row label="Modelo">
+              {editBasics ? (
+                <select
+                  className="border rounded p-1 w-60"
+                  value={modeloIdSel == null ? "" : String(modeloIdSel)}
+                  onChange={(e) => setModeloIdSel(e.target.value === "" ? null : Number(e.target.value))}
+                >
+                  <option value="">(sin modelo)</option>
+                  {(modelosFiltrados || []).map((m) => (
+                    <option key={m.id} value={String(m.id)}>
+                      {m.nombre}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                data.modelo || "-"
+              )}
+            </Row>
             <Row label="Variante">
               {editBasics ? (
                 <>
@@ -311,18 +351,7 @@ export default function PrincipalTab(props) {
                 data.equipo_variante || "-"
               )}
             </Row>
-            <Row label={"N serie"}>
-              {editBasics ? (
-                <input
-                  className="border rounded p-1 w-60"
-                  value={formBasics?.numero_serie ?? ""}
-                  onChange={(e) => setFormBasics((s) => ({ ...s, numero_serie: e.target.value }))}
-                />
-              ) : (
-                <span>{numeroSerie || "-"}</span>
-              )}
-            </Row>
-            <Row label="Garanta (fbrica)">
+            <Row label="Garantía (fábrica)">
               {editBasics ? (
                 <input
                   type="checkbox"
@@ -333,7 +362,18 @@ export default function PrincipalTab(props) {
                 <span>{data.garantia ? "Sí" : "No"}</span>
               )}
             </Row>
-            <Row label="Garanta de reparacin">
+            <Row label={"N° serie"}>
+              {editBasics ? (
+                <input
+                  className="border rounded p-1 w-60"
+                  value={formBasics?.numero_serie ?? ""}
+                  onChange={(e) => setFormBasics((s) => ({ ...s, numero_serie: e.target.value }))}
+                />
+              ) : (
+                <span>{numeroSerie || "-"}</span>
+              )}
+            </Row>
+            <Row label="Garantía de reparación">
               {editBasics ? (
                 <input
                   type="checkbox"
@@ -344,7 +384,7 @@ export default function PrincipalTab(props) {
                 <span>{data?.garantia_reparacion ? "Sí" : "No"}</span>
               )}
             </Row>
-            <Row label={"N interno (MG)"}>
+            <Row label={"N° interno (MG)"}>
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-60"
@@ -355,7 +395,7 @@ export default function PrincipalTab(props) {
                 <span>{data.numero_interno || ""}</span>
               )}
             </Row>
-            <Row label={"N de remito"}>
+            <Row label={"N° de remito"}>
               {editBasics ? (
                 <input
                   className="border rounded p-1 w-60"
@@ -429,12 +469,17 @@ export default function PrincipalTab(props) {
                   <>
                     <select
                       className="border rounded p-2"
-                      value={tecnicoId ?? ""}
-                      onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}
+                      value={selTecnicoId == null ? "" : String(selTecnicoId)}
+                      onChange={(e) => {
+                        const v = e.target.value === "" ? null : Number(e.target.value);
+                        console.log('[PrincipalTab] select tecnico change', { prev: selTecnicoId, next: v });
+                        setSelTecnicoId(v);
+                        setTecnicoId(v);
+                      }}
                     >
                       <option value="">-- Seleccionar técnico --</option>
                       {tecnicos.map((t) => (
-                        <option key={t.id} value={t.id}>
+                        <option key={t.id} value={String(t.id)}>
                           {t.nombre}
                         </option>
                       ))}
@@ -442,12 +487,15 @@ export default function PrincipalTab(props) {
                     <button
                       className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
                       onClick={saveTecnico}
-                      disabled={savingTech || !techDirty || tecnicoId == null}
+                      disabled={savingTech || !techDirty || selTecnicoId == null}
                       aria-busy={savingTech ? "true" : "false"}
                       type="button"
                     >
                       {savingTech ? "Guardando..." : "Guardar"}
                     </button>
+                    {mailEnviado && (
+                      <div className="text-xs text-emerald-700">Se envio el mail</div>
+                    )}
                     {(data?.tecnico_solicitado_id && data?.tecnico_solicitado_id !== (data?.asignado_a ?? null)) && (
                       <div className="text-xs text-amber-700 mt-1">{pendingLabel}</div>
                     )}
@@ -455,6 +503,19 @@ export default function PrincipalTab(props) {
                 ) : (
                   <div className="text-sm text-gray-500">
                     {mailEnviado && (<div className="text-xs text-emerald-700">Se envió el mail</div>)}
+                    {!mailEnviado && mailFallo && (
+                      <div>
+                        <div className="text-xs text-amber-700">Solicitud registrada; no se pudo enviar el correo</div>
+                        {emailDebug && (
+                          <div className="mt-1 text-[11px] text-gray-600">
+                            <div>Destino: {(emailDebug.recipients || []).join(", ") || "-"}</div>
+                            <div>Backend: {emailDebug.backend || "-"}</div>
+                            <div>SMTP: {emailDebug.host || "-"}:{String(emailDebug.port || "")} TLS:{String(emailDebug.use_tls ?? "")} SSL:{String(emailDebug.use_ssl ?? "")}</div>
+                            {emailDebug.error && (<div>Error: {emailDebug.error}</div>)}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div>No tenés permiso para reasignar técnicos.</div>
                     {isTech && (data?.estado || "") !== "entregado" && Number(userId || 0) > 0 && (
                       <div className="mt-2">
@@ -471,9 +532,15 @@ export default function PrincipalTab(props) {
                             onClick={async () => {
                               try {
                                 setSolicitando(true);
-                                await postSolicitarAsignacion(id);
+                                setMailEnviado(false);
+                                setMailFallo(false);
+                                const r = await postSolicitarAsignacion(id);
                                 await refreshIngreso();
-                                setMailEnviado(true);
+                                setMailEnviado(!!(r && r.email_sent));
+                                if (r && r.ok && r.email_sent === false) {
+                                  setMailFallo(true);
+                                }
+                                setEmailDebug(r && r.email_debug ? r.email_debug : null);
                                 setErr("");
                               } catch (e) {
                                 setErr(e?.message || "No se pudo solicitar la asignación");
@@ -491,7 +558,7 @@ export default function PrincipalTab(props) {
                   </div>
                 )}
                 <div className="text-xs text-gray-500">
-                  Actual: <b>{data.asignado_a_nombre || "-"}</b>
+                  Actual: <b>{assignedNameHint || data.asignado_a_nombre || "-"}</b>
                 </div>
               </div>
             </div>
@@ -523,7 +590,7 @@ export default function PrincipalTab(props) {
                   {savingUb ? "Guardando..." : "Guardar"}
                 </button>
               </div>
-              <div className="text-xs text-gray-500">La ubicación puede modificarse desde aquí.</div>
+              <div className="text-xs text-gray-500">La ubicación puede modificarse desde aquí..</div>
             </div>
             {numeroSerie && (
               <div className="flex justify-end mb-2 w-full">
@@ -721,10 +788,10 @@ export default function PrincipalTab(props) {
       {/* Alquiler */}
       <div className="border rounded p-4 mt-4">
         <h2 className="font-semibold mb-2">Alquiler</h2>
-        <Row label="Se alquil?">
+        <Row label="¿Se alquiló?">
           <input type="checkbox" checked={!!data.alquilado} onChange={(e) => patch({ alquilado: e.target.checked })} />
         </Row>
-        <Row label="A quin?">
+        <Row label="¿A quién?">
           <input className="border rounded p-1 w-80" value={data.alquiler_a || ""} onChange={(e) => patch({ alquiler_a: e.target.value })} />
         </Row>
         <Row label="Remito">
@@ -742,6 +809,9 @@ export default function PrincipalTab(props) {
     </>
   );
 }
+
+
+
 
 
 

@@ -1,10 +1,11 @@
 // web/src/pages/GeneralEquipos.jsx
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
+import { useSearchParams } from "react-router-dom";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion } from "../lib/ui-helpers";
 
-// Ajusta si tu backend usa otra ruta (histrico completo)
+// Ajusta si tu backend usa otra ruta (histórico completo)
 const ENDPOINT = "/api/equipos/";
 
 export default function GeneralEquipos() {
@@ -13,6 +14,7 @@ export default function GeneralEquipos() {
   const [err, setErr] = useState("");
   const [filter, setFilter] = useState("");
   const navigate = useNavigate();
+  const [search] = useSearchParams();
 
   async function load() {
     try {
@@ -30,7 +32,7 @@ export default function GeneralEquipos() {
       safe.sort((a, b) => Number(ingresoIdOf(b) ?? 0) - Number(ingresoIdOf(a) ?? 0));
       setRows(safe);
     } catch (e) {
-      setErr(e?.message || "No se pudo cargar el histrico de equipos");
+      setErr(e?.message || "No se pudo cargar el histórico de equipos");
       setRows([]);
     } finally {
       setLoading(false);
@@ -42,9 +44,23 @@ export default function GeneralEquipos() {
   }, []);
 
   const filtered = useMemo(() => {
+    const from = search.get('from');
+    const to = search.get('to');
+    const delivered = search.get('delivered');
+    const fromD = from ? new Date(from+"T00:00:00Z") : null;
+    const toD = to ? new Date(to+"T23:59:59Z") : null;
     const needle = norm(filter);
-    if (!needle) return rows;
-    return rows.filter((row) => {
+    const base = rows.filter((row) => {
+      if (delivered === '1') {
+        const ent = row?.fecha_entrega ? new Date(row.fecha_entrega) : null;
+        if (!ent) return false;
+        if (fromD && ent < fromD) return false;
+        if (toD && ent > toD) return false;
+      }
+      return true;
+    });
+    if (!needle) return base;
+    return base.filter((row) => {
       const campos = [
         formatOS(row),
         row?.razon_social ?? row?.cliente ?? row?.cliente_nombre,
@@ -76,7 +92,7 @@ export default function GeneralEquipos() {
 
   return (
     <div className="card">
-      <div className="h1 mb-3">General de equipos (histrico)</div>
+      <div className="h1 mb-3">General de equipos (histórico)</div>
 
       {err && (
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">
@@ -91,7 +107,7 @@ export default function GeneralEquipos() {
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filtrar por OS, cliente, tipo de equipo, marca, modelo, variante, estado, serie..."
           className="border rounded p-2 w-full max-w-md"
-          aria-label="Filtrar histrico"
+          aria-label="Filtrar histórico"
         />
         <button
           className="btn"
@@ -124,7 +140,7 @@ export default function GeneralEquipos() {
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">N/S (serie)</th>
                 <th scope="col" className="p-2">MG</th>
-                <th scope="col" className="p-2">Ubicacin</th>
+                <th scope="col" className="p-2">Ubicación</th>
                 <th scope="col" className="p-2">Fecha ingreso</th>
                 <th scope="col" className="p-2">Fecha entrega</th>
               </tr>

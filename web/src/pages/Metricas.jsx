@@ -1,18 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+﻿
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { getMetricasResumen, getMetricasSeries, getTecnicos, getMarcas, getTiposEquipo, getMetricasCalibracion } from "../lib/api";
+import ConfigPanel from "../components/metricas/ConfigPanel.jsx";
+import SimpleBars from "../components/metricas/charts/SimpleBars.jsx";
+import SimpleLine from "../components/metricas/charts/SimpleLine.jsx";
+import BoxPlot from "../components/metricas/charts/BoxPlot.jsx";
 
 function formatPct(n) {
   if (n == null || isNaN(n)) return "-";
   return `${(n * 100).toFixed(0)}%`;
 }
 
-function StatCard({ label, value, help }) {
+function StatCard({ label, value, help, status }) {
+  const dot = status === 'good' ? 'bg-emerald-500' : status === 'warn' ? 'bg-amber-500' : status === 'bad' ? 'bg-red-500' : 'bg-gray-300';
   return (
     <div className="p-4 border rounded bg-white">
-      <div className="text-sm text-gray-500">{label}</div>
+      <div className="text-sm text-gray-500 flex items-center gap-2">
+        <span className={`inline-block w-2 h-2 rounded-full ${dot}`}></span>
+        <span>{label}</span>
+      </div>
       <div className="text-2xl font-semibold mt-1">{value}</div>
       {help ? <div className="text-xs text-gray-400 mt-1">{help}</div> : null}
     </div>
@@ -22,10 +30,13 @@ function StatCard({ label, value, help }) {
 export default function Metricas() {
   const { user } = useAuth();
   const [search, setSearch] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
   const [series, setSeries] = useState(null);
+  const [calib, setCalib] = useState(null);
   const [tecnicos, setTecnicos] = useState([]);
   const [marcas, setMarcas] = useState([]);
   const [tipos, setTipos] = useState([]);
@@ -43,6 +54,12 @@ export default function Metricas() {
     const v = search.get('sla_excluir_derivados');
     return v ? v === '1' : true; // por defecto: excluir derivados
   });
+  const [configOpen, setConfigOpen] = useState(() => search.get('config') === '1' || (location?.pathname || '').endsWith('/metricas/config'));
+  const [targets, setTargets] = useState(()=>{ try { return JSON.parse(localStorage.getItem('metricas_targets')||'{}')||{}; } catch { return {}; } });
+  const [showCharts, setShowCharts] = useState(() => (search.get('view') || '') === 'charts');
+  const [presets, setPresets] = useState(()=>{ try { return JSON.parse(localStorage.getItem('metricas_presets')||'[]')||[]; } catch { return []; } });
+  const [presetSel, setPresetSel] = useState('');
+  const [presetName, setPresetName] = useState('');
 
   useEffect(() => {
     // cargar filtros
@@ -60,8 +77,81 @@ export default function Metricas() {
     if (marcaId) next.set('marca_id', marcaId); else next.delete('marca_id');
     if (tipoEquipo) next.set('tipo_equipo', tipoEquipo); else next.delete('tipo_equipo');
     if (slaExclDer) next.set('sla_excluir_derivados', '1'); else next.delete('sla_excluir_derivados');
+    if (showCharts) next.set('view', 'charts'); else next.delete('view');
     setSearch(next, { replace: true });
-  }, [desde, hasta, tecnicoId, marcaId, tipoEquipo, slaExclDer]);
+  }, [desde, hasta, tecnicoId, marcaId, tipoEquipo, slaExclDer, showCharts]);
+
+  // Abrir/cerrar config por query o ruta
+  useEffect(() => {
+    const shouldOpen = search.get('config') === '1' || (location?.pathname || '').endsWith('/metricas/config');
+    setConfigOpen(!!shouldOpen);
+  }, [search, location?.pathname]);
+
+  function openConfig() {
+    const next = new URLSearchParams(search.toString());
+    next.set('config', '1');
+    setSearch(next, { replace: false });
+    setConfigOpen(true);
+  }
+  function closeConfig() {
+    const next = new URLSearchParams(search.toString());
+    next.delete('config');
+    setSearch(next, { replace: true });
+    setConfigOpen(false);
+  }
+  useEffect(() => {
+    // recargar objetivos al abrir/cerrar
+    try { setTargets(JSON.parse(localStorage.getItem('metricas_targets')||'{}')||{}); } catch {}
+  }, [configOpen]);
+  function statusFor(value, target, higherIsBetter = false) {
+    if (target == null || isNaN(target) || value == null || isNaN(value)) return null;
+    const v = Number(value), t = Number(target);
+    if (higherIsBetter) {
+      if (v >= t) return 'good';
+      if (v >= t*0.8) return 'warn';
+      return 'bad';
+    } else {
+      if (v <= t) return 'good';
+      if (v <= t*1.2) return 'warn';
+      return 'bad';
+    }
+  }
+  function monthRange(period) {
+    const [y,m] = String(period||'').split('-').map(Number);
+    if (!y || !m) return { from: '', to: '' };
+    const from = new Date(Date.UTC(y, m-1, 1));
+    const to = new Date(Date.UTC(y, m, 0));
+    const iso = d => new Date(d).toISOString().slice(0,10);
+    return { from: iso(from), to: iso(to) };
+  }
+  function drillToDelivered(period) {
+    const {from,to} = monthRange(period);
+    if (from && to) navigate(`/equipos?from=${from}&to=${to}&delivered=1`);
+  }
+
+  function reloadPresets(){ try { setPresets(JSON.parse(localStorage.getItem('metricas_presets')||'[]')||[]); } catch {} }
+  function savePreset(){
+    const name = (presetName || '').trim(); if(!name) return;
+    const obj = { name, filters: { from: desde, to: hasta, tecnicoId, marcaId, tipoEquipo, slaExclDer } };
+    const list = presets.filter(p=>p.name!==name).concat([obj]);
+    localStorage.setItem('metricas_presets', JSON.stringify(list));
+    setPresets(list); setPresetSel(name); setPresetName('');
+  }
+  function applyPreset(){
+    const p = presets.find(p=>p.name===presetSel); if(!p) return;
+    const f = p.filters||{};
+    setDesde(f.from || desde);
+    setHasta(f.to || hasta);
+    setTecnicoId(f.tecnicoId || "");
+    setMarcaId(f.marcaId || "");
+    setTipoEquipo(f.tipoEquipo || "");
+    setSlaExclDer(!!f.slaExclDer);
+  }
+  function deletePreset(){
+    if(!presetSel) return; const list = presets.filter(p=>p.name!==presetSel);
+    localStorage.setItem('metricas_presets', JSON.stringify(list));
+    setPresets(list); setPresetSel('');
+  }
 
   useEffect(() => {
     let alive = true;
@@ -98,6 +188,21 @@ export default function Metricas() {
       .catch(() => { /* silencio */ });
     return () => { alive = false; };
   }, [desde, hasta, tecnicoId, marcaId, tipoEquipo]);
+
+  // Calibración (percentiles) para mostrar en UI
+  useEffect(() => {
+    let alive = true;
+    setCalib(null);
+    const params = { from: desde, to: hasta };
+    if (tecnicoId) params.tecnico_id = tecnicoId;
+    if (marcaId) params.marca_id = marcaId;
+    if (tipoEquipo) params.tipo_equipo = tipoEquipo;
+    if (slaExclDer) params.sla_excluir_derivados = 1;
+    getMetricasCalibracion(params)
+      .then((res)=>{ if (alive) setCalib(res); })
+      .catch(()=>{});
+    return () => { alive = false; };
+  }, [desde, hasta, tecnicoId, marcaId, tipoEquipo, slaExclDer]);
 
   function downloadCSV(filename, rows) {
     const bom = "\uFEFF"; // para Excel UTF-8
@@ -293,8 +398,11 @@ export default function Metricas() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Mtricas</h1>
-        <Link to="/metricas/clientes" className="text-blue-600 hover:underline">Ver mtricas por clientes </Link>
+        <h1 className="text-xl font-semibold">Métricas</h1>
+        <div className="flex items-center gap-2">
+          <Link to="/metricas/clientes" className="text-blue-600 hover:underline">Ver métricas por clientes</Link>
+          <button onClick={openConfig} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Configurar</button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
@@ -351,6 +459,16 @@ export default function Metricas() {
           </label>
         </div>
         <div className="md:col-span-6 flex gap-2 flex-wrap">
+          <div className="mr-2 inline-flex border rounded overflow-hidden">
+            <button
+              onClick={() => setShowCharts(false)}
+              className={`px-3 py-1.5 ${!showCharts ? 'bg-gray-100 font-semibold' : 'bg-white hover:bg-gray-50'}`}
+            >Tablas</button>
+            <button
+              onClick={() => setShowCharts(true)}
+              className={`px-3 py-1.5 border-l ${showCharts ? 'bg-gray-100 font-semibold' : 'bg-white hover:bg-gray-50'}`}
+            >Gráficos</button>
+          </div>
           <button onClick={exportTablasCSV} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar tablas (CSV)</button>
           <button onClick={() => exportSeriesCSV('monthly')} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar series mensuales (CSV)</button>
           <button onClick={() => exportSeriesCSV('yearly')} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar series anuales (CSV)</button>
@@ -361,27 +479,30 @@ export default function Metricas() {
         </div>
       </div>
 
-      {loading && <div className="text-gray-500">Cargando mtricas</div>}
+      {loading && <div className="text-gray-500">Cargando métricas</div>}
       {error && (
-        <div className="text-red-600">Error al cargar mtricas: {error}</div>
+        <div className="text-red-600">Error al cargar métricas: {error}</div>
       )}
 
       {data && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <StatCard
-              label="MTTR promedio (das)"
+              label="MTTR promedio (días)"
               value={data.mttr_dias != null ? Number(data.mttr_dias).toFixed(1) : "-"}
+              status={statusFor(data.mttr_dias != null ? Number(data.mttr_dias) : null, targets?.mttr_days, false)}
               help="Desde iniciar reparacin hasta reparado"
             />
             <StatCard
               label="SLA diagnstico < 24h"
               value={formatPct(data.sla_diag_24h?.cumplimiento || 0)}
+              status={statusFor(((data.sla_diag_24h?.cumplimiento || 0)*100), targets?.sla_diag_pct, true)}
               help={`${data.sla_diag_24h?.dentro || 0} de ${data.sla_diag_24h?.total || 0}`}
             />
             <StatCard
               label="Aprobacin presupuestos"
               value={formatPct(data.aprob_presupuestos?.tasa || 0)}
+              status={statusFor(((data.aprob_presupuestos?.tasa || 0)*100), targets?.aprob_pres_pct, true)}
               help={`${data.aprob_presupuestos?.aprobados || 0} de ${data.aprob_presupuestos?.emitidos || 0}`}
             />
           </div>
@@ -404,18 +525,28 @@ export default function Metricas() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <StatCard
-              label="Derivacin  Devuelto (das)"
+              label="Derivación  Devuelto (días)"
               value={data?.derivaciones?.t_deriv_a_devuelto_dias != null ? data.derivaciones.t_deriv_a_devuelto_dias.toFixed(1) : "-"}
             />
             <StatCard
-              label="Devuelto  Entregado (das)"
+              label="Devuelto  Entregado (días)"
               value={data?.derivaciones?.t_devuelto_a_entregado_dias != null ? data.derivaciones.t_devuelto_a_entregado_dias.toFixed(1) : "-"}
             />
           </div>
 
+          {data?.wip_aging_buckets && (
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+              <StatCard label="WIP 0–2 días" value={data.wip_aging_buckets["0-2"] ?? 0} />
+              <StatCard label="WIP 3–5 días" value={data.wip_aging_buckets["3-5"] ?? 0} />
+              <StatCard label="WIP 6–10 días" value={data.wip_aging_buckets["6-10"] ?? 0} />
+              <StatCard label="WIP 11–15 días" value={data.wip_aging_buckets["11-15"] ?? 0} />
+              <StatCard label="WIP 16+ días" value={data.wip_aging_buckets["16+"] ?? 0} />
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <h2 className="font-semibold mb-2">Cerrados por tcnico (7 das)</h2>
+              <h2 className="font-semibold mb-2">Cerrados por técnico (7 días)</h2>
               <div className="border rounded bg-white">
                 <table className="w-full text-sm">
                   <thead>
@@ -440,7 +571,7 @@ export default function Metricas() {
             </div>
 
             <div>
-              <h2 className="font-semibold mb-2">WIP por tcnico</h2>
+              <h2 className="font-semibold mb-2">WIP por técnico</h2>
               <div className="border rounded bg-white">
                 <table className="w-full text-sm">
                   <thead>
@@ -466,7 +597,7 @@ export default function Metricas() {
           </div>
 
           <div>
-            <h2 className="font-semibold mb-2">Cerrados por tcnico (30 das)</h2>
+            <h2 className="font-semibold mb-2">Cerrados por técnico (30 días)</h2>
             <div className="border rounded bg-white">
               <table className="w-full text-sm">
                 <thead>
@@ -492,12 +623,12 @@ export default function Metricas() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
             <div>
-              <h2 className="font-semibold mb-2">Facturacin aprobada por tcnico</h2>
+              <h2 className="font-semibold mb-2">Facturación aprobada por técnico</h2>
               <div className="border rounded bg-white">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Tcnico</th>
+                      <th className="text-left p-2">Técnico</th>
                       <th className="text-right p-2">$ Aprobado</th>
                     </tr>
                   </thead>
@@ -522,7 +653,7 @@ export default function Metricas() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Tcnico</th>
+                      <th className="text-left p-2">Técnico</th>
                       <th className="text-right p-2">$ MO</th>
                     </tr>
                   </thead>
@@ -544,7 +675,7 @@ export default function Metricas() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
             <div>
-              <h2 className="font-semibold mb-2">Repuestos facturados por tcnico</h2>
+              <h2 className="font-semibold mb-2">Repuestos facturados por técnico</h2>
               <div className="border rounded bg-white">
                 <table className="w-full text-sm">
                   <thead>
@@ -552,6 +683,34 @@ export default function Metricas() {
                       <th className="text-left p-2">Tcnico</th>
                       <th className="text-right p-2">$ Repuestos</th>
                     </tr>
+
+          {calib && (
+            <div className="mt-6">
+              <h2 className="font-semibold mb-2">Calibración (percentiles)</h2>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <StatCard
+                  label="Diag en horas hábiles (P50)"
+                  value={calib.diag_business_minutes?.p50 != null ? (calib.diag_business_minutes.p50/60).toFixed(1) + ' h' : '-'}
+                  help={`P75 ${(calib.diag_business_minutes?.p75/60)?.toFixed(1)||'-'} h • P90 ${(calib.diag_business_minutes?.p90/60)?.toFixed(1)||'-'} h`}
+                />
+                <StatCard
+                  label="Ingreso→Emitir presupuesto (P50)"
+                  value={calib.diag_to_emit_hours?.p50 != null ? calib.diag_to_emit_hours.p50.toFixed(1) + ' h' : '-'}
+                  help={`P75 ${(calib.diag_to_emit_hours?.p75)?.toFixed(1)||'-'} h • P90 ${(calib.diag_to_emit_hours?.p90)?.toFixed(1)||'-'} h`}
+                />
+                <StatCard
+                  label="Emitir→Aprobar (P50)"
+                  value={calib.emit_to_approve_hours?.p50 != null ? calib.emit_to_approve_hours.p50.toFixed(1) + ' h' : '-'}
+                  help={`P75 ${(calib.emit_to_approve_hours?.p75)?.toFixed(1)||'-'} h • P90 ${(calib.emit_to_approve_hours?.p90)?.toFixed(1)||'-'} h`}
+                />
+                <StatCard
+                  label="Ingreso→Entregado (P50)"
+                  value={calib.ingreso_to_deliver_days?.p50 != null ? calib.ingreso_to_deliver_days.p50.toFixed(1) + ' d' : '-'}
+                  help={`P75 ${(calib.ingreso_to_deliver_days?.p75)?.toFixed(1)||'-'} d • P90 ${(calib.ingreso_to_deliver_days?.p90)?.toFixed(1)||'-'} d`}
+                />
+              </div>
+            </div>
+          )}
                   </thead>
                   <tbody>
                     {(data?.repuestos_por_tecnico || []).length === 0 && (
@@ -571,13 +730,55 @@ export default function Metricas() {
 
           {series && (
             <>
-              {/* Grficos ligeros */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <MiniSpark title="Entregados" values={(series.monthly||[]).map(m=>m.entregados||0)} fmt={(v)=>v} />
-                <MiniSpark title="MTTR (das)" values={(series.monthly||[]).map(m=>m.mttr_dias||0)} fmt={(v)=>v?.toFixed(1)} />
-                <MiniSpark title="SLA diag 24h (%)" values={(series.monthly||[]).map(m=>Math.round((m.sla_diag_24h?.cumplimiento||0)*100))} fmt={(v)=>`${v}%`} />
-              </div>
-              
+              {showCharts && (
+                <>
+                  <div className="space-y-4">
+                    <SimpleBars
+                      title="Entregados por mes"
+                      categories={(series.monthly||[]).map(m=>m.period)}
+                      values={(series.monthly||[]).map(m=>m.entregados||0)}
+                      fmt={(v)=>Number(v).toLocaleString()}
+                      onClickBar={(i)=>drillToDelivered((series.monthly||[])[i]?.period)}
+                    />
+                    <SimpleLine
+                      title="MTTR (días) y TAT (días)"
+                      categories={(series.monthly||[]).map(m=>m.period)}
+                      series={[
+                        { name: 'MTTR (días)', values: (series.monthly||[]).map(m=>m.mttr_dias||0) },
+                        { name: 'TAT ingreso→entrega (días)', values: (series.monthly||[]).map(m=>m.tat_dias||0), color: '#ef4444' },
+                      ]}
+                      fmt={(v)=>Number(v).toFixed(1)}
+                    />
+                    <BoxPlot
+                      title="MTTR percentiles (mensual)"
+                      categories={(series.monthly||[]).map(m=>m.period)}
+                      items={(series.monthly||[]).map(m=>({p25:m.mttr_percentiles?.p25, p50:m.mttr_percentiles?.p50, p75:m.mttr_percentiles?.p75, p90:m.mttr_percentiles?.p90, p95:m.mttr_percentiles?.p95}))}
+                      onClickBox={(i)=>drillToDelivered((series.monthly||[])[i]?.period)}
+                    />
+                    <SimpleLine
+                      title="Tiempos de presupuesto (h)"
+                      categories={(series.monthly||[]).map(m=>m.period)}
+                      series={[
+                        { name: 'Emitir (h)', values: (series.monthly||[]).map(m=>m.aprob_presupuestos?.t_emitir_horas||0) },
+                        { name: 'Aprobar (h)', values: (series.monthly||[]).map(m=>m.aprob_presupuestos?.t_aprobar_horas||0), color: '#f59e0b' },
+                      ]}
+                      fmt={(v)=>Number(v).toFixed(1)}
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <MiniSpark title="Entregados" values={(series.monthly||[]).map(m=>m.entregados||0)} fmt={(v)=>v} />
+                    <MiniSpark title="MTTR (días)" values={(series.monthly||[]).map(m=>m.mttr_dias||0)} fmt={(v)=>Number(v).toFixed(1)} />
+                    <MiniSpark title="SLA diag 24h (%)" values={(series.monthly||[]).map(m=>Math.round((m.sla_diag_24h?.cumplimiento||0)*100))} fmt={(v)=>`${v}%`} />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                    <MiniSpark title="T emitir presupuesto (h)" values={(series.monthly||[]).map(m=>m.aprob_presupuestos?.t_emitir_horas||0)} fmt={(v)=>Number(v).toFixed(1)} />
+                    <MiniSpark title="T aprobar presupuesto (h)" values={(series.monthly||[]).map(m=>m.aprob_presupuestos?.t_aprobar_horas||0)} fmt={(v)=>Number(v).toFixed(1)} />
+                    <MiniSpark title="Derivados externos (mensual)" values={(series.monthly||[]).map(m=>m.externo?.derivados||0)} fmt={(v)=>v} />
+                  </div>
+                </>
+              )}
+
+              {!showCharts && (
               <div className="mt-8">
                 <h2 className="font-semibold mb-2">Tendencias mensuales</h2>
                 <div className="overflow-x-auto border rounded bg-white">
@@ -586,7 +787,7 @@ export default function Metricas() {
                       <tr className="bg-gray-50 text-gray-600">
                         <th className="p-2 text-left">Periodo</th>
                         <th className="p-2 text-right">Entregados</th>
-                        <th className="p-2 text-right">MTTR (das)</th>
+                        <th className="p-2 text-right">MTTR (días)</th>
                         <th className="p-2 text-right">SLA diag 24h</th>
                         <th className="p-2 text-right">T. emitir (h)</th>
                         <th className="p-2 text-right">T. aprobar (h)</th>
@@ -613,16 +814,18 @@ export default function Metricas() {
                   </table>
                 </div>
               </div>
+              )}
 
+              {!showCharts && (
               <div className="mt-8">
                 <h2 className="font-semibold mb-2">Tendencias anuales</h2>
                 <div className="overflow-x-auto border rounded bg-white">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-gray-50 text-gray-600">
-                        <th className="p-2 text-left">Ao</th>
+                        <th className="p-2 text-left">Año</th>
                         <th className="p-2 text-right">Entregados</th>
-                        <th className="p-2 text-right">MTTR (das)</th>
+                        <th className="p-2 text-right">MTTR (días)</th>
                         <th className="p-2 text-right">SLA diag 24h</th>
                         <th className="p-2 text-right">T. emitir (h)</th>
                         <th className="p-2 text-right">T. aprobar (h)</th>
@@ -649,10 +852,12 @@ export default function Metricas() {
                   </table>
                 </div>
               </div>
+              )}
             </>
           )}
         </>
       )}
+      <ConfigPanel open={configOpen} onClose={closeConfig} />
     </div>
   );
 }
@@ -679,4 +884,7 @@ function MiniSpark({ title, values = [], fmt = (v)=>v }) {
     </div>
   );
 }
+
+
+
 

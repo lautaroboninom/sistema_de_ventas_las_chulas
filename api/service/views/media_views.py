@@ -78,7 +78,7 @@ def _ensure_media_view_perm(request, ingreso_row):
     rol = _rol(request)
     if rol in MEDIA_VIEW_ROLES - {"tecnico"}:
         return
-    if rol == "tecnico" and ingreso_row and ingreso_row.get("asignado_a") == _current_user_id(request):
+    if rol == "tecnico" and ingreso_row:
         return
     from rest_framework.exceptions import PermissionDenied
     raise PermissionDenied("No autorizado para ver fotos del ingreso")

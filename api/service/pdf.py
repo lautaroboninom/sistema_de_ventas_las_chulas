@@ -688,8 +688,8 @@ def render_quote_pdf(ingreso_id: int):
     c.setFont("Helvetica", 10)
     forma_pago = head.get("forma_pago") or "30 F.F."
     c.drawString(ml, y, f"FormaPago: {forma_pago}"); y -= 12
-    c.drawString(ml, y, "PlazoEntrega: INMEDIATA"); y -= 12
-    c.drawString(ml, y, "Garantia: 90 DÍAS"); y -= 12
+    c.drawString(ml, y, "PlazoEntrega: < 5 DÍAS HÁBILES"); y -= 12
+    c.drawString(ml, y, "Garantía: 90 DÍAS"); y -= 12
     c.drawString(ml, y, "Mant. de Oferta: 7 DÍAS"); y -= 18
 
     fecha = fecha_larga(head["fecha_emitido"])
@@ -888,7 +888,10 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         # r2: Equipo | Marca | Modelo | NumeroSerie
         label_value(inner_x, y - ROW_H, 52 * mm, ROW_H, "Equipo", head.get("equipo"))
         label_value(inner_x + 54 * mm, y - ROW_H, 38 * mm, ROW_H, "Marca", head.get("marca"))
-        label_value(inner_x + 95 * mm, y - ROW_H, 36 * mm, ROW_H, "Modelo", head.get("modelo"))
+        try:
+            label_value(inner_x + 95 * mm, y - ROW_H, 36 * mm, ROW_H, "Modelo", head.get("modelo") + " " + head.get("equipo_variante"))
+        except:
+            label_value(inner_x + 95 * mm, y - ROW_H, 36 * mm, ROW_H, "Modelo", head.get("modelo"))
         label_value(inner_x + 134 * mm, y - ROW_H, 36 * mm, ROW_H, "NumeroSerie", head.get("numero_serie"))
         y -= (ROW_H + ROW_GAP)
 

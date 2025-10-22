@@ -17,7 +17,7 @@ export default function HistorialTab({ hErr, hLoading, hist }) {
               <th className="p-2">Entidad</th>
               <th className="p-2">Campo</th>
               <th className="p-2">Antes</th>
-              <th className="p-2">Despus</th>
+              <th className="p-2">Después</th>
             </tr>
           </thead>
           <tbody>

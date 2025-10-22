@@ -199,7 +199,7 @@ export default function CatalogoMarcas() {
   const addMarca = async (e) => { e.preventDefault(); try { await postMarca(fm.nombre); setFm({ nombre: "" }); setMsg("Marca agregada"); loadMarcas(); } catch (e) { setErr(e.message); } };
   const delMarcaCascade = async (id) => {
     const typed = prompt(
-      "Esta accin eliminar la marca y TODOS sus modelos. Se desvincularn equipos relacionados.\nEscribe ELIMINAR para confirmar:",
+      "Esta acción eliminará la marca y TODOS sus modelos. Se desvincularán equipos relacionados.\nEscribí ELIMINAR para confirmar:",
       ""
     );
     if (typed !== "ELIMINAR") return;
@@ -209,9 +209,9 @@ export default function CatalogoMarcas() {
   const addModelo = async (e) => { e.preventDefault(); if (!sel) return; try { await postModelo(sel.id, { nombre: fmo.nombre, tipo_equipo: (fmo.tipo_equipo || "").trim() || undefined, tecnico_id: fmo.tecnico_id ? Number(fmo.tecnico_id) : undefined }); setFmo({ nombre: "", tipo_equipo: "", tecnico_id: "" }); setMsg("Modelo agregado"); loadModelos(sel.id); } catch (e) { setErr(e.message); } };
   const delModelo = async (id) => { if (!confirm("Eliminar modelo?")) return; try { await deleteModelo(id); loadModelos(sel.id); } catch (e) { setErr(e.message); } };
 
-  // Tcnicos / tipo de equipo
-  async function guardarTecnicoMarcaYApli(){ if(!sel) return; if(!marcaTecId ? !confirm("Vas a dejar la marca sin tcnico. Continuar?") : !confirm("Aplicar este tcnico a TODOS los modelos de la marca (sobrescribe). Continuar?")) return; try{ setLoading(true); setErr(""); setMsg(""); await patchMarcaTecnico(sel.id, marcaTecId ? Number(marcaTecId) : null); await postMarcaAplicarTecnico(sel.id, true); setMsg("Tcnico de marca guardado y aplicado a todos los modelos."); setSel(prev => prev ? { ...prev, tecnico_id: (marcaTecId || null) ? Number(marcaTecId) : null } : prev); await loadModelos(sel.id);} catch(e){ setErr(e.message || "No se pudo asignar/aplicar el tcnico de la marca"); } finally{ setLoading(false);} }
-  async function guardarTecnicoModelo(modelId){ const tId = mdlTecSel[modelId] || null; try{ setLoading(true); setErr(""); setMsg(""); await patchModeloTecnico(sel.id, modelId, tId ? Number(tId) : null); setMsg("Tcnico del modelo guardado."); setModelos(ms => ms.map(m => m.id === modelId ? { ...m, tecnico_id: tId ? Number(tId) : null } : m)); } catch(e){ setErr(e.message || "No se pudo guardar el tcnico del modelo"); } finally{ setLoading(false);} }
+  // Técnicos / tipo de equipo
+  async function guardarTecnicoMarcaYApli(){ if(!sel) return; if(!marcaTecId ? !confirm("Vas a dejar la marca sin técnico. ¿Continuar?") : !confirm("Aplicar este técnico a TODOS los modelos de la marca (sobrescribe). ¿Continuar?")) return; try{ setLoading(true); setErr(""); setMsg(""); await patchMarcaTecnico(sel.id, marcaTecId ? Number(marcaTecId) : null); await postMarcaAplicarTecnico(sel.id, true); setMsg("Técnico de marca guardado y aplicado a todos los modelos."); setSel(prev => prev ? { ...prev, tecnico_id: (marcaTecId || null) ? Number(marcaTecId) : null } : prev); await loadModelos(sel.id);} catch(e){ setErr(e.message || "No se pudo asignar/aplicar el técnico de la marca"); } finally{ setLoading(false);} }
+  async function guardarTecnicoModelo(modelId){ const tId = mdlTecSel[modelId] || null; try{ setLoading(true); setErr(""); setMsg(""); await patchModeloTecnico(sel.id, modelId, tId ? Number(tId) : null); setMsg("Técnico del modelo guardado."); setModelos(ms => ms.map(m => m.id === modelId ? { ...m, tecnico_id: tId ? Number(tId) : null } : m)); } catch(e){ setErr(e.message || "No se pudo guardar el técnico del modelo"); } finally{ setLoading(false);} }
   async function guardarTipoEquipo(modelId){ const tipoText=(mdlTipoSel[modelId]||"").trim(); try{ setLoading(true); setErr(""); setMsg(""); await patchModeloTipoEquipo(sel.id, modelId, { tipo_equipo: tipoText }); setMsg("Tipo de equipo del modelo guardado."); setModelos(ms => ms.map(m => m.id === modelId ? { ...m, tipo_equipo: tipoText } : m)); const updated = modelos.find(m=>m.id===modelId); if(updated){ await ensureModelCatalogVariants({ ...updated, tipo_equipo: tipoText }); } } catch(e){ setErr(e.message || "No se pudo guardar el tipo de equipo"); } finally{ setLoading(false);} }
 
   return (
@@ -245,9 +245,9 @@ export default function CatalogoMarcas() {
 
                 {sel?.id === m.id && (
                   <div className="mt-3 border-t pt-3">
-                    <label className="text-sm block mb-1">Tcnico asignado a la marca</label>
+                    <label className="text-sm block mb-1">Técnico asignado a la marca</label>
                     <Select value={marcaTecId ?? ""} onChange={(e) => setMarcaTecId(e.target.value ? Number(e.target.value) : "") }>
-                      <option value="">- Sin tcnico -</option>
+                      <option value="">- Sin técnico -</option>
                       {tecnicos.map((t) => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
                     </Select>
                     <div className="flex gap-2 mt-2">

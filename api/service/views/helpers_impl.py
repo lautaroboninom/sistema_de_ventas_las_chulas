@@ -510,9 +510,9 @@ def _email_append_footer_html(html: str) -> str:
 
 def os_label(_id: int) -> str:
     try:
-        return f"OS {str(int(_id)).zfill(6)}"
+        return f"{str(int(_id)).zfill(5)}"
     except Exception:
-        return f"OS {str(_id)}"
+        return f"{str(_id)}"
 
 
 # ---- Business-hours and metrics helpers (kept for compat) ----

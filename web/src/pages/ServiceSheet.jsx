@@ -1,4 +1,4 @@
-// web/src/pages/ServiceSheet.jsx (container)
+﻿// web/src/pages/ServiceSheet.jsx (container)
 import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -8,7 +8,7 @@ import {
   getIngresoHistorial,
   getGeneralEquipos,
 } from "../lib/api";
-import { getMarcas, getModelosByBrand, getVariantesPorMarca, checkGarantiaFabrica } from "../lib/api";
+import { getMarcas, getModelosByBrand, getVariantesPorMarca, checkGarantiaFabrica, patchModeloTipoEquipo } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import {
   formatOS as formatOSHelper,
@@ -55,7 +55,7 @@ export default function ServiceSheet() {
   const canManagePresupuesto = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]);
   const canSeeHistory = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO]);
 
-  // pestaas
+  // pestañas
   const [tab, setTab] = useState("principal");
   useEffect(() => {
     try {
@@ -64,6 +64,26 @@ export default function ServiceSheet() {
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location?.state]);
+
+  // Leer tab/tecnico_id desde el querystring (enlaces del mail)
+  useEffect(() => {
+    try {
+      const search = location?.search || "";
+      if (!search) return;
+      const sp = new URLSearchParams(search);
+      const t = (sp.get("tab") || "").trim();
+      if (t && ["principal","diagnostico","presupuesto","derivaciones","historial"].includes(t)) {
+        setTab(t);
+      }
+      if (canAssignTecnico) {
+        const tid = (sp.get("tecnico_id") || "").trim();
+        if (tid) {
+          const n = Number(tid);
+          if (!Number.isNaN(n)) { setTecnicoIdQS(n); setTecnicoId(n); }
+        }
+      }
+    } catch {}
+  }, [location?.search, canAssignTecnico]);
 
   // datos generales
   const [data, setData] = useState(null);
@@ -82,17 +102,19 @@ export default function ServiceSheet() {
   // tcnicos
   const [tecnicos, setTecnicos] = useState([]);
   const [tecnicoId, setTecnicoId] = useState(null);
+  const [tecnicoIdQS, setTecnicoIdQS] = useState(null);
 
   // accesorios
   const [accesCatalogo, setAccesCatalogo] = useState([]);
   const [nuevoAcc, setNuevoAcc] = useState({ descripcion: "", referencia: "" });
 
-  // diagnstico (texto/fecha) mantenidos en el contenedor
+  // Diagnóstico (texto/fecha) mantenidos en el contenedor
   const [descripcion, setDescripcion] = useState("");
   const [trabajos, setTrabajos] = useState("");
   const [resolucion, setResolucion] = useState("");
   const [fechaServStr, setFechaServStr] = useState("");
   const [showReparadoToast, setShowReparadoToast] = useState(false);
+  const [savingDiag, setSavingDiag] = useState(false);
   const canResolve = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]);
   const toDatetimeLocalStr = (isoOrDate) => {
     if (!isoOrDate) return "";
@@ -121,7 +143,7 @@ export default function ServiceSheet() {
   const [tipoSel, setTipoSel] = useState("");
   const [varSugeridas, setVarSugeridas] = useState([]);
 
-  // edicin bsica
+  // edición bsica
   const [editBasics, setEditBasics] = useState(false);
   const [formBasics, setFormBasics] = useState(null);
   const [savingBasics, setSavingBasics] = useState(false);
@@ -144,16 +166,16 @@ export default function ServiceSheet() {
     }
   }
 
-  async function refreshIngreso() {
+  async function refreshIngreso(params) {
     try {
-      const ing = await getIngreso(id);
+      const ing = await getIngreso(id, params || undefined);
       setData(ing);
     } catch (e) {
       setErr(e?.message || "No se pudo refrescar el ingreso");
     }
   }
 
-  // cargar historial solo cuando se selecciona la pestaa
+  // cargar historial solo cuando se selecciona la pestaña
   useEffect(() => {
     if (tab !== "historial") return;
     (async () => {
@@ -183,7 +205,7 @@ export default function ServiceSheet() {
     if (!relatedOpen) return;
     const serie = (data?.numero_serie || "").trim();
     if (!serie) {
-      setRelatedErr("Este equipo no tiene nmero de serie registrado.");
+      setRelatedErr("Este equipo no tiene Número de serie registrado.");
       setRelatedRows([]);
       setRelatedLoading(false);
       return;
@@ -226,7 +248,7 @@ export default function ServiceSheet() {
     return () => window.removeEventListener("keydown", handler);
   }, [relatedOpen]);
 
-  // Activar edicin bsica
+  // Activar edición bsica
   function startEditBasics() {
     setFormBasics({
       razon_social: data?.razon_social || "",
@@ -252,7 +274,7 @@ export default function ServiceSheet() {
         let curMarca = (marcas.length ? marcas : await getMarcas()).find((m) => norm(m?.nombre) === curMarcaName);
         const marcaId = curMarca?.id ?? null;
         setMarcaIdSel(marcaId);
-        const tipoActual = (data?.tipo_equipo_nombre || data?.tipo_equipo || "").toString();
+        const tipoActual = (data?.tipo_equipo_nombre || data?.tipo_equipo || "").toString().trim().toUpperCase();
         setTipoSel(tipoActual);
         if (marcaId) {
           try {
@@ -304,16 +326,27 @@ export default function ServiceSheet() {
       setSavingBasics(true);
       if (Object.keys(diff).length > 0) {
         await patch(diff);
-        if (
-          diff.marca_id != null ||
-          diff.modelo_id != null ||
-          diff.equipo_variante !== undefined ||
-          diff.garantia !== undefined ||
-          diff.numero_serie !== undefined ||
-          diff.numero_interno !== undefined
-        ) {
-          await refreshIngreso();
+      }
+
+      // Persistir Tipo de equipo en el modelo asociado si cambi
+      try {
+        const tipoNuevo = (tipoSel || "").toString().trim();
+        const tipoActual = (data?.tipo_equipo_nombre || data?.tipo_equipo || "").toString().trim();
+        // Determinar modelo/marca efectivos (nuevo seleccionado o actuales)
+        const selModelo = modelos.find((m) => String(m.id) === String(modeloIdSel));
+        const modeloIdEfectivo = selModelo ? Number(selModelo.id) : (data?.model_id != null ? Number(data.model_id) : null);
+        const marcaIdEfectivo = marcaIdSel != null ? Number(marcaIdSel) : (data?.marca_id != null ? Number(data.marca_id) : null);
+        if (modeloIdEfectivo && marcaIdEfectivo && (tipoNuevo || tipoActual) && tipoNuevo.toUpperCase() !== (tipoActual || "").toUpperCase()) {
+          await patchModeloTipoEquipo(marcaIdEfectivo, modeloIdEfectivo, { tipo_equipo: tipoNuevo });
         }
+      } catch {}
+
+      // Refrescar si hubo cambios relevantes o si pudo haber cambiado el tipo
+      if (
+        Object.keys(diff).length > 0 ||
+        (tipoSel || "").toString().trim().toUpperCase() !== (data?.tipo_equipo || "").toString().trim().toUpperCase()
+      ) {
+        await refreshIngreso();
       }
       setEditBasics(false);
       setFormBasics(null);
@@ -354,12 +387,18 @@ export default function ServiceSheet() {
   useEffect(() => {
     (async () => {
       try {
-        const [ing, ubs] = await Promise.all([getIngreso(id), getUbicaciones()]);
+        const [ing, ubs] = await Promise.all([getIngreso(id, { strong: 1 }), getUbicaciones()]);
         setData(ing);
         setUbicaciones(ubs);
         setUbicacionId(ing?.ubicacion_id != null ? String(ing.ubicacion_id) : "");
-        if (canAssignTecnico && ing?.tecnico_solicitado_id && ing?.tecnico_solicitado_id !== (ing?.asignado_a ?? null)) {
-          setTecnicoId(ing.tecnico_solicitado_id);
+        if (canAssignTecnico) {
+          if (tecnicoIdQS != null) {
+            setTecnicoId(Number(tecnicoIdQS));
+          } else if (ing?.tecnico_solicitado_id && ing?.tecnico_solicitado_id !== (ing?.asignado_a ?? null)) {
+            setTecnicoId(ing.tecnico_solicitado_id);
+          } else {
+            setTecnicoId(ing?.asignado_a ?? null);
+          }
         } else {
           setTecnicoId(ing?.asignado_a ?? null);
         }
@@ -380,13 +419,50 @@ export default function ServiceSheet() {
         setErr(e?.message || "Error cargando datos");
       }
     })();
-  }, [id, canAssignTecnico]);
+  }, [id, canAssignTecnico, tecnicoIdQS]);
+
+  // Auto-guardado de diagnóstico y trabajos (con debounce)
+  useEffect(() => {
+    if (!data) return;
+    // respetar permisos de edición
+    const isTech = user?.rol === ROLES.TECNICO;
+    const userId = Number(user?.id || 0);
+    const canEditDiagLocal = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (isTech && userId && data?.asignado_a === userId);
+    if (!canEditDiagLocal) return;
+    if (data?.estado === "entregado") return;
+
+    const curDesc = data?.descripcion_problema ?? "";
+    const curTrab = data?.trabajos_realizados ?? "";
+    const curFechaStr = toDatetimeLocalStr(data?.fecha_servicio);
+
+    const payload = {};
+    if (descripcion !== curDesc) payload.descripcion_problema = descripcion;
+    if (trabajos !== curTrab) payload.trabajos_realizados = trabajos;
+    if ((fechaServStr || "") !== (curFechaStr || "")) payload.fecha_servicio = (fechaServStr || "").trim() || null;
+
+    if (Object.keys(payload).length === 0) return;
+
+    const h = setTimeout(async () => {
+      try {
+        setSavingDiag(true);
+        await patch(payload);
+        setErr("");
+      } catch (e) {
+        setErr(e?.message || "No se pudo guardar");
+      } finally {
+        setSavingDiag(false);
+      }
+    }, 700);
+
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [descripcion, trabajos, fechaServStr, data, user]);
 
   if (!data) return <div className="p-4">Cargando...</div>;
   const isAprobado = data.presupuesto_estado === "aprobado";
   const numeroSerie = (data?.numero_serie || "").trim();
   const userId = Number(user?.id || 0);
-  const canManagePhotos = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (user?.rol === ROLES.TECNICO && userId && data?.asignado_a === userId);
+  const canManagePhotos = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (user?.rol === ROLES.TECNICO && userId);
   const isTech = user?.rol === ROLES.TECNICO;
   const canEditDiag = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (isTech && userId && data?.asignado_a === userId);
   const canMarkReparado = canEditDiag;
@@ -396,8 +472,8 @@ export default function ServiceSheet() {
       <button type="button" onClick={() => navigate(-1)} className="mb-3 inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800">
         Volver
       </button>
-      <h1 className="text-2xl font-bold mb-1">Hoja de servicio - {formatOSHelper(data, id)} - NS: {data?.numero_interno || data?.numero_serie}</h1>
-      <div className="text-sm text-gray-700 mb-3">{(data?.tipo_equipo_nombre || data?.tipo_equipo || "-").toString()} - {(data?.marca || "-").toString()} - {(data?.modelo || "-").toString()}</div>
+      <h1 className="text-2xl font-bold mb-1">Hoja de servicio - OS: {formatOSHelper(data, id)} - NS: {data?.numero_interno || data?.numero_serie}</h1>
+      <div className="text-sm text-gray-700 mb-3">{(data?.tipo_equipo_nombre || data?.tipo_equipo || "-").toString()} - {(data?.marca || "-").toString()} - {(data?.modelo || "-").toString()} {(data?.equipo_variante || "").toString()}</div>
 
       {err && <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-4">{err}</div>}
       {canSeeHistory && (
@@ -413,7 +489,7 @@ export default function ServiceSheet() {
         onChange={setTab}
         items={[
           { value: "principal", label: "Principal" },
-          { value: "diagnostico", label: "Diagnstico y Reparacin" },
+          { value: "diagnostico", label: "Diagnóstico y Reparación" },
           { value: "presupuesto", label: "Presupuesto" },
           { value: "derivaciones", label: "Derivaciones" },
           { value: "archivos", label: "Archivos" },
@@ -439,6 +515,8 @@ export default function ServiceSheet() {
           modelos={modelos}
           modeloIdSel={modeloIdSel}
           setModeloIdSel={setModeloIdSel}
+          tipoSel={tipoSel}
+          setTipoSel={setTipoSel}
           variantes={varSugeridas}
           ubicaciones={ubicaciones}
           ubicacionId={ubicacionId}
@@ -464,7 +542,7 @@ export default function ServiceSheet() {
         />
       )}
 
-      {/* DIAGNSTICO */}
+      {/* Diagnóstico */}
       {tab === "diagnostico" && (
         <DiagnosticoTab
           id={id}
@@ -490,6 +568,7 @@ export default function ServiceSheet() {
           setErr={setErr}
           refreshIngreso={refreshIngreso}
           setShowReparadoToast={setShowReparadoToast}
+          savingDiag={savingDiag}
           canManagePhotos={canManagePhotos}
         />
       )}
@@ -517,7 +596,7 @@ export default function ServiceSheet() {
             <div className="flex items-start justify-between gap-3 mb-3">
               <div>
                 <h2 className="text-lg font-semibold">Ingresos del equipo</h2>
-                <div className="text-sm text-gray-600">Nmero de serie: <span className="font-semibold">{numeroSerie || "-"}</span></div>
+                <div className="text-sm text-gray-600">Número de serie: <span className="font-semibold">{numeroSerie || "-"}</span></div>
               </div>
               <button type="button" className="text-sm text-gray-500 hover:text-gray-900" onClick={() => setRelatedOpen(false)} aria-label="Cerrar historial de ingresos">Cerrar</button>
             </div>
@@ -526,7 +605,7 @@ export default function ServiceSheet() {
             ) : relatedErr ? (
               <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded">{relatedErr}</div>
             ) : relatedRows.length === 0 ? (
-              <div className="text-sm text-gray-500">No se encontraron otros ingresos con este nmero de serie.</div>
+              <div className="text-sm text-gray-500">No se encontraron otros ingresos con este Número de serie.</div>
             ) : (
               <>
                 <div className="overflow-x-auto">
@@ -537,7 +616,7 @@ export default function ServiceSheet() {
                         <th className="p-2">Estado</th>
                         <th className="p-2">Presupuesto</th>
                         <th className="p-2">Fecha ingreso</th>
-                        <th className="p-2">Ubicacin</th>
+                        <th className="p-2">Ubicación</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -582,19 +661,19 @@ export default function ServiceSheet() {
         <HistorialTab hErr={hErr} hLoading={hLoading} hist={hist} />
       )}
 
-      {/* Botn flotante para edicin bsica */}
+      {/* Botón flotante para edición bsica */}
       {canEditBasics && (
         <div className="fixed bottom-4 right-4 z-20 flex gap-2">
           {!editBasics ? (
-            <button className="text-xs px-3 py-2 rounded shadow bg-neutral-800 text-white hover:bg-neutral-700" onClick={startEditBasics} type="button" title="Habilitar edicin de datos">
+            <button className="text-xs px-3 py-2 rounded shadow bg-neutral-800 text-white hover:bg-neutral-700" onClick={startEditBasics} type="button" title="Habilitar edición de datos">
               Editar datos
             </button>
           ) : (
             <>
-              <button className="text-xs px-3 py-2 rounded shadow bg-amber-600 text-white disabled:opacity-60" onClick={saveEditBasics} disabled={savingBasics} type="button" title="Cerrar edicin y guardar cambios">
-                {savingBasics ? "Guardando..." : "Cerrar edicin"}
+              <button className="text-xs px-3 py-2 rounded shadow bg-amber-600 text-white disabled:opacity-60" onClick={saveEditBasics} disabled={savingBasics} type="button" title="Cerrar edición y guardar cambios">
+                {savingBasics ? "Guardando..." : "Cerrar edición"}
               </button>
-              <button className="text-xs px-3 py-2 rounded shadow bg-gray-200 hover:bg-gray-300" onClick={() => { setEditBasics(false); setFormBasics(null); }} type="button" title="Cancelar edicin">
+              <button className="text-xs px-3 py-2 rounded shadow bg-gray-200 hover:bg-gray-300" onClick={() => { setEditBasics(false); setFormBasics(null); }} type="button" title="Cancelar edición">
                 Cancelar
               </button>
             </>
@@ -604,12 +683,4 @@ export default function ServiceSheet() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
 

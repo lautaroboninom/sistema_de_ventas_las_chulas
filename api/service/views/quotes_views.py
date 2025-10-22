@@ -382,7 +382,8 @@ class AprobarPresupuestoView(APIView):
                   COALESCE(b.nombre,'') AS marca,
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  COALESCE(d.numero_serie,'') AS numero_serie
+                  COALESCE(d.numero_serie,'') AS numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno
                 FROM ingresos t
                 LEFT JOIN users   u ON u.id = t.asignado_a
                 JOIN devices      d ON d.id = t.device_id
@@ -408,7 +409,7 @@ class AprobarPresupuestoView(APIView):
                     f"- Cliente: {row.get('cliente') or '-'}",
                     f"- Marca/Modelo: {row.get('marca') or '-'} / {row.get('modelo') or '-'}",
                     f"- Tipo: {row.get('tipo_equipo') or '-'}",
-                    f"- N° de serie: {row.get('numero_serie') or '-'}",
+                    f"- N° de serie: {row.get('numero_interno') or row.get('numero_serie') or '-'}",
                     "",
                     f"Abrir hoja de servicio: {link}",
                     "",

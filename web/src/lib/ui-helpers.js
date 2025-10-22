@@ -108,9 +108,7 @@ export const nsPreferInternoOf = (row, fallback = "-") => {
   const str = (v) => (v == null ? "" : String(v).trim());
   const interno =
     str(row?.numero_interno) ||
-    str(row?.equipo?.numero_interno) ||
-    str(row?.mg) ||
-    str(row?.equipo?.mg);
+    str(row?.equipo?.numero_interno);
   if (interno) return interno;
   const serie = str(row?.numero_serie) || str(row?.equipo?.numero_serie);
   return serie || fallback;

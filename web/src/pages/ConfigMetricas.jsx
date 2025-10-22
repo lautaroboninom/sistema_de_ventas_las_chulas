@@ -36,29 +36,29 @@ export default function ConfigMetricas() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Configurar Mtricas</h1>
+      <h1 className="text-xl font-semibold">Configurar Métricas</h1>
       {err && <div className="text-red-600 text-sm">{err}</div>}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="p-4 border rounded bg-white">
-          <div className="text-sm text-gray-500">Pas feriados</div>
+          <div className="text-sm text-gray-500">País feriados</div>
           <div className="text-lg font-semibold">{cfg?.holidays_country || 'AR'}</div>
-          <div className="text-xs text-gray-400 mt-1">Fuente automtica: Nager.Date</div>
+          <div className="text-xs text-gray-400 mt-1">Fuente automática: Nager.Date</div>
         </div>
         <div className="p-4 border rounded bg-white">
           <div className="text-sm text-gray-500">Horario laboral</div>
-          <div className="text-lg font-semibold">{cfg ? `${cfg.workday_start_hour}:00${cfg.workday_end_hour}:00` : '-'}</div>
-          <div className="text-xs text-gray-400 mt-1">Das hbiles: {(cfg?.workdays||[]).join(', ')}</div>
+          <div className="text-lg font-semibold">{cfg ? `${cfg.workday_start_hour}:00–${cfg.workday_end_hour}:00` : '-'}</div>
+          <div className="text-xs text-gray-400 mt-1">Días hábiles: {(cfg?.workdays||[]).join(', ')}</div>
         </div>
         <div className="p-4 border rounded bg-white">
-          <div className="text-sm text-gray-500">SLA diagnstico</div>
+          <div className="text-sm text-gray-500">SLA diagnóstico</div>
           <div className="text-lg font-semibold">Excluir derivados por defecto</div>
-          <div className="text-xs text-gray-400 mt-1">Se puede sobreescribir en la vista Mtricas</div>
+          <div className="text-xs text-gray-400 mt-1">Se puede sobreescribir en la vista Métricas</div>
         </div>
       </div>
 
       <div>
         <h2 className="font-semibold mb-2">Feriados locales (extras)</h2>
-        <p className="text-sm text-gray-500 mb-2">Los feriados oficiales se toman automticamente. Aqu agregs excepciones locales que aplican a horas hbiles.</p>
+        <p className="text-sm text-gray-500 mb-2">Los feriados oficiales se toman automáticamente. Acá agregás excepciones locales que aplican a horas hábiles.</p>
         <form onSubmit={addFeriado} className="flex gap-2 items-end">
           <div>
             <div className="text-sm text-gray-600">Fecha</div>
