@@ -1,4 +1,4 @@
-﻿import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
+import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
 
 const roleLabel = (v) => { if (!v) return "-"; const s = String(v).trim().replace(/_/g, " "); return s.charAt(0).toUpperCase() + s.slice(1); };
 

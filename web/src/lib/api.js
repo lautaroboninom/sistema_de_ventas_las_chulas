@@ -1,4 +1,4 @@
-﻿  // web/src/lib/api.js
+  // web/src/lib/api.js
 
   // === BASE del API robusto ===
   // 1) Si est definida VITE_API_URL, la usamos.

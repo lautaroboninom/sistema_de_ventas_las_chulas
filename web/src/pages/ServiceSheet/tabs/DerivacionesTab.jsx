@@ -1,4 +1,4 @@
-﻿import { Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
 import { getDerivacionesPorIngreso, postDerivacionDevuelto } from "../../../lib/api";
