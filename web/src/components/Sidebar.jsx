@@ -102,7 +102,6 @@ export default function Sidebar() {
             <>
               <div className="text-xs uppercase text-gray-400 px-1 mb-1">Sistema</div>
               {jefe && <LinkItem to="/metricas">Métricas</LinkItem>}
-              {jefe && <LinkItem to="/metricas?config=1">Config Métricas</LinkItem>}
               {showUsuarios && <LinkItem to="/usuarios">Usuarios</LinkItem>}
               <LinkItem to="/catalogo/clientes">Clientes</LinkItem>
               <LinkItem to="/catalogo/tipos-equipo">Tipos de equipo</LinkItem>

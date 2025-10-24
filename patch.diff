@@ -1,0 +1,23 @@
+﻿*** Begin Patch
+*** Update File: api/service/views/derivaciones_views.py
+@@
+     def post(self, request, ingreso_id: int, deriv_id: int):
+         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
+-        _set_audit_user(request)
++        _set_audit_user(request)
++        logger.info(f"[Devuelto] inicio ingreso_id={ingreso_id} deriv_id={deriv_id} user_id={getattr(request,'user_id',None)} role={getattr(request,'user_role',None)} body={request.data}")
+@@
+-        if not row:
+-            return Response({"detail": "Derivacion no encontrada"}, status=404)
++        if not row:
++            logger.warning(f"[Devuelto] derivacion no encontrada ingreso_id={ingreso_id} deriv_id={deriv_id}")
++            return Response({"detail": "Derivacion no encontrada"}, status=404)
+@@
+-        exec_void("UPDATE ingresos SET estado='ingresado' WHERE id=%s AND estado <> 'ingresado'", [ingreso_id])
++        exec_void("UPDATE ingresos SET estado='ingresado' WHERE id=%s AND estado <> 'ingresado'", [ingreso_id])
++        logger.info(f"[Devuelto] ingreso {ingreso_id} actualizado a 'ingresado'")
+@@
+-        return Response({"ok": True})
++        logger.info(f"[Devuelto] fin ingreso_id={ingreso_id} deriv_id={deriv_id} OK=True")
++        return Response({"ok": True})
+*** End Patch

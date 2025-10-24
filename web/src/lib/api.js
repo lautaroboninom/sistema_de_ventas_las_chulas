@@ -1,4 +1,4 @@
-  // web/src/lib/api.js
+﻿  // web/src/lib/api.js
 
   // === BASE del API robusto ===
   // 1) Si est definida VITE_API_URL, la usamos.
@@ -53,6 +53,7 @@
     const ct = res.headers.get("content-type") || "";
     const isJSON = ct.includes("application/json");
     const data = isJSON ? await res.json() : await res.text();
+    
 
     if (res.status === 401) {
       // Evitar redirigir desde pginas pblicas de auth
@@ -564,8 +565,3 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const getFeriados = () => api.get(`/api/metricas/feriados/`);
   export const postFeriado = (fecha, nombre) => api.post(`/api/metricas/feriados/`, { fecha, nombre });
   export const deleteFeriado = (fecha) => api.del(`/api/metricas/feriados/?fecha=${encodeURIComponent(fecha||"")}`);
-
-
-
-
-

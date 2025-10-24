@@ -261,6 +261,7 @@ export default function ServiceSheet() {
       numero_interno: data?.numero_interno || "",
       remito_ingreso: data?.remito_ingreso || "",
       informe_preliminar: data?.informe_preliminar || "",
+      comentarios: data?.comentarios || "",
       garantia_reparacion: !!data?.garantia_reparacion,
       equipo_variante: data?.equipo_variante || "",
       garantia: !!data?.garantia,
@@ -308,6 +309,7 @@ export default function ServiceSheet() {
     const remitoActual = (data?.remito_ingreso || "").trim();
     if (remitoNuevo !== remitoActual) diff.remito_ingreso = remitoNuevo;
     if (cmp(formBasics.informe_preliminar, data?.informe_preliminar)) diff.informe_preliminar = formBasics.informe_preliminar;
+    if (cmp(formBasics.comentarios, data?.comentarios)) diff.comentarios = formBasics.comentarios;
     if ((formBasics.garantia_reparacion ? 1 : 0) !== (data?.garantia_reparacion ? 1 : 0)) diff.garantia_reparacion = !!formBasics.garantia_reparacion;
     try {
       const norm = (s) => (s || "").toString().trim().toLowerCase();
@@ -683,4 +685,3 @@ export default function ServiceSheet() {
     </div>
   );
 }
-

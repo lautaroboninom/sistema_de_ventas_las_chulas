@@ -1,4 +1,4 @@
-from django.db import connection, transaction
+﻿from django.db import connection, transaction
 import time
 import os
 import json
@@ -1286,84 +1286,74 @@ class IngresoHistorialView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "jefe_veedor", "admin"])
+        # Flag opcional para incluir la auditoría HTTP (audit_log) en la respuesta
+        def _param_truthy(name: str) -> bool:
+            v = (request.query_params.get(name) or "").strip().lower()
+            return v in {"1", "true", "yes", "on"}
+        include_audit = _param_truthy("include_audit")
         if connection.vendor == "postgresql":
-            # change_log (si existe) + audit_log
+            # change_log (si existe) + audit_log (opcional)
             rows = []
             try:
                 rows = q(
                     """
-                      SELECT ts, user_id, user_role, table_name, record_id, column_name, old_value, new_value
-                      FROM audit.change_log
+                      SELECT cl.ts, cl.user_id, cl.user_role, COALESCE(u.nombre,'') AS user_nombre, cl.table_name, cl.record_id, cl.column_name, cl.old_value, cl.new_value FROM audit.change_log cl LEFT JOIN users u ON u.id = cl.user_id
                       WHERE ingreso_id = %s
-                      ORDER BY ts DESC, id DESC
+                      ORDER BY cl.ts DESC, cl.id DESC
                     """,
                     [ingreso_id]
                 ) or []
             except Exception:
                 rows = []
-            # Complementar con auditoría HTTP (audit_log) para mostrar payloads
-            pat1 = f"/api/ingresos/{ingreso_id}/%"
-            pat2 = f"/api/ingresos/{ingreso_id}/"
-            pat3 = f"/api/quotes/{ingreso_id}/%"
-            pat4 = f"/api/quotes/{ingreso_id}/"
-            al_rows = q(
-                """
-                SELECT id AS _id, ts, user_id, role AS user_role, method, path, body
-                  FROM audit_log
-                 WHERE path LIKE %s OR path = %s OR path LIKE %s OR path = %s
-                 ORDER BY ts DESC, id DESC
-                """,
-                [pat1, pat2, pat3, pat4]
-            ) or []
-            out = []
-            for r in (al_rows or []):
-                path = (r.get("path") or "").lower()
-                method = (r.get("method") or "").upper()
-                table_name = "ingresos"
-                record_id = ingreso_id
-                if "/accesorios/" in path:
-                    table_name = "ingreso_accesorios"
-                elif "/fotos/" in path:
-                    table_name = "ingreso_media"
-                elif "/quotes/" in path or "/presupuestos/" in path:
-                    table_name = "quotes"
-                body = r.get("body")
-                parsed = None
-                if isinstance(body, (dict, list)):
-                    parsed = body
-                elif isinstance(body, str) and body.strip():
+            if include_audit:
+                # Complementar con auditoría HTTP (audit_log), pero sin expandir por clave
+                pat1 = f"/api/ingresos/{ingreso_id}/%"
+                pat2 = f"/api/ingresos/{ingreso_id}/"
+                pat3 = f"/api/quotes/{ingreso_id}/%"
+                pat4 = f"/api/quotes/{ingreso_id}/"
+                al_rows = q(
+                    """
+                    SELECT al.id AS _id, al.ts, al.user_id, al.role AS user_role, COALESCE(u.nombre,'') AS user_nombre, al.method, al.path, al.body
+                      FROM audit_log al LEFT JOIN users u ON u.id = al.user_id
+                     WHERE path LIKE %s OR path = %s OR path LIKE %s OR path = %s
+                     ORDER BY al.ts DESC, al.id DESC
+                    """,
+                    [pat1, pat2, pat3, pat4]
+                ) or []
+                out = []
+                for r in (al_rows or []):
+                    path = (r.get("path") or "").lower()
+                    method = (r.get("method") or "").upper()
+                    table_name = "ingresos"
+                    record_id = ingreso_id
+                    if "/accesorios/" in path:
+                        table_name = "ingreso_accesorios"
+                    elif "/fotos/" in path:
+                        table_name = "ingreso_media"
+                    elif "/quotes/" in path or "/presupuestos/" in path:
+                        table_name = "quotes"
+                    body = r.get("body")
                     try:
-                        parsed = json.loads(body)
+                        if isinstance(body, (dict, list)):
+                            body_str = json.dumps(body, ensure_ascii=False)
+                        elif isinstance(body, str):
+                            body_str = body
+                        else:
+                            body_str = ""
                     except Exception:
-                        parsed = None
-                if not isinstance(parsed, dict):
+                        body_str = ""
                     out.append({
                         "ts": r.get("ts"),
                         "user_id": r.get("user_id"),
                         "user_role": r.get("user_role"),
+                        "user_nombre": r.get("user_nombre"),
                         "table_name": table_name,
                         "record_id": record_id,
                         "column_name": f"{method} {r.get('path')}",
                         "old_value": None,
-                        "new_value": None,
+                        "new_value": (body_str or None) and body_str[:512],
                     })
-                    continue
-                for k, v in parsed.items():
-                    if isinstance(v, (dict, list)):
-                        new_v = json.dumps(v, ensure_ascii=False)[:512]
-                    else:
-                        new_v = str(v)
-                    out.append({
-                        "ts": r.get("ts"),
-                        "user_id": r.get("user_id"),
-                        "user_role": r.get("user_role"),
-                        "table_name": table_name,
-                        "record_id": record_id,
-                        "column_name": k,
-                        "old_value": None,
-                        "new_value": new_v,
-                    })
-            rows = (rows or []) + out
+                rows = (rows or []) + out
             rows.sort(key=lambda x: (x.get("ts") or ""), reverse=True)
         else:
             # 1) Cambios de estado (ingreso_events)
@@ -1373,7 +1363,7 @@ class IngresoHistorialView(APIView):
                   e.id AS _id,
                   e.ts AS ts,
                   e.usuario_id AS user_id,
-                  u.rol AS user_role,
+                  u.rol AS user_role, COALESCE(u.nombre,'') AS user_nombre,
                   'ingresos' AS table_name,
                   e.ingreso_id AS record_id,
                   'estado' AS column_name,
@@ -1387,75 +1377,53 @@ class IngresoHistorialView(APIView):
                 [ingreso_id]
             ) or []
 
-            # 2) Cambios por HTTP (audit_log): mostramos payload por clave como "nuevo valor"
+            # 2) Cambios por HTTP (audit_log): opcional (?include_audit=1)
             pat1 = f"/api/ingresos/{ingreso_id}/%"
             pat2 = f"/api/ingresos/{ingreso_id}/"
             pat3 = f"/api/quotes/{ingreso_id}/%"
             pat4 = f"/api/quotes/{ingreso_id}/"
-            al_rows = q(
-                """
-                SELECT id AS _id, ts, user_id, role AS user_role, method, path, body
-                  FROM audit_log
-                 WHERE path LIKE %s OR path = %s OR path LIKE %s OR path = %s
-                 ORDER BY ts DESC, id DESC
-                """,
-                [pat1, pat2, pat3, pat4]
-            ) or []
-
             out = list(ev_rows)
-            for r in (al_rows or []):
-                path = (r.get("path") or "").lower()
-                method = (r.get("method") or "").upper()
-                table_name = "ingresos"
-                record_id = ingreso_id
-                # Heurística por ruta
-                if "/accesorios/" in path:
-                    table_name = "ingreso_accesorios"
-                elif "/fotos/" in path:
-                    table_name = "ingreso_media"
-                elif "/quotes/" in path or "/presupuestos/" in path:
-                    table_name = "quotes"
-
-                body = r.get("body")
-                parsed = None
-                if isinstance(body, (dict, list)):
-                    parsed = body
-                elif isinstance(body, str) and body.strip():
+            if include_audit:
+                al_rows = q(
+                    """
+                    SELECT al.id AS _id, al.ts, al.user_id, al.role AS user_role, COALESCE(u.nombre,'') AS user_nombre, al.method, al.path, al.body FROM audit_log al LEFT JOIN users u ON u.id = al.user_id
+                     WHERE path LIKE %s OR path = %s OR path LIKE %s OR path = %s
+                     ORDER BY al.ts DESC, al.id DESC
+                    """,
+                    [pat1, pat2, pat3, pat4]
+                ) or []
+                for r in (al_rows or []):
+                    path = (r.get("path") or "").lower()
+                    method = (r.get("method") or "").upper()
+                    table_name = "ingresos"
+                    record_id = ingreso_id
+                    # Heurística por ruta
+                    if "/accesorios/" in path:
+                        table_name = "ingreso_accesorios"
+                    elif "/fotos/" in path:
+                        table_name = "ingreso_media"
+                    elif "/quotes/" in path or "/presupuestos/" in path:
+                        table_name = "quotes"
+                    body = r.get("body")
                     try:
-                        parsed = json.loads(body)
+                        if isinstance(body, (dict, list)):
+                            body_str = json.dumps(body, ensure_ascii=False)
+                        elif isinstance(body, str):
+                            body_str = body
+                        else:
+                            body_str = ""
                     except Exception:
-                        parsed = None
-
-                # Si no hay JSON, igual generamos una entrada genérica
-                if not isinstance(parsed, dict):
+                        body_str = ""
                     out.append({
                         "ts": r.get("ts"),
                         "user_id": r.get("user_id"),
                         "user_role": r.get("user_role"),
+                        "user_nombre": r.get("user_nombre"),
                         "table_name": table_name,
                         "record_id": record_id,
                         "column_name": f"{method} {r.get('path')}",
                         "old_value": None,
-                        "new_value": None,
-                    })
-                    continue
-
-                # Expandimos por claves del payload
-                for k, v in parsed.items():
-                    # Valores como string (acotados) para visualización
-                    if isinstance(v, (dict, list)):
-                        new_v = json.dumps(v, ensure_ascii=False)[:512]
-                    else:
-                        new_v = str(v)
-                    out.append({
-                        "ts": r.get("ts"),
-                        "user_id": r.get("user_id"),
-                        "user_role": r.get("user_role"),
-                        "table_name": table_name,
-                        "record_id": record_id,
-                        "column_name": k,
-                        "old_value": None,
-                        "new_value": new_v,
+                        "new_value": (body_str or None) and body_str[:512],
                     })
 
             # Orden final por fecha desc y sin modificar formato esperado
@@ -2006,12 +1974,6 @@ class IngresoDetalleView(APIView):
         else:
             row["tecnico_solicitado_id"] = None
             row["tecnico_solicitado_nombre"] = ""
-        try:
-            logger.info(
-                f"[IngresoDetalle] ingreso={ingreso_id} asignado_a={row.get('asignado_a')} nombre={row.get('asignado_a_nombre')}"
-            )
-        except Exception:
-            pass
         return Response(IngresoDetailWithAccesoriosSerializer(row).data)
 
     def patch(self, request, ingreso_id: int):

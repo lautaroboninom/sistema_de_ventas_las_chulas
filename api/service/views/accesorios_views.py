@@ -91,10 +91,15 @@ class BuscarAccesorioPorReferenciaView(APIView):
                 """
                 SELECT
                   t.id,
+                  t.estado AS estado,
+                  t.presupuesto_estado,
+                  t.motivo,
                   c.razon_social,
                   b.nombre AS marca,
                   m.nombre AS modelo,
+                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
                   d.numero_serie,
+                  t.fecha_ingreso,
                   ia.referencia,
                   COALESCE(ca.nombre,'') AS accesorio_nombre
                 FROM ingreso_accesorios ia

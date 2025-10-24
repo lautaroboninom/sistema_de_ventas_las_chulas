@@ -113,6 +113,27 @@ DO $$ BEGIN
     CREATE TRIGGER trg_audit_quote_items AFTER INSERT OR UPDATE OR DELETE ON quote_items
     FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
   END IF;
+  -- Catálogos y usuarios
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_marcas') THEN
+    CREATE TRIGGER trg_audit_marcas AFTER INSERT OR UPDATE OR DELETE ON marcas
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_models') THEN
+    CREATE TRIGGER trg_audit_models AFTER INSERT OR UPDATE OR DELETE ON models
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_customers') THEN
+    CREATE TRIGGER trg_audit_customers AFTER INSERT OR UPDATE OR DELETE ON customers
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_users') THEN
+    CREATE TRIGGER trg_audit_users AFTER INSERT OR UPDATE OR DELETE ON users
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_proveedores_externos') THEN
+    CREATE TRIGGER trg_audit_proveedores_externos AFTER INSERT OR UPDATE OR DELETE ON proveedores_externos
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
 END $$;
 '''
 
@@ -138,4 +159,3 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
-

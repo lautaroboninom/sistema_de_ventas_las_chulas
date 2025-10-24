@@ -126,7 +126,7 @@ export default function NuevoIngreso() {
     }
   }
 
-  // Garantía de reparación (por N/S o N interno MG) - debounce 400ms
+  // Garantía de reparación (por N°/S o N° interno MG) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const mg = (form.equipo.numero_interno || "").trim();
@@ -145,7 +145,7 @@ export default function NuevoIngreso() {
     return () => clearTimeout(h);
   }, [form.equipo.numero_serie, form.equipo.numero_interno]);
 
-  // Garantía de fbrica (por N/S en Excels) - debounce 400ms
+  // Garantía de fbrica (por N°/S en Excels) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const marcaSel = (() => {
@@ -153,7 +153,7 @@ export default function NuevoIngreso() {
       return m?.nombre || "";
     })();
     if (!ns) {
-      // Si no hay N/S, no marcar
+      // Si no hay N°/S, no marcar
       setForm((f) => ({ ...f, equipo: { ...f.equipo, garantia: false } }));
       return;
     }
@@ -475,7 +475,7 @@ export default function NuevoIngreso() {
           <legend className="px-2 font-semibold">Cliente</legend>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="text-sm">Razn social</label>
+              <label className="text-sm">Razón social</label>
               <Input
                 list="clientes_rs"
                 value={clienteRsInput}
@@ -489,16 +489,16 @@ export default function NuevoIngreso() {
                 ))}
               </datalist>
               {clienteRsInput && !rsMatch && (
-                <div className="text-xs text-red-600 mt-1">Eleg una razn social de las sugeridas.</div>
+                <div className="text-xs text-red-600 mt-1">Elegí una razón social de las sugeridas.</div>
               )}
             </div>
             <div>
-              <label className="text-sm">Cdigo empresa</label>
+              <label className="text-sm">Código empresa</label>
               <Input
                 list="clientes_cod"
                 value={clienteCodInput}
                 onChange={(e) => onClienteCodChange(e.target.value)}
-                placeholder="Opcional: pods buscar por cdigo"
+                placeholder="Opcional: pods buscar por código"
               />
               <datalist id="clientes_cod">
                 {(Array.isArray(clientes) ? clientes : [])
@@ -508,22 +508,22 @@ export default function NuevoIngreso() {
                   ))}
               </datalist>
               {clienteCodInput && !codMatch && (
-                <div className="text-xs text-red-600 mt-1">Eleg un cdigo de las sugerencias.</div>
+                <div className="text-xs text-red-600 mt-1">Elegí un código de las sugerencias.</div>
               )}
             </div>
             <div>
-              <label className="text-sm">Telfono</label>
+              <label className="text-sm">Teléfono</label>
               <Input value={form.cliente.telefono} readOnly placeholder="-" />
             </div>
           </div>
           {clienteMismatch && (
             <div className="text-xs text-red-600 mt-2">
-              El cdigo no corresponde a la razn social seleccionada.
+              El código no corresponde a la razón social seleccionada.
             </div>
           )}
           <p className="text-xs text-gray-600 mt-2">
-            Debés seleccionar un cliente existente. Pods buscar por <b>Razn social</b> o por
-            <b> Cdigo</b>; si complets ambos, deben corresponder al mismo cliente.
+            Debés seleccionar un cliente existente. Puede buscar por <b>Razón social</b> o por
+            <b> Código</b>; si complets ambos, deben corresponder al mismo cliente.
           </p>
         </fieldset>
 
@@ -572,7 +572,7 @@ export default function NuevoIngreso() {
                 ))}
               </datalist>
               {marcaTxt && !marcaId && (
-                <div className="text-xs text-red-600 mt-1">Eleg una marca de las sugeridas.</div>
+                <div className="text-xs text-red-600 mt-1">Elegí una marca de las sugeridas.</div>
               )}
             </div>
 
@@ -584,7 +584,7 @@ export default function NuevoIngreso() {
                 onChange={onChange("equipo.modelo_id")}
                 disabled={!marcaId || !modelos.length}
               >
-                <option value="">{!marcaId ? "Eleg marca primero" : "Seleccion modelo"}</option>
+                <option value="">{!marcaId ? "Elegí marca primero" : "Seleccion modelo"}</option>
                 {modelos.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.nombre}
@@ -628,15 +628,15 @@ export default function NuevoIngreso() {
               </div>
             </div>
 
-            {/* Nmero de serie */}
+            {/* Número de serie */}
             <div className="md:col-span-2">
-              <label className="text-sm">Nmero de serie</label>
+              <label className="text-sm">Número de serie</label>
               <Input value={form.equipo.numero_serie} onChange={onChange("equipo.numero_serie")} />
             </div>
 
-            {/* N interno (MG) */}
+            {/* N° interno (MG) */}
             <div className="md:col-span-2">
-              <label className="text-sm">N interno (MG)</label>
+              <label className="text-sm">N° interno (MG)</label>
               <Input
                 value={form.equipo.numero_interno}
                 onChange={onChange("equipo.numero_interno")}
@@ -670,7 +670,7 @@ export default function NuevoIngreso() {
           <legend className="px-2 font-semibold">Ingreso</legend>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="text-sm">N de remito</label>
+              <label className="text-sm">N° de remito</label>
               <Input
                 value={form.remito_ingreso}
                 onChange={onChange("remito_ingreso")}
@@ -720,7 +720,7 @@ export default function NuevoIngreso() {
               <label className="text-sm font-medium">Accesorios</label>
               <div className="flex flex-wrap items-end gap-3 mb-2">
                 <div className="grow min-w-[260px]">
-                  <label className="block text-sm text-gray-600 mb-1">Descripcin</label>
+                  <label className="block text-sm text-gray-600 mb-1">Descripción</label>
                   <input
                     className="border rounded p-2 w-full"
                     list="accesorios_catalogo"
@@ -735,7 +735,7 @@ export default function NuevoIngreso() {
                   </datalist>
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-600 mb-1">N referencia</label>
+                  <label className="block text-sm text-gray-600 mb-1">N° referencia</label>
                   <Input
                     value={nuevoAcc.referencia}
                     onChange={(e) => setNuevoAcc((s) => ({ ...s, referencia: e.target.value }))}
@@ -752,7 +752,7 @@ export default function NuevoIngreso() {
                       (a) => (a.nombre || "").trim().toLowerCase() === d
                     );
                     if (!acc) {
-                      setErr("Eleg una descripcin válida de la lista");
+                      setErr("Elegí una descripcin válida de la lista");
                       return;
                     }
                     setAccItems((list) => [
@@ -775,8 +775,8 @@ export default function NuevoIngreso() {
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="text-left">
-                      <th className="p-2">Descripcin</th>
-                      <th className="p-2">N referencia</th>
+                      <th className="p-2">Descripción</th>
+                      <th className="p-2">N° referencia</th>
                       <th className="p-2" />
                     </tr>
                   </thead>

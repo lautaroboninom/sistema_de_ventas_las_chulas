@@ -1,4 +1,6 @@
-import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
+﻿import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
+
+const roleLabel = (v) => { if (!v) return "-"; const s = String(v).trim().replace(/_/g, " "); return s.charAt(0).toUpperCase() + s.slice(1); };
 
 export default function HistorialTab({ hErr, hLoading, hist }) {
   return (
@@ -31,8 +33,8 @@ export default function HistorialTab({ hErr, hLoading, hist }) {
               hist.map((r, idx) => (
                 <tr key={idx} className="border-t">
                   <td className="p-2 whitespace-nowrap">{formatDateTimeHelper(r.ts)}</td>
-                  <td className="p-2">{r.user_id || '-'}</td>
-                  <td className="p-2 whitespace-nowrap">{r.user_role || '-'}</td>
+                  <td className="p-2">{r.user_nombre || r.user_id || "-"}</td>
+                  <td className="p-2 whitespace-nowrap">{roleLabel(r.user_role)}</td>
                   <td className="p-2">{r.table_name}</td>
                   <td className="p-2">{r.column_name}</td>
                   <td className="p-2">{r.old_value || '-'}</td>
@@ -46,10 +48,6 @@ export default function HistorialTab({ hErr, hLoading, hist }) {
     </div>
   );
 }
-
-
-
-
 
 
 

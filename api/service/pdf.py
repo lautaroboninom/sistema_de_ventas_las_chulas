@@ -555,7 +555,7 @@ def render_quote_pdf(ingreso_id: int):
     EMPRESA_LINEA3 = getattr(settings, "COMPANY_HEADER_L3", "MEDICOS Y REPARACIONES")
 
     cliente_display = (head.get("cliente") or "Cliente").strip()
-    os_label = f"OS {str(head['ingreso_id']).zfill(6)}"
+    os_label = f"OS {str(head['ingreso_id']).zfill(5)}"
     title = f"{os_label} {cliente_display}".strip()
     filename = f"{safe_name(title)}.pdf"
 
@@ -886,12 +886,12 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         y -= (ROW_H + ROW_GAP)
 
         # r2: Equipo | Marca | Modelo | NumeroSerie
-        label_value(inner_x, y - ROW_H, 52 * mm, ROW_H, "Equipo", head.get("equipo"))
-        label_value(inner_x + 54 * mm, y - ROW_H, 38 * mm, ROW_H, "Marca", head.get("marca"))
+        label_value(inner_x, y - ROW_H, 55 * mm, ROW_H, "Equipo", head.get("equipo"))
+        label_value(inner_x + 57 * mm, y - ROW_H, 35 * mm, ROW_H, "Marca", head.get("marca"))
         try:
-            label_value(inner_x + 95 * mm, y - ROW_H, 36 * mm, ROW_H, "Modelo", head.get("modelo") + " " + head.get("equipo_variante"))
+            label_value(inner_x + 98 * mm, y - ROW_H, 33 * mm, ROW_H, "Modelo", head.get("modelo") + " " + head.get("equipo_variante"))
         except:
-            label_value(inner_x + 95 * mm, y - ROW_H, 36 * mm, ROW_H, "Modelo", head.get("modelo"))
+            label_value(inner_x + 98 * mm, y - ROW_H, 33 * mm, ROW_H, "Modelo", head.get("modelo"))
         label_value(inner_x + 134 * mm, y - ROW_H, 36 * mm, ROW_H, "NumeroSerie", head.get("numero_serie"))
         y -= (ROW_H + ROW_GAP)
 

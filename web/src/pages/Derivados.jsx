@@ -39,7 +39,7 @@ export default function Derivados() {
     const ingresoId = ingresoIdOf(row);
     const f = fechaMap[ingresoId] || null;
     try {
-      await postDerivacionDevuelto(ingresoId, row.deriv_id, { fecha_entrega: f });
+      await postDerivacionDevuelto(ingresoId, (row?.deriv_id ?? row?.id), { fecha_entrega: f });
       await load();
     } catch (e) {
       setErr(e?.message || "No se pudo marcar como devuelto");
@@ -104,7 +104,3 @@ export default function Derivados() {
     </div>
   );
 }
-
-
-
-

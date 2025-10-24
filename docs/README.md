@@ -65,6 +65,7 @@ Manual del Sistema de Reparaciones
 - Auditoría y eventos
   - Tabla `ingreso_events`: registra transición a ‘liberado’ en impresión (una sola vez).
   - Historial por ingreso: `api/service/views/ingresos_views.py` (endpoint `.../historial/`).
+  - Ver `docs/AUDITORIA.md` para el diseño completo (change_log vs ingreso_events vs audit_log) y activación de triggers adicionales.
 
 - Catálogos y datos
   - Marcas, modelos, tipos y variantes; asignación de técnicos por marca/modelo.

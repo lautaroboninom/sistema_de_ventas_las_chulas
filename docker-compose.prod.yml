@@ -1,4 +1,4 @@
-﻿name: sistemadereparaciones
+name: sistemadereparaciones
 
 services:
   postgres:
@@ -52,7 +52,7 @@ services:
       context: ./web
       dockerfile: Dockerfile.prod
       args:
-        - VITE_API_URL=${VITE_API_URL}
+        - VITE_API_URL=${VITE_API_URL:-}
         - VITE_SOURCEMAP=${VITE_SOURCEMAP:-1}
         - VITE_SW=${VITE_SW:-0}
     container_name: sistemadereparaciones-web
@@ -76,5 +76,6 @@ volumes:
   pg_data:
   staticfiles:
   mediafiles:
+
 
 

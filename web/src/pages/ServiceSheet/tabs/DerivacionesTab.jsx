@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+﻿import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
 import { getDerivacionesPorIngreso, postDerivacionDevuelto } from "../../../lib/api";
@@ -10,9 +10,15 @@ export default function DerivacionesTab({ id, setErr, refreshIngreso }) {
 
   useEffect(() => {
     (async () => {
-      try { setDerivs(await getDerivacionesPorIngreso(id)); } catch (_) { setDerivs([]); }
+      try {
+        const rows = await getDerivacionesPorIngreso(id);
+        setDerivs(Array.isArray(rows) ? rows : []);
+      } catch (e) {
+        if (typeof setErr === "function") setErr(e?.message || "No se pudieron cargar las derivaciones");
+        setDerivs([]);
+      }
     })();
-  }, [id]);
+  }, [id, setErr]);
 
   const hayDerivAbierta = Array.isArray(derivs) && derivs.find(d => !d.fecha_entrega);
   return (
@@ -28,7 +34,7 @@ export default function DerivacionesTab({ id, setErr, refreshIngreso }) {
                 className="border rounded p-2"
                 value={fechaDevStr}
                 onChange={(e) => setFechaDevStr(e.target.value)}
-                aria-label="Fecha de devolucin"
+                aria-label="Fecha de devolución"
               />
               <button
                 className="bg-green-700 text-white px-3 py-2 rounded disabled:opacity-60"
@@ -78,7 +84,7 @@ export default function DerivacionesTab({ id, setErr, refreshIngreso }) {
                 <td className="p-2 whitespace-nowrap">{d.fecha_deriv ? formatDateTimeHelper(d.fecha_deriv) : "-"}</td>
                 <td className="p-2 whitespace-nowrap">{d.fecha_entrega ? formatDateTimeHelper(d.fecha_entrega) : "-"}</td>
                 <td className="p-2">{d.estado || "-"}</td>
-                <td className="p-2">{d.Comentarios || "-"}</td>
+                <td className="p-2">{d.comentarios || "-"}</td>
               </tr>
             ))}
           </tbody>
@@ -87,7 +93,3 @@ export default function DerivacionesTab({ id, setErr, refreshIngreso }) {
     </div>
   );
 }
-
-
-
-

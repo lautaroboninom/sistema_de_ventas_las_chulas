@@ -3,8 +3,10 @@ from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions
+import logging
 
 from .helpers import _email_append_footer_text, _set_audit_user, exec_void, q, require_roles
+logger = logging.getLogger(__name__)
 
 
 class DerivarIngresoView(APIView):
@@ -94,6 +96,10 @@ class DevolverDerivacionView(APIView):
             one=True,
         )
         if not row:
+            try:
+                logger.warning(f"Devuelto: derivacion no encontrada ingreso_id={ingreso_id} deriv_id={deriv_id}")
+            except Exception:
+                pass
             return Response({"detail": "Derivacion no encontrada"}, status=404)
 
         data = request.data or {}
@@ -200,7 +206,7 @@ class EquiposDerivadosView(APIView):
     def get(self, request):
         rows = q(
             """
-            SELECT ed.id,
+            SELECT ed.id AS deriv_id,
                    ed.ingreso_id,
                    ed.proveedor_id,
                    pe.nombre AS proveedor,
@@ -221,6 +227,7 @@ class EquiposDerivadosView(APIView):
             LEFT JOIN marcas b ON b.id = d.marca_id
             LEFT JOIN models m ON m.id = d.model_id
             LEFT JOIN proveedores_externos pe ON pe.id = ed.proveedor_id
+            WHERE ed.estado = 'derivado' AND ed.fecha_entrega IS NULL
             ORDER BY ed.fecha_deriv DESC, ed.id DESC
             """
         ) or []
@@ -233,5 +240,3 @@ __all__ = [
     'DevolverDerivacionView',
     'EquiposDerivadosView',
 ]
-
-

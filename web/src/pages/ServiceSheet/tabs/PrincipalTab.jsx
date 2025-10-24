@@ -409,31 +409,50 @@ export default function PrincipalTab(props) {
           </div>
           {/* Notas */}
           <h2 className="font-semibold mt-4 mb-2">Notas</h2>
-          <Row label="Informe preliminar">
-            {editBasics ? (
-              <textarea
-                className="border rounded p-2 w-full min-h-[100px]"
-                value={formBasics?.informe_preliminar ?? ""}
-                onChange={(e) => setFormBasics((s) => ({ ...s, informe_preliminar: e.target.value }))}
-              />
-            ) : (
-              <div className="whitespace-pre-wrap">{data.informe_preliminar || "-"}</div>
-            )}
-          </Row>
-          <Row label="Accesorios">
-            {Array.isArray(data.accesorios_items) && data.accesorios_items.length > 0 ? (
-              <ul className="list-disc list-inside">
-                {data.accesorios_items.map((it) => (
-                  <li key={it.id}>
-                    {it.accesorio_nombre}
-                    {it.referencia ? ` (ref: ${it.referencia})` : ""}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              data.accesorios || "-"
-            )}
-          </Row>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Columna izquierda: informe + accesorios */}
+            <div>
+              <Row label="Informe preliminar">
+                {editBasics ? (
+                  <textarea
+                    className="border rounded p-2 w-full min-h-[100px]"
+                    value={formBasics?.informe_preliminar ?? ""}
+                    onChange={(e) => setFormBasics((s) => ({ ...s, informe_preliminar: e.target.value }))}
+                  />
+                ) : (
+                  <div className="whitespace-pre-wrap">{data.informe_preliminar || "-"}</div>
+                )}
+              </Row>
+              <Row label="Accesorios">
+                {Array.isArray(data.accesorios_items) && data.accesorios_items.length > 0 ? (
+                  <ul className="list-disc list-inside">
+                    {data.accesorios_items.map((it) => (
+                      <li key={it.id}>
+                        {it.accesorio_nombre}
+                        {it.referencia ? ` (ref: ${it.referencia})` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  data.accesorios || "-"
+                )}
+              </Row>
+            </div>
+
+            {/* Columna derecha: Comentarios */}
+            <div>
+              <h3 className="font-medium mb-2">Comentarios</h3>
+              {editBasics ? (
+                <textarea
+                  className="border rounded p-2 w-full min-h-[160px]"
+                  value={formBasics?.comentarios ?? ""}
+                  onChange={(e) => setFormBasics((s) => ({ ...(s || {}), comentarios: e.target.value }))}
+                />
+              ) : (
+                <div className="whitespace-pre-wrap">{data.comentarios || "-"}</div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Columna derecha: Estado/Asignacin/ubicacion */}
