@@ -1930,6 +1930,21 @@ class IngresoDetalleView(APIView):
             [ingreso_id],
         )
         row["accesorios_items"] = accs
+        # Accesorios vinculados a alquiler
+        try:
+            accs_alq = q(
+                """
+              SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
+              FROM ingreso_alquiler_accesorios ia
+              JOIN catalogo_accesorios ca ON ca.id = ia.accesorio_id AND ca.activo
+              WHERE ia.ingreso_id=%s
+              ORDER BY ia.id
+                """,
+                [ingreso_id],
+            )
+        except Exception:
+            accs_alq = []
+        row["alquiler_accesorios_items"] = accs_alq
         # Resolver técnico solicitado (última solicitud pendiente si existe)
         try:
             req = q(

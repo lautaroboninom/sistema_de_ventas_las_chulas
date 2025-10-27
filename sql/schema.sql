@@ -433,6 +433,16 @@ CREATE TABLE IF NOT EXISTS ingreso_accesorios (
   descripcion   TEXT NULL
 );
 
+-- Accesorios asociados específicamente a alquileres de equipos
+CREATE TABLE IF NOT EXISTS ingreso_alquiler_accesorios (
+  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  ingreso_id    INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
+  accesorio_id  INTEGER NOT NULL REFERENCES catalogo_accesorios(id) ON DELETE RESTRICT,
+  referencia    TEXT NULL,
+  descripcion   TEXT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Catálogo general de tipos de equipo
 CREATE TABLE IF NOT EXISTS catalogo_tipos_equipo (
   id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -540,6 +550,9 @@ CREATE INDEX IF NOT EXISTS ix_events_ingreso_estado_ts ON ingreso_events(ingreso
 CREATE INDEX IF NOT EXISTS idx_ingreso_acc_ingreso ON ingreso_accesorios(ingreso_id);
 CREATE INDEX IF NOT EXISTS idx_ingreso_acc_accesorio ON ingreso_accesorios(accesorio_id);
 
+CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_ingreso ON ingreso_alquiler_accesorios(ingreso_id);
+CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_accesorio ON ingreso_alquiler_accesorios(accesorio_id);
+
 CREATE INDEX IF NOT EXISTS idx_mte_marca ON marca_tipos_equipo(marca_id);
 CREATE INDEX IF NOT EXISTS idx_ms_tipo   ON marca_series(tipo_id);
 CREATE INDEX IF NOT EXISTS idx_msv_tipo  ON marca_series_variantes(tipo_id);
@@ -621,6 +634,11 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_ingreso_accesorios') THEN
     CREATE TRIGGER trg_audit_ingreso_accesorios
     AFTER INSERT OR UPDATE OR DELETE ON ingreso_accesorios
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_ingreso_alquiler_accesorios') THEN
+    CREATE TRIGGER trg_audit_ingreso_alquiler_accesorios
+    AFTER INSERT OR UPDATE OR DELETE ON ingreso_alquiler_accesorios
     FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_quotes') THEN

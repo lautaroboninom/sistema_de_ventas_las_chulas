@@ -85,6 +85,8 @@ from .accesorios_views import (
     IngresoAccesoriosView,
     IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
+    IngresoAlquilerAccesoriosView,
+    IngresoAlquilerAccesorioDetailView,
 )
 
 from .catalogo_hierarquia_views import (
@@ -213,6 +215,8 @@ __all__ = [
     "IngresoAccesoriosView",
     "IngresoAccesorioDetailView",
     "BuscarAccesorioPorReferenciaView",
+    "IngresoAlquilerAccesoriosView",
+    "IngresoAlquilerAccesorioDetailView",
     # catalogo jerarquía
     "CatalogoTiposView",
     "CatalogoModelosDeTipoView",

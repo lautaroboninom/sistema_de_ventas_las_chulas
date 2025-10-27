@@ -118,9 +118,76 @@ class BuscarAccesorioPorReferenciaView(APIView):
         return Response(IngresoListItemSerializer(rows, many=True).data)
 
 
+class IngresoAlquilerAccesoriosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, ingreso_id: int):
+        # Ver: todos los usuarios autenticados
+        rows = q(
+            """
+              SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
+              FROM ingreso_alquiler_accesorios ia
+              JOIN catalogo_accesorios ca ON ca.id = ia.accesorio_id AND ca.activo
+              WHERE ia.ingreso_id=%s
+              ORDER BY ia.id
+            """,
+            [ingreso_id]
+        )
+        return Response(rows)
+
+    def post(self, request, ingreso_id: int):
+        # Modificar: solo admin/jefe/jefe_veedor
+        require_roles(request, ["jefe","admin","jefe_veedor"])
+        d = request.data or {}
+        try:
+            acc_id = int(d.get("accesorio_id"))
+        except (TypeError, ValueError):
+            return Response({"detail": "accesorio_id requerido"}, status=400)
+        acc = q("SELECT id FROM catalogo_accesorios WHERE id=%s AND activo", [acc_id], one=True)
+        if not acc:
+            return Response({"detail": "accesorio inválido"}, status=400)
+        ref = (d.get("referencia") or "").strip() or None
+        desc = (d.get("descripcion") or "").strip() or None
+        _set_audit_user(request)
+        new_id = exec_returning(
+            """
+            INSERT INTO ingreso_alquiler_accesorios(ingreso_id, accesorio_id, referencia, descripcion)
+            VALUES (%s,%s,%s,%s)
+            RETURNING id
+            """,
+            [ingreso_id, acc_id, ref, desc]
+        )
+        row = q(
+            """
+              SELECT ia.id, ia.accesorio_id, ca.nombre AS accesorio_nombre, ia.referencia, ia.descripcion
+              FROM ingreso_alquiler_accesorios ia
+              JOIN catalogo_accesorios ca ON ca.id = ia.accesorio_id
+              WHERE ia.id=%s
+            """,
+            [new_id], one=True
+        )
+        return Response(row, status=201)
+
+
+class IngresoAlquilerAccesorioDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, ingreso_id: int, item_id: int):
+        # Modificar: solo admin/jefe/jefe_veedor
+        require_roles(request, ["jefe","admin","jefe_veedor"])
+        _set_audit_user(request)
+        exec_void(
+            "DELETE FROM ingreso_alquiler_accesorios WHERE ingreso_id=%s AND id=%s",
+            [ingreso_id, item_id]
+        )
+        return Response({"ok": True})
+
+
 __all__ = [
     'CatalogoAccesoriosView',
     'IngresoAccesoriosView',
     'IngresoAccesorioDetailView',
     'BuscarAccesorioPorReferenciaView',
+    'IngresoAlquilerAccesoriosView',
+    'IngresoAlquilerAccesorioDetailView',
 ]

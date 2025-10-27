@@ -159,6 +159,7 @@ class IngresoAccesorioItemSerializer(serializers.Serializer):
 
 class IngresoDetailWithAccesoriosSerializer(IngresoDetailSerializer):
     accesorios_items = IngresoAccesorioItemSerializer(many=True, required=False)
+    alquiler_accesorios_items = IngresoAccesorioItemSerializer(many=True, required=False)
 
 
 class IngresoMediaItemSerializer(serializers.Serializer):

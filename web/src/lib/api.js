@@ -308,6 +308,14 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const deleteAccesorioIngreso = (ingresoId, itemId) =>
     api.del(`/api/ingresos/${ingresoId}/accesorios/${itemId}/`);
 
+  // Accesorios de alquiler por ingreso
+  export const getAccesoriosAlquilerPorIngreso = (ingresoId) =>
+    api.get(`/api/ingresos/${ingresoId}/alquiler/accesorios/`);
+  export const postAccesorioAlquilerIngreso = (ingresoId, payload) =>
+    api.post(`/api/ingresos/${ingresoId}/alquiler/accesorios/`, payload);
+  export const deleteAccesorioAlquilerIngreso = (ingresoId, itemId) =>
+    api.del(`/api/ingresos/${ingresoId}/alquiler/accesorios/${itemId}/`);
+
   export const getIngresoFotos = (ingresoId, params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/ingresos/${ingresoId}/fotos/${qs ? `?${qs}` : ""}`);

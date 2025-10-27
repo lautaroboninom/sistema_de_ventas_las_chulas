@@ -25,6 +25,7 @@ from .views import (
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
+    IngresoAlquilerAccesoriosView, IngresoAlquilerAccesorioDetailView,
     CatalogoMarcasView, CatalogoModelosView,
     ModeloVarianteView,
     # cat�logo jer�rquico marca/tipo/modelo/variante
@@ -148,6 +149,9 @@ urlpatterns = [
     # accesorios por ingreso
     path("ingresos/<int:ingreso_id>/accesorios/", IngresoAccesoriosView.as_view()),
     path("ingresos/<int:ingreso_id>/accesorios/<int:item_id>/", IngresoAccesorioDetailView.as_view()),
+    # accesorios por ingreso (alquiler)
+    path("ingresos/<int:ingreso_id>/alquiler/accesorios/", IngresoAlquilerAccesoriosView.as_view()),
+    path("ingresos/<int:ingreso_id>/alquiler/accesorios/<int:item_id>/", IngresoAlquilerAccesorioDetailView.as_view()),
     path("accesorios/buscar/", BuscarAccesorioPorReferenciaView.as_view()),
     path("ingresos/<int:ingreso_id>/fotos/", IngresoMediaListCreateView.as_view()),
     path("ingresos/<int:ingreso_id>/fotos/<int:media_id>/", IngresoMediaDetailView.as_view()),

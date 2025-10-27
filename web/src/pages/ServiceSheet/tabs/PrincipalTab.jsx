@@ -2,7 +2,7 @@ import Row from "../../../components/Row";
 import { useMemo, useState, useEffect } from "react";
 import { formatDateTime as formatDateTimeHelper, resolveFechaIngreso } from "../../../lib/ui-helpers";
 import { resolutionLabel } from "../../../lib/constants";
-import { getBlob, postEntregarIngreso, patchIngreso, checkGarantiaFabrica, patchIngresoTecnico, postSolicitarAsignacion } from "../../../lib/api";
+import { getBlob, postEntregarIngreso, patchIngreso, checkGarantiaFabrica, patchIngresoTecnico, postSolicitarAsignacion, getAccesoriosCatalogo, postAccesorioAlquilerIngreso, deleteAccesorioAlquilerIngreso } from "../../../lib/api";
 
 export default function PrincipalTab(props) {
   const {
@@ -129,6 +129,47 @@ export default function PrincipalTab(props) {
     const quien = name ? name : (id ? `ID ${id}` : "otro técnico");
     return `Ya hay una solicitud pendiente para ${quien}.`;
   })();
+
+  // Catálogo de accesorios (para alquiler)
+  const [accesCatalogo, setAccesCatalogo] = useState([]);
+  const [nuevoAccAlq, setNuevoAccAlq] = useState({ descripcion: "", referencia: "" });
+  const [addingAccAlq, setAddingAccAlq] = useState(false);
+  const [deletingAccAlqId, setDeletingAccAlqId] = useState(null);
+  useEffect(() => { (async () => { try { setAccesCatalogo(await getAccesoriosCatalogo()); } catch {} })(); }, []);
+
+  async function addAccesorioAlquiler() {
+    try {
+      const d = (nuevoAccAlq?.descripcion || "").trim().toLowerCase();
+      if (!d) { setErr && setErr("Escribí una descripción"); return; }
+      const acc = (accesCatalogo || []).find(a => (a?.nombre || "").trim().toLowerCase() === d);
+      if (!acc) { setErr && setErr("Elegí una descripción válida de la lista"); return; }
+      setAddingAccAlq(true);
+      await postAccesorioAlquilerIngreso(id, {
+        accesorio_id: Number(acc.id),
+        referencia: (nuevoAccAlq?.referencia || "").trim() || null,
+      });
+      setNuevoAccAlq({ descripcion: "", referencia: "" });
+      await refreshIngreso();
+      setErr && setErr("");
+    } catch (e) {
+      setErr && setErr(e?.message || "No se pudo agregar el accesorio de alquiler");
+    } finally {
+      setAddingAccAlq(false);
+    }
+  }
+
+  async function removeAccesorioAlquiler(itemId) {
+    try {
+      setDeletingAccAlqId(itemId);
+      await deleteAccesorioAlquilerIngreso(id, itemId);
+      await refreshIngreso();
+      setErr && setErr("");
+    } catch (e) {
+      setErr && setErr(e?.message || "No se pudo quitar el accesorio de alquiler");
+    } finally {
+      setDeletingAccAlqId(null);
+    }
+  }
 
   async function saveTecnico() {
     console.log('[PrincipalTab] saveTecnico called', { canAssignTecnico, selTecnicoId, asignado_a: data?.asignado_a, techDirty, id });
@@ -824,6 +865,65 @@ export default function PrincipalTab(props) {
             onChange={(e) => patch({ alquiler_fecha: e.target.value || null })}
           />
         </Row>
+        {data.alquilado && (
+          <div className="mt-3 border-t pt-3">
+            <div className="text-xs uppercase text-gray-500 mb-1">Accesorios de alquiler</div>
+            {Array.isArray(data.alquiler_accesorios_items) && data.alquiler_accesorios_items.length > 0 ? (
+              <ul className="list-disc list-inside text-sm">
+                {data.alquiler_accesorios_items.map((it) => (
+                  <li key={it.id} className="flex items-center justify-between gap-2">
+                    <span>
+                      {it.accesorio_nombre}
+                      {it.referencia ? ` (ref: ${it.referencia})` : ""}
+                    </span>
+                    {data?.estado !== "entregado" && (
+                      <button
+                        className="text-red-600 text-xs"
+                        onClick={() => removeAccesorioAlquiler(it.id)}
+                        disabled={deletingAccAlqId === it.id}
+                        type="button"
+                      >
+                        {deletingAccAlqId === it.id ? "Quitando..." : "Quitar"}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="text-sm text-gray-500">Sin accesorios de alquiler.</div>
+            )}
+            {data?.estado !== "entregado" && (
+              <div className="mt-2 flex flex-wrap items-end gap-2">
+                <input
+                  className="border rounded p-2 min-w-[240px]"
+                  list="accesorios_catalogo"
+                  placeholder="Descripción (elegí de la lista)"
+                  value={nuevoAccAlq.descripcion}
+                  onChange={(e) => setNuevoAccAlq((s) => ({ ...s, descripcion: e.target.value }))}
+                />
+                <datalist id="accesorios_catalogo">
+                  {accesCatalogo.map((a) => (
+                    <option key={a.id} value={a.nombre} />
+                  ))}
+                </datalist>
+                <input
+                  className="border rounded p-2 w-40"
+                  placeholder="Nro de referencia (opcional)"
+                  value={nuevoAccAlq.referencia}
+                  onChange={(e) => setNuevoAccAlq((s) => ({ ...s, referencia: e.target.value }))}
+                />
+                <button
+                  className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
+                  onClick={addAccesorioAlquiler}
+                  disabled={addingAccAlq || !(nuevoAccAlq.descripcion || "").trim()}
+                  type="button"
+                >
+                  {addingAccAlq ? "Agregando..." : "Agregar"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </>
   );
