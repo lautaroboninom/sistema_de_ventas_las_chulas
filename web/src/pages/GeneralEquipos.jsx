@@ -1,4 +1,4 @@
-﻿// web/src/pages/GeneralEquipos.jsx
+// web/src/pages/GeneralEquipos.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import api, { getGeneralEquipos } from "../lib/api";
 import { useSearchParams } from "react-router-dom";
