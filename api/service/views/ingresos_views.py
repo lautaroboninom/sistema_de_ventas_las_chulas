@@ -790,8 +790,31 @@ class GeneralEquiposView(APIView):
         ubic = (request.GET.get("ubicacion") or "").strip()
         ubic_id_raw = (request.GET.get("ubicacion_id") or "").strip()
         estado_raw = (request.GET.get("estado") or "").strip()
+        excluir_estados_raw = (request.GET.get("excluir_estados") or "").strip()
+        solo_taller_raw = (request.GET.get("solo_taller") or "").strip().lower()
         q_raw = (request.GET.get("q") or "").strip()
+        delivered_raw = (request.GET.get("delivered") or "").strip().lower()
+        from_raw = (request.GET.get("from") or "").strip()
+        to_raw = (request.GET.get("to") or "").strip()
+
+        # paginación opcional (se mantiene respuesta original si no se especifica page_size)
+        page_raw = (request.GET.get("page") or "").strip()
+        page_size_raw = (request.GET.get("page_size") or "").strip()
+
         estados = [e.strip() for e in estado_raw.split(",") if e.strip()] if estado_raw else []
+        excluir_estados = [e.strip() for e in excluir_estados_raw.split(",") if e.strip()] if excluir_estados_raw else []
+        solo_taller = solo_taller_raw in ("1", "true", "yes", "y", "t")
+        delivered = delivered_raw in ("1", "true", "yes", "y", "t")
+        page = int(page_raw) if page_raw.isdigit() and int(page_raw) > 0 else 1
+        try:
+            page_size = int(page_size_raw) if page_size_raw else 0
+        except Exception:
+            page_size = 0
+        if page_size < 0:
+            page_size = 0
+        if page_size > 0:
+            # cota superior razonable
+            page_size = min(page_size, 500)
 
         with connection.cursor() as cur:
             _set_audit_user(request)
@@ -811,6 +834,10 @@ class GeneralEquiposView(APIView):
                 placeholders = ",".join(["%s"] * len(estados))
                 wh.append(f"t.estado IN ({placeholders})")
                 params.extend(estados)
+            if excluir_estados:
+                placeholders = ",".join(["%s"] * len(excluir_estados))
+                wh.append(f"t.estado NOT IN ({placeholders})")
+                params.extend(excluir_estados)
             # Búsqueda exacta por N/S o por MG (formato 'MG ####')
             if q_raw:
                 needle = q_raw.strip()
@@ -825,7 +852,40 @@ class GeneralEquiposView(APIView):
                     wh.append("REPLACE(UPPER(d.numero_serie),' ','') = %s")
                     params.append(needle_ns)
 
+            # filtros por entregado y fechas
+            if delivered:
+                wh.append("t.fecha_entrega IS NOT NULL")
+                if from_raw:
+                    try:
+                        f = parse_date(from_raw)
+                        if f:
+                            wh.append("DATE(t.fecha_entrega) >= %s")
+                            params.append(f.isoformat())
+                    except Exception:
+                        pass
+                if to_raw:
+                    try:
+                        tdt = parse_date(to_raw)
+                        if tdt:
+                            wh.append("DATE(t.fecha_entrega) <= %s")
+                            params.append(tdt.isoformat())
+                    except Exception:
+                        pass
+
             where_sql = (" WHERE " + " AND ".join(wh)) if wh else ""
+
+            order_sql = "ORDER BY t.fecha_ingreso DESC, t.id DESC"
+            if delivered:
+                order_sql = "ORDER BY t.fecha_entrega DESC NULLS LAST, t.id DESC"
+
+            limit_sql = ""
+            limit_params = []
+            overfetch = 0
+            if page_size > 0:
+                overfetch = 1
+                limit_sql = " LIMIT %s OFFSET %s"
+                limit_params.extend([page_size + overfetch, max(0, (page - 1) * page_size)])
+
             sql = f"""
                 SELECT
                   t.id, t.estado, t.presupuesto_estado, t.fecha_ingreso, t.fecha_entrega, t.ubicacion_id,
@@ -846,11 +906,24 @@ class GeneralEquiposView(APIView):
                 LEFT JOIN quotes q ON q.ingreso_id = t.id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 {where_sql}
-                ORDER BY t.fecha_ingreso DESC, t.id DESC
+                {order_sql}
+                {limit_sql}
             """
-            cur.execute(sql, params)
+            cur.execute(sql, params + limit_params)
             rows = _fetchall_dicts(cur)
-        return Response(rows)
+        # compat: si no hay paginación pedida, seguir devolviendo lista
+        if page_size == 0:
+            return Response(rows)
+        has_next = False
+        if len(rows) > page_size:
+            has_next = True
+            rows = rows[:page_size]
+        return Response({
+            "items": rows,
+            "page": page,
+            "page_size": page_size,
+            "has_next": bool(has_next),
+        })
 
 
 class IngresoAsignarTecnicoView(APIView):

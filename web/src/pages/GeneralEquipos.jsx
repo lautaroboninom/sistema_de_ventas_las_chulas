@@ -1,47 +1,63 @@
-// web/src/pages/GeneralEquipos.jsx
-import { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
+﻿// web/src/pages/GeneralEquipos.jsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import api, { getGeneralEquipos } from "../lib/api";
 import { useSearchParams } from "react-router-dom";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion } from "../lib/ui-helpers";
-
-// Ajusta si tu backend usa otra ruta (histórico completo)
-const ENDPOINT = "/api/equipos/";
+import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso } from "../lib/ui-helpers";
 
 export default function GeneralEquipos() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasNext, setHasNext] = useState(false);
   const [err, setErr] = useState("");
   const [filter, setFilter] = useState("");
   const navigate = useNavigate();
   const [search] = useSearchParams();
+  const pageSize = 200;
 
-  async function load() {
+  async function loadPage(p = 1, { reset = false } = {}) {
     try {
+      if (reset) {
+        setRows([]);
+        setHasNext(false);
+        setPage(1);
+      }
+      const isFirst = reset || p === 1;
+      isFirst ? setLoading(true) : setLoadingMore(true);
       setErr("");
-      setLoading(true);
-      const data = await api.get(ENDPOINT);
-      // Si tu API ya ordena por fecha, pods omitir el sort local
-      const safe = Array.isArray(data) ? data : [];
-      safe.sort((a, b) => {
-        const da = new Date(resolveFechaCreacion(a) ?? 0).getTime();
-        const db = new Date(resolveFechaCreacion(b) ?? 0).getTime();
-        return db - da; // ms recientes primero
-      });
-      // Reordenar por OS descendente (mayor a menor)
-      safe.sort((a, b) => Number(ingresoIdOf(b) ?? 0) - Number(ingresoIdOf(a) ?? 0));
-      setRows(safe);
+
+      const params = new URLSearchParams();
+      const from = search.get('from') || '';
+      const to = search.get('to') || '';
+      const delivered = search.get('delivered') || '';
+      if (delivered === '1') params.set('delivered', '1');
+      if (delivered === '1' && from) params.set('from', from);
+      if (delivered === '1' && to) params.set('to', to);
+      params.set('page', String(p));
+      params.set('page_size', String(pageSize));
+
+      const res = await getGeneralEquipos(Object.fromEntries(params.entries()));
+      const pageItems = Array.isArray(res) ? (res || []) : (res.items || []);
+      const next = Array.isArray(res) ? false : !!res.has_next;
+
+      setRows((prev) => (isFirst ? pageItems : [...prev, ...pageItems]));
+      setHasNext(next);
+      setPage(p);
     } catch (e) {
       setErr(e?.message || "No se pudo cargar el histórico de equipos");
-      setRows([]);
+      if (reset) setRows([]);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }
 
   useEffect(() => {
-    load();
-  }, []);
+    loadPage(1, { reset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.get('from'), search.get('to'), search.get('delivered')]);
 
   const filtered = useMemo(() => {
     const from = search.get('from');
@@ -90,6 +106,23 @@ export default function GeneralEquipos() {
     }
   };
 
+  const sentinelRef = useRef(null);
+  useEffect(() => {
+    if (!hasNext) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && !loadingMore) {
+          loadPage(page + 1);
+        }
+      }
+    });
+    io.observe(el);
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasNext, page, loadingMore]);
+
   return (
     <div className="card">
       <div className="h1 mb-3">General de equipos (histórico)</div>
@@ -111,7 +144,7 @@ export default function GeneralEquipos() {
         />
         <button
           className="btn"
-          onClick={load}
+          onClick={() => loadPage(1, { reset: true })}
           title="Recargar lista"
           disabled={loading}
           aria-busy={loading ? "true" : "false"}
@@ -176,11 +209,14 @@ export default function GeneralEquipos() {
             </tbody>
           </table>
           <div className="text-xs text-gray-500 mt-2">
-            Mostrando {filtered.length} de {rows.length}.
+            Mostrando {filtered.length} de {rows.length}. {hasNext ? "Desplazá para cargar más…" : ""}
           </div>
+          <div ref={sentinelRef} style={{ height: 1 }} />
+          {loadingMore && (
+            <div className="text-xs text-gray-500 mt-2">Cargando más…</div>
+          )}
         </div>
       )}
     </div>
   );
 }
-
