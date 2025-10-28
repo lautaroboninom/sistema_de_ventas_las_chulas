@@ -442,6 +442,7 @@ class ModelMergeView(APIView):
                     ) or {}
                     serie_id = serie_row.get("id")
                     if serie_id:
+                        # 1) Asegurar variantes simples (campo models.variante) de ambos modelos
                         for vname in [dst_var, src_var]:
                             vname = (vname or "").strip()
                             if not vname:
@@ -465,6 +466,55 @@ class ModelMergeView(APIView):
                                     """,
                                     [marca_id, tipo_id, serie_id, vname],
                                 )
+
+                        # 2) Copiar TODAS las variantes existentes en el catálogo para la serie del modelo source
+                        src_tipo_nombre = (src.get("tipo") or "").strip()
+                        if src_tipo_nombre:
+                            src_tipo_row = q(
+                                "SELECT id FROM marca_tipos_equipo WHERE marca_id=%s AND UPPER(TRIM(nombre))=UPPER(TRIM(%s))",
+                                [marca_id, src_tipo_nombre],
+                                one=True,
+                            ) or {}
+                            src_tipo_id = src_tipo_row.get("id")
+                            if src_tipo_id:
+                                src_serie_row = q(
+                                    """
+                                    SELECT id FROM marca_series
+                                     WHERE marca_id=%s AND tipo_id=%s AND UPPER(TRIM(nombre))=UPPER(TRIM(%s))
+                                     LIMIT 1
+                                    """,
+                                    [marca_id, src_tipo_id, (src.get("nombre") or "").strip()],
+                                    one=True,
+                                ) or {}
+                                src_serie_id = src_serie_row.get("id")
+                                if src_serie_id:
+                                    src_vars = q(
+                                        "SELECT nombre FROM marca_series_variantes WHERE marca_id=%s AND tipo_id=%s AND serie_id=%s",
+                                        [marca_id, src_tipo_id, src_serie_id],
+                                    ) or []
+                                    for rowv in src_vars:
+                                        v2 = (rowv.get("nombre") or "").strip()
+                                        if not v2:
+                                            continue
+                                        if connection.vendor == "postgresql":
+                                            q(
+                                                """
+                                                INSERT INTO marca_series_variantes(marca_id, tipo_id, serie_id, nombre, activo)
+                                                VALUES (%s,%s,%s,%s,TRUE)
+                                                ON CONFLICT (marca_id, tipo_id, serie_id, nombre)
+                                                DO UPDATE SET activo=EXCLUDED.activo
+                                                """,
+                                                [marca_id, tipo_id, serie_id, v2],
+                                            )
+                                        else:
+                                            q(
+                                                """
+                                                INSERT INTO marca_series_variantes(marca_id, tipo_id, serie_id, nombre, activo)
+                                                VALUES (%s,%s,%s,%s,TRUE)
+                                                ON DUPLICATE KEY UPDATE activo=VALUES(activo)
+                                                """,
+                                                [marca_id, tipo_id, serie_id, v2],
+                                            )
 
             exec_void("DELETE FROM models WHERE id=%s", [source_id])
 

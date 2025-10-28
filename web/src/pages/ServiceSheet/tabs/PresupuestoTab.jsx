@@ -150,7 +150,7 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
     const qty = Number(nuevoRep.qty || 0);
     const pu  = Number(nuevoRep.precio_u || 0);
     if (!nuevoRep.descripcion.trim()) { setQErr("Descripción requerida"); return; }
-    if (qty <= 0) { setQErr("Cantidad > 0"); return; }
+    //if (qty <= 0) { setQErr("Cantidad > 0"); return; }
     if (pu < 0) { setQErr("Precio inválido"); return; }
     await postQuoteItem(id, {
       tipo: "repuesto",

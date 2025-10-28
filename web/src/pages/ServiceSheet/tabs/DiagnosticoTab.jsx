@@ -78,23 +78,7 @@ export default function DiagnosticoTab({
     }
   }
 
-  async function saveDiagYreparacion() {
-    try {
-      setSavingAll(true);
-      const payload = {
-        descripcion_problema: descripcion,
-        trabajos_realizados: trabajos,
-        fecha_servicio: (fechaServStr || "").trim() || null,
-      };
-      await patch(payload);
-      await refreshIngreso();
-      setErr("");
-    } catch (e) {
-      setErr(e?.message || "No se pudo guardar");
-    } finally {
-      setSavingAll(false);
-    }
-  }
+  // (El guardado de diagnóstico/trabajos es automático; no hay botón de guardar.)
 
   async function saveResolucion() {
     try {
@@ -264,7 +248,7 @@ export default function DiagnosticoTab({
       />
 
       <div className="border rounded p-4 mt-4">
-        <h2 className="font-semibold mb-2">Trabajos realizados</h2>
+        <h2 className="font-semibold mb-2">Trabajos a realizar/realizados</h2>
         <textarea
           className="w-full border rounded p-2 min-h-[200px]"
           value={trabajos}

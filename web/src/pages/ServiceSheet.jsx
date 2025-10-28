@@ -474,18 +474,32 @@ export default function ServiceSheet() {
       <button type="button" onClick={() => navigate(-1)} className="mb-3 inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800">
         Volver
       </button>
-      <h1 className="text-2xl font-bold mb-1">Hoja de servicio - OS: {formatOSHelper(data, id)} - NS: {data?.numero_interno || data?.numero_serie}</h1>
+      <div className="grid grid-cols-2 items-center mb-2">
+        <h1 className="text-2xl font-bold">
+          Hoja de servicio - OS: {formatOSHelper(data, id)} - NS: {data?.numero_interno || data?.numero_serie}
+        </h1>
+
+        {numeroSerie && (
+          <button
+            type="button"
+            onClick={() => setRelatedOpen(true)}
+            className="justify-self-end text-xs px-2 py-1 rounded border border-blue-600 text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          >
+            Ver ingresos del equipo
+          </button>
+        )}
+      </div>
       <div className="text-sm text-gray-700 mb-3">{(data?.tipo_equipo_nombre || data?.tipo_equipo || "-").toString()} - {(data?.marca || "-").toString()} - {(data?.modelo || "-").toString()} {(data?.equipo_variante || "").toString()}</div>
+      
 
       {err && <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-4">{err}</div>}
       {canSeeHistory && (
-        <div className="-mt-8 -mb-2 text-right">
+        <div className="-mt-8 -mb-3 text-right">
           <button className={`px-3 py-2 rounded-t ${tab === 'historial' ? 'bg-white border border-b-0' : 'text-gray-600 hover:text-black'}`} onClick={() => setTab('historial')} type="button">
             Historial
           </button>
         </div>
       )}
-
       <Tabs
         value={tab}
         onChange={setTab}
@@ -497,7 +511,6 @@ export default function ServiceSheet() {
           { value: "archivos", label: "Archivos" },
         ]}
       />
-
       {/* ARCHIVOS */}
       {tab === "archivos" && (<ArchivosTab id={id} canManagePhotos={canManagePhotos} />)}
 

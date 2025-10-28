@@ -47,7 +47,7 @@ class RemitoSalidaPdfView(APIView):
             with transaction.atomic():
                 exec_void(
                     """
-                    INSERT INTO ingreso_events (ingreso_id, a_estado, usuario_id, comentario)
+                    INSERT INTO ingreso_events (ticket_id, a_estado, usuario_id, comentario)
                     SELECT %s, 'liberado', %s, 'Orden de salida impresa'
                     WHERE NOT EXISTS (
                         SELECT 1 FROM ingreso_events

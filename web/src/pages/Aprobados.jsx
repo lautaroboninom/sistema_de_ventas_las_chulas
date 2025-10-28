@@ -114,7 +114,7 @@ export default function Aprobados() {
                 <th className="p-2">Equipo</th>
                 <th className="p-2">Estado</th>
                 <th className="p-2">Serie</th>
-                <th className="p-2">Fecha aprob./repar.</th>
+                <th className="p-2">Fecha aprob.</th>
                 <th className="p-2">Acciones</th>
               </tr>
             </thead>
@@ -138,11 +138,10 @@ export default function Aprobados() {
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">{formatDateTime(
-                    row?.fecha_aprobacion ||
-                      row?.presupuesto_fecha_aprobacion ||
-                      row?.fecha_reparado ||
-                      row?.fecha_reparacion ||
-                      row?.estado_fecha
+                    row?.fecha_aprobado ||
+                    row?.presupuesto_fecha_aprobacion ||
+                    row?.fecha_reparado ||
+                    row?.fecha_reparacion
                   )}</td>
                   <td className="p-2">
                     {release && row?.estado === "reparado" && (

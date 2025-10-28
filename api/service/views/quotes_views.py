@@ -176,8 +176,8 @@ class QuoteItemsView(APIView):
             precio = money(d.get("precio_u"))
         except (TypeError, ValueError):
             raise ValidationError("qty y precio_u deben ser numéricos")
-        if qty < 0 or precio < 0:
-            raise ValidationError("qty y precio_u no pueden ser negativos")
+        #if qty < 0 or precio < 0:
+            #raise ValidationError("qty y precio_u no pueden ser negativos")
         repuesto_id = d.get("repuesto_id")
 
         qid = _ensure_quote(ingreso_id)
@@ -212,8 +212,8 @@ class QuoteItemDetailView(APIView):
                 qv = float(d.get("qty"))
             except (TypeError, ValueError):
                 raise ValidationError("qty debe ser numérico")
-            if qv < 0:
-                raise ValidationError("qty no puede ser negativo")
+            #if qv < 0:
+                #raise ValidationError("qty no puede ser negativo")
             sets.append("qty=%s"); params.append(qv)
         if "precio_u" in d:
             try:

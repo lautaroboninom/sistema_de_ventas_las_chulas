@@ -53,18 +53,17 @@ export default function Sidebar() {
   const { user } = useAuth();
   if (!user) return null;
 
-  // Usar SIEMPRE helpers centralizados (normalizan el rol)
   const jefe = isJefe(user);
   const jefeVeedor = isJefeVeedor(user);
   const admin = isAdmin(user);
   const recep = isRecepcion(user);
-  const techLike = canActAsTech(user); // tecnico | jefe | jefe_veedor
+  const techLike = canActAsTech(user);
   const showSistema = jefe || admin || jefeVeedor;
   const showUsuarios = jefe;
 
   return (
-    <aside className="w-64 shrink-0 border-r bg-white hidden md:block">
-      <div className="p-3 text-sm text-gray-500">Menú</div>
+    <aside className="w-50 shrink-0 border-r bg-white hidden md:block text-sm">
+      <div className="p-3 text-xs text-gray-500">Menú</div>
       <div className="px-3 pb-3 space-y-2">
         <div>
           <div className="text-xs uppercase text-gray-400 px-1 mb-1">Equipos</div>
@@ -115,5 +114,3 @@ export default function Sidebar() {
     </aside>
   );
 }
-
-

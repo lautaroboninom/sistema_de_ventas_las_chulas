@@ -79,24 +79,14 @@ export default function CatalogoMarcas() {
       const modelosCat = await fetchCatalogModelos(sel.id, tipo.id);
       const mdName = canon(md.nombre || "");
       let serie = modelosCat.find(m => canon(m.name||"") === mdName || (m.alias && canon(m.alias) === mdName));
-      if (!serie) {
-        serie = modelosCat.find(m => {
-          const sName = canon(m.name||"");
-          const sAlias = canon(m.alias||"");
-          return mdName && (sName.includes(mdName) || mdName.includes(sName) || (sAlias && (sAlias === mdName || sAlias.includes(mdName) || mdName.includes(sAlias))));
-        });
-      }
+      // Evitar emparejamientos difusos por "includes" que cruzan modelos similares
+      // (p.ej., "ASPIRADO" vs "ASPIRADOR"). Si no hay coincidencia exacta/alias, crear explícitamente.
       if (!serie) {
         try {
           await createCatalogModelo({ marca_id: sel.id, tipo_id: tipo.id, name: md.nombre, active: true });
           const modelosCat2 = await fetchCatalogModelos(sel.id, tipo.id, true);
           const mdName2 = canon(md.nombre || "");
-          serie = modelosCat2.find(m => canon(m.name||"") === mdName2 || (m.alias && canon(m.alias) === mdName2))
-               || modelosCat2.find(m => {
-                    const sName = canon(m.name||"");
-                    const sAlias = canon(m.alias||"");
-                    return mdName2 && (sName.includes(mdName2) || mdName2.includes(sName) || (sAlias && (sAlias === mdName2 || sAlias.includes(mdName2) || mdName2.includes(sAlias))));
-                  });
+          serie = modelosCat2.find(m => canon(m.name||"") === mdName2 || (m.alias && canon(m.alias) === mdName2));
         } catch (e) { updatePMV(md.id, { loading:false, error:`No hay Modelo de catlogo que coincida con: ${md.nombre}`, variantes:[], tipoId: tipo.id, serieId:null }); return; }
         if (!serie) { updatePMV(md.id, { loading:false, error:`No hay Modelo de catlogo que coincida con: ${md.nombre}`, variantes:[], tipoId: tipo.id, serieId:null }); return; }
       }

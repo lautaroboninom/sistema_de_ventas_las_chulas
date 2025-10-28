@@ -1,4 +1,4 @@
-﻿from django.db import connection, transaction
+from django.db import connection, transaction
 import time
 import os
 import json
@@ -53,6 +53,7 @@ class MisPendientesView(APIView):
                        t.motivo,
                        c.razon_social,
                        d.numero_serie,
+                       COALESCE(d.n_de_control,'') AS numero_interno,
                        COALESCE(b.nombre,'') AS marca,
                        COALESCE(m.nombre,'') AS modelo,
                        COALESCE(m.tipo_equipo,'') AS tipo_equipo,
@@ -144,6 +145,7 @@ class PresupuestadosView(APIView):
                   END AS presupuesto_estado,
                   c.razon_social,
                   d.numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno,
                   COALESCE(b.nombre,'') AS marca,
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,
@@ -183,27 +185,27 @@ class PresupuestadosExportView(APIView):
     """
     Exporta a Excel (.xlsx) filas de 'presupuestados' dadas por sus IDs.
 
-    Parámetros query:
+    Par�metros query:
       - ids: lista separada por comas de IDs de ingresos. Ej: ?ids=10,11,15
 
     Columnas:
-      OS, Cliente, Equipo, N/S, Monto sin IVA, Fecha emisión
+      OS, Cliente, Equipo, N/S, Monto sin IVA, Fecha emisi�n
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         ids_raw = (request.GET.get("ids") or "").strip()
         if not ids_raw:
-            return Response({"detail": "Parámetro 'ids' requerido"}, status=400)
+            return Response({"detail": "Par�metro 'ids' requerido"}, status=400)
 
         try:
             ids = [int(x) for x in ids_raw.split(",") if x.strip()]
         except Exception:
-            return Response({"detail": "Parámetro 'ids' inválido"}, status=400)
+            return Response({"detail": "Par�metro 'ids' inv�lido"}, status=400)
 
         # Evitar excesos accidentales
         if len(ids) > 1000:
-            return Response({"detail": "Demasiados IDs (máximo 1000)"}, status=400)
+            return Response({"detail": "Demasiados IDs (m�ximo 1000)"}, status=400)
 
         # Traer datos necesarios. Reutilizamos estructura del listado 'presupuestados'.
         with connection.cursor() as cur:
@@ -248,7 +250,7 @@ class PresupuestadosExportView(APIView):
             "Equipo",
             "N/S",
             "Monto sin IVA",
-            "Fecha emisión",
+            "Fecha emisi�n",
         ]
         ws.append(headers)
 
@@ -328,8 +330,159 @@ class MarcarReparadoView(APIView):
             # En duda, permitir solo a roles superiores
             if _rol(request) == "tecnico":
                 raise PermissionDenied("Solo el técnico asignado puede marcar como reparado")
+        # Leer estado/presupuesto previos para decidir envio (idempotencia)
+        try:
+            _prev_row = q(
+                "SELECT estado::text AS estado, COALESCE(presupuesto_estado::text,'') AS presupuesto_estado FROM ingresos WHERE id=%s",
+                [ingreso_id],
+                one=True,
+            ) or {}
+            _prev_estado = (_prev_row.get("estado") or "").lower()
+            _prev_presu = (_prev_row.get("presupuesto_estado") or "").lower()
+        except Exception:
+            _prev_estado = ""
+            _prev_presu = ""
         _set_audit_user(request)
         exec_void("UPDATE ingresos SET estado='reparado' WHERE id=%s", [ingreso_id])
+        # Disparar correo si paso a 'reparado' y presupuesto esta 'aprobado'
+        _should_send_mail = (_prev_estado != "reparado" and _prev_presu == "aprobado")
+        if _should_send_mail:
+            try:
+                _info = q(
+                    """
+                    SELECT c.razon_social AS cliente,
+                           COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                           COALESCE(b.nombre,'') AS marca,
+                           COALESCE(m.nombre,'') AS modelo,
+                           COALESCE(d.numero_serie,'') AS numero_serie,
+                           COALESCE(d.n_de_control,'') AS numero_interno
+                      FROM ingresos t
+                      JOIN devices d   ON d.id = t.device_id
+                      JOIN customers c ON c.id = d.customer_id
+                      LEFT JOIN marcas b ON b.id = d.marca_id
+                      LEFT JOIN models m ON m.id = d.model_id
+                     WHERE t.id=%s
+                    """,
+                    [ingreso_id],
+                    one=True,
+                ) or {}
+            except Exception:
+                _info = {}
+
+            _os_txt = os_label(ingreso_id)
+            _tech_name = getattr(request.user, "nombre", "")
+            _cliente = _info.get("cliente") or ""
+            _equipo = " | ".join([p for p in [_info.get("tipo_equipo") or "", _info.get("marca") or "", _info.get("modelo") or ""] if p])
+            _ns = _info.get("numero_serie") or ""
+
+            _subject = f"Equipo reparado - falta imprimir remito - {_os_txt} - {_cliente}"
+            _lines = [
+                "El equipo fue marcado como reparado.",
+                "Solo falta imprimir la orden de salida (remito).",
+                f"Marcado por: {_tech_name or '-'}",
+                f"OS: {_os_txt}",
+                f"Cliente: {_cliente}",
+                f"Equipo: {_equipo or '-'}",
+                f"N/S: {_ns or '-'}",
+            ]
+            try:
+                _fe = getattr(settings, "FRONTEND_ORIGIN", "") or ""
+            except Exception:
+                _fe = ""
+            if _fe:
+                try:
+                    _base = _fe.rstrip('/')
+                except Exception:
+                    _base = _fe
+                _lines.append("")
+                _lines.append(f"Abrir hoja: {_base}/ingresos/{ingreso_id}?tab=principal")
+            _body = "\n".join(_lines)
+
+            _recips = getattr(settings, "ASSIGNMENT_REQUEST_RECIPIENTS", []) or []
+            if not isinstance(_recips, (list, tuple)):
+                _recips = [str(_recips)] if _recips else []
+            if not _recips:
+                _fb1 = getattr(settings, "COMPANY_FOOTER_EMAIL_2", None)
+                _fb2 = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
+                _recips = [x for x in [_fb1, _fb2] if x]
+
+            def _send_repair_email():
+                if not _recips:
+                    logger.warning(
+                        "repair_completed_email no recipients configured",
+                        extra={"ingreso_id": ingreso_id},
+                    )
+                    return
+                try:
+                    _sent = send_mail(
+                        _subject,
+                        _body,
+                        getattr(settings, "DEFAULT_FROM_EMAIL", None),
+                        _recips,
+                        fail_silently=False,
+                    )
+                    _ok = bool(_sent and _sent > 0)
+                    logger.info(
+                        "repair_completed_email sent=%s ingreso_id=%s recipients=%s backend=%s",
+                        _ok,
+                        ingreso_id,
+                        _recips,
+                        getattr(settings, "EMAIL_BACKEND", ""),
+                    )
+                except Exception as e:
+                    logger.exception(
+                        "repair_completed_email failed",
+                        extra={"ingreso_id": ingreso_id, "recipients": _recips, "error": str(e)},
+                    )
+                    try:
+                        _port_cfg = int(getattr(settings, "EMAIL_PORT", 0) or 0)
+                    except Exception:
+                        _port_cfg = 0
+                    if _port_cfg == 587:
+                        try:
+                            _conn = get_connection(
+                                backend="django.core.mail.backends.smtp.EmailBackend",
+                                host=getattr(settings, "EMAIL_HOST", None),
+                                port=465,
+                                username=getattr(settings, "EMAIL_HOST_USER", None),
+                                password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
+                                use_tls=False,
+                                use_ssl=True,
+                                fail_silently=False,
+                            )
+                            _msg = EmailMessage(
+                                _subject,
+                                _body,
+                                getattr(settings, "DEFAULT_FROM_EMAIL", None),
+                                _recips,
+                                connection=_conn,
+                            )
+                            _sent2 = _msg.send()
+                            _ok2 = bool(_sent2 and _sent2 > 0)
+                            logger.info(
+                                "repair_completed_email fallback ssl_465 sent=%s ingreso_id=%s recipients=%s",
+                                _ok2,
+                                ingreso_id,
+                                _recips,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "repair_completed_email fallback ssl_465 failed",
+                                extra={"ingreso_id": ingreso_id, "recipients": _recips},
+                            )
+
+            try:
+                try:
+                    _conn = transaction.get_connection()
+                    if getattr(_conn, "in_atomic_block", False):
+                        transaction.on_commit(_send_repair_email)
+                    else:
+                        _send_repair_email()
+                except Exception:
+                    _send_repair_email()
+            except Exception:
+                pass
+
         return Response({"ok": True})
 
 
@@ -419,6 +572,7 @@ class GeneralPorClienteView(APIView):
                   COALESCE(loc.nombre,'') AS ubicacion_nombre,
                   c.id AS customer_id, c.razon_social,
                   d.numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno,
                   COALESCE(b.nombre,'') AS marca,
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo
@@ -444,8 +598,8 @@ class GeneralPorClienteExportView(APIView):
     Exporta a Excel (.xlsx) el "general por cliente" (no entregados / no alquilados).
 
     GET /api/clientes/<customer_id>/general/export/
-      Parámetros opcionales:
-        - ids: lista separada por comas para limitar la exportación a esos ingresos
+      Par�metros opcionales:
+        - ids: lista separada por comas para limitar la exportaci�n a esos ingresos
 
     Columnas del Excel:
       OS, Cliente, Equipo, N/S, Estado, Fecha ingreso
@@ -459,9 +613,9 @@ class GeneralPorClienteExportView(APIView):
             try:
                 ids = [int(x) for x in ids_raw.split(",") if x.strip()]
             except Exception:
-                return Response({"detail": "Parámetro 'ids' inválido"}, status=400)
+                return Response({"detail": "Par�metro 'ids' inv�lido"}, status=400)
             if len(ids) > 1000:
-                return Response({"detail": "Demasiados IDs (máximo 1000)"}, status=400)
+                return Response({"detail": "Demasiados IDs (m�ximo 1000)"}, status=400)
 
         with connection.cursor() as cur:
             _set_audit_user(request)
@@ -614,6 +768,7 @@ class AprobadosParaRepararView(APIView):
                   t.presupuesto_estado,
                   c.razon_social,
                   d.numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno,
                   COALESCE(b.nombre,'') AS marca,
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,
@@ -651,6 +806,7 @@ class AprobadosYReparadosView(APIView):
               SELECT t.id, t.estado, t.presupuesto_estado,
                      c.razon_social,
                      d.numero_serie,
+                     COALESCE(d.n_de_control,'') AS numero_interno,
                      COALESCE(b.nombre,'') AS marca,
                      COALESCE(m.nombre,'') AS modelo,
                      COALESCE(m.tipo_equipo,'') AS tipo_equipo,
@@ -678,75 +834,44 @@ class AprobadosYReparadosView(APIView):
         return Response(IngresoListItemSerializer(data, many=True).data)
 
 
-class AprobadosCombinadosView(APIView):
+class AprobadosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+
     def get(self, request):
         with connection.cursor() as cur:
             _set_audit_user(request)
             cur.execute(
                 """
-                -- Aprobados (incluye 'aprobado' y 'reparar' activos en taller)
                 SELECT
-                  t.id,
-                  t.estado,
-                  t.presupuesto_estado,
-                  c.razon_social,
-                  d.numero_serie,
+                  t.id, t.estado, t.presupuesto_estado,
+                  c.razon_social, d.numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno,
                   COALESCE(b.nombre,'') AS marca,
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,
                   t.fecha_ingreso,
-                  q.fecha_aprobado AS fecha_aprobacion,
-                  NULL::timestamp AS fecha_reparado,
-                  0 AS grp,
-                  COALESCE(q.fecha_aprobado, t.fecha_ingreso) AS fecha_ref
+                  qa.fecha_aprobado
                 FROM ingresos t
-                JOIN devices d ON d.id=t.device_id
-                JOIN customers c ON c.id=d.customer_id
-                LEFT JOIN marcas b ON b.id=d.marca_id
-                LEFT JOIN models m ON m.id=d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
-                LEFT JOIN locations loc ON loc.id = t.ubicacion_id
-                WHERE LOWER(loc.nombre) = LOWER(%s)
-                  AND (
-                        (t.presupuesto_estado = 'aprobado'
-                         AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado'))
-                        OR t.estado = 'reparar'
-                      )
-                  AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado')
-                UNION ALL
-                -- Reparados en taller
-                SELECT
-                  t.id,
-                  t.estado,
-                  t.presupuesto_estado,
-                  c.razon_social,
-                  d.numero_serie,
-                  COALESCE(b.nombre,'') AS marca,
-                  COALESCE(m.nombre,'') AS modelo,
-                  COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  t.fecha_ingreso,
-                  NULL::timestamp AS fecha_aprobacion,
-                  ev.fecha_reparado,
-                  1 AS grp,
-                  ev.fecha_reparado AS fecha_ref
-                FROM ingresos t
-                JOIN devices d ON d.id=t.device_id
-                JOIN customers c ON c.id=d.customer_id
-                LEFT JOIN marcas b ON b.id=d.marca_id
-                LEFT JOIN models m ON m.id=d.model_id
+                JOIN devices d ON d.id = t.device_id
+                JOIN customers c ON c.id = d.customer_id
+                LEFT JOIN marcas b ON b.id = d.marca_id
+                LEFT JOIN models m ON m.id = d.model_id
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 LEFT JOIN (
-                  SELECT ingreso_id, MAX(ts) AS fecha_reparado
-                  FROM ingreso_events
-                  WHERE a_estado='reparado'
-                  GROUP BY ingreso_id
-                ) ev ON ev.ingreso_id = t.id
-                WHERE LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado IN ('reparado')
-                ORDER BY grp ASC, fecha_ref ASC, fecha_ingreso ASC;
+                  SELECT DISTINCT ON (ingreso_id) ingreso_id, fecha_aprobado
+                  FROM quotes
+                  WHERE estado = 'aprobado'
+                  ORDER BY ingreso_id, fecha_aprobado DESC
+                ) qa ON qa.ingreso_id = t.id
+                WHERE t.presupuesto_estado = 'aprobado'
+                  AND t.estado NOT IN ('liberado','entregado', 'alquilado')
+                  AND LOWER(loc.nombre) = LOWER(%s)
+                ORDER BY
+                    COALESCE(qa.fecha_aprobado, t.fecha_ingreso) NULLS LAST,
+                    t.fecha_ingreso,
+                    t.id;
                 """,
-                ["taller", "taller"],
+                ["taller"],
             )
             data = _fetchall_dicts(cur)
         return Response(IngresoListItemSerializer(data, many=True).data)
@@ -764,6 +889,7 @@ class LiberadosView(APIView):
                   t.presupuesto_estado,
                   c.razon_social,
                   d.numero_serie,
+                  COALESCE(d.n_de_control,'') AS numero_interno,
                   COALESCE(b.nombre,'') AS marca,
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,
@@ -797,7 +923,7 @@ class GeneralEquiposView(APIView):
         from_raw = (request.GET.get("from") or "").strip()
         to_raw = (request.GET.get("to") or "").strip()
 
-        # paginación opcional (se mantiene respuesta original si no se especifica page_size)
+        # paginaci�n opcional (se mantiene respuesta original si no se especifica page_size)
         page_raw = (request.GET.get("page") or "").strip()
         page_size_raw = (request.GET.get("page_size") or "").strip()
 
@@ -823,7 +949,7 @@ class GeneralEquiposView(APIView):
                 wh.append("LOWER(loc.nombre) = LOWER(%s)")
                 params.append(ubic)
             else:
-                # Compat: permitir filtrar por ubicacion_id (numérico)
+                # Compat: permitir filtrar por ubicacion_id (num�rico)
                 try:
                     if ubic_id_raw and str(int(ubic_id_raw)) == ubic_id_raw:
                         wh.append("t.ubicacion_id = %s")
@@ -838,7 +964,7 @@ class GeneralEquiposView(APIView):
                 placeholders = ",".join(["%s"] * len(excluir_estados))
                 wh.append(f"t.estado NOT IN ({placeholders})")
                 params.extend(excluir_estados)
-            # Búsqueda exacta por N/S o por MG (formato 'MG ####')
+            # B�squeda exacta por N/S o por MG (formato 'MG ####')
             if q_raw:
                 needle = q_raw.strip()
                 needle_ns = needle.replace(" ", "").upper()
@@ -874,9 +1000,9 @@ class GeneralEquiposView(APIView):
 
             where_sql = (" WHERE " + " AND ".join(wh)) if wh else ""
 
-            order_sql = "ORDER BY t.fecha_ingreso DESC, t.id DESC"
+            order_sql = "ORDER BY t.id DESC"
             if delivered:
-                order_sql = "ORDER BY t.fecha_entrega DESC NULLS LAST, t.id DESC"
+                order_sql = "ORDER BY t.id DESC NULLS LAST"
 
             limit_sql = ""
             limit_params = []
@@ -911,7 +1037,7 @@ class GeneralEquiposView(APIView):
             """
             cur.execute(sql, params + limit_params)
             rows = _fetchall_dicts(cur)
-        # compat: si no hay paginación pedida, seguir devolviendo lista
+        # compat: si no hay paginaci�n pedida, seguir devolviendo lista
         if page_size == 0:
             return Response(rows)
         has_next = False
@@ -936,7 +1062,7 @@ class IngresoAsignarTecnicoView(APIView):
         ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
         if not ok:
-            return Response({"detail": "Técnico inválido"}, status=400)
+            return Response({"detail": "técnico inv�lido"}, status=400)
         try:
             prev = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
             logger.info(f"[AsignarTecnico] ingreso={ingreso_id} prev={prev and prev.get('asignado_a')} new={tecnico_id}")
@@ -974,7 +1100,7 @@ class IngresoAsignarTecnicoView(APIView):
                     [ingreso_id, tecnico_id],
                 )
         except Exception:
-            # si la tabla no existe o falla, no romper la transacción principal
+            # si la tabla no existe o falla, no romper la transacci�n principal
             pass
         try:
             who = q("SELECT COALESCE(nombre,'') AS nombre, COALESCE(email,'') AS email FROM users WHERE id=%s", [tecnico_id], one=True)
@@ -1002,7 +1128,8 @@ class IngresoAsignarTecnicoView(APIView):
                            COALESCE(m.tipo_equipo,'') AS tipo_equipo,
                            COALESCE(b.nombre,'') AS marca,
                            COALESCE(m.nombre,'') AS modelo,
-                           COALESCE(d.numero_serie,'') AS numero_serie
+                           COALESCE(d.numero_serie,'') AS numero_serie,
+                           COALESCE(d.n_de_control,'') AS numero_interno
                       FROM ingresos t
                       JOIN devices d   ON d.id = t.device_id
                       JOIN customers c ON c.id = d.customer_id
@@ -1117,13 +1244,13 @@ class IngresoSolicitarAsignacionView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
-        # Solo técnicos pueden solicitar
+        # Solo t�cnicos pueden solicitar
         require_roles(request, ["tecnico"])
         uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
         if not uid:
-            return Response({"detail": "Usuario inválido"}, status=400)
+            return Response({"detail": "Usuario inv�lido"}, status=400)
 
-        # Si ya está asignado a este técnico, responder OK y no hacer nada
+        # Si ya est� asignado a este técnico, responder OK y no hacer nada
         try:
             cur = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
             if cur and int(cur.get("asignado_a") or 0) == int(uid):
@@ -1142,9 +1269,9 @@ class IngresoSolicitarAsignacionView(APIView):
                 [ingreso_id, uid],
                 )
         except Exception:
-            pass  # tabla puede no existir; continuar con notificación
+            pass  # tabla puede no existir; continuar con notificaci�n
 
-        # Enviar notificación por email (reportar éxito/fracaso)
+        # Enviar notificaci�n por email (reportar �xito/fracaso)
         email_sent = False
         email_debug = {}
         try:
@@ -1155,7 +1282,8 @@ class IngresoSolicitarAsignacionView(APIView):
                        COALESCE(m.tipo_equipo,'') AS tipo_equipo,
                        COALESCE(b.nombre,'') AS marca,
                        COALESCE(m.nombre,'') AS modelo,
-                       COALESCE(d.numero_serie,'') AS numero_serie
+                       COALESCE(d.numero_serie,'') AS numero_serie,
+                       COALESCE(d.n_de_control,'') AS numero_interno
                   FROM ingresos t
                   JOIN devices d   ON d.id = t.device_id
                   JOIN customers c ON c.id = d.customer_id
@@ -1172,15 +1300,15 @@ class IngresoSolicitarAsignacionView(APIView):
             equipo = " | ".join([p for p in [info.get("tipo_equipo") or "", info.get("marca") or "", info.get("modelo") or ""] if p])
             ns = info.get("numero_serie") or ""
 
-            subject = f"Solicitud de asignación {os_txt} - {cliente}"
+            subject = f"Solicitud de asignaci�n {os_txt} - {cliente}"
             lines = [
-                f"El técnico {tech_name} solicita asignación.",
+                f"El técnico {tech_name} solicita asignaci�n.",
                 f"OS: {os_txt}",
                 f"Cliente: {cliente}",
                 f"Equipo: {equipo or '-'}",
                 f"N/S: {ns or '-'}",
             ]
-            # Agregar link al frontend si está configurado
+            # Agregar link al frontend si est� configurado
             fe = getattr(settings, "FRONTEND_ORIGIN", "") or ""
             if fe:
                 lines.append("")
@@ -1243,7 +1371,7 @@ class IngresoSolicitarAsignacionView(APIView):
                     )
                     email_sent = False
 
-                    # Fallback: si el puerto configurado es 587 (STARTTLS), intentar 465 (SSL implícito)
+                    # Fallback: si el puerto configurado es 587 (STARTTLS), intentar 465 (SSL impl�cito)
                     try:
                         port_cfg = int(getattr(settings, "EMAIL_PORT", 0) or 0)
                     except Exception:
@@ -1317,6 +1445,7 @@ class PendientesGeneralView(APIView):
                        t.motivo,
                        c.razon_social,
                        d.numero_serie,
+                       COALESCE(d.n_de_control,'') AS numero_interno,
                        COALESCE(b.nombre,'') AS marca,
                        COALESCE(m.nombre,'') AS modelo,
                        COALESCE(m.tipo_equipo,'') AS tipo_equipo,
@@ -1359,7 +1488,7 @@ class IngresoHistorialView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "jefe_veedor", "admin"])
-        # Flag opcional para incluir la auditoría HTTP (audit_log) en la respuesta
+        # Flag opcional para incluir la auditor�a HTTP (audit_log) en la respuesta
         def _param_truthy(name: str) -> bool:
             v = (request.query_params.get(name) or "").strip().lower()
             return v in {"1", "true", "yes", "on"}
@@ -1379,7 +1508,7 @@ class IngresoHistorialView(APIView):
             except Exception:
                 rows = []
             if include_audit:
-                # Complementar con auditoría HTTP (audit_log), pero sin expandir por clave
+                # Complementar con auditor�a HTTP (audit_log), pero sin expandir por clave
                 pat1 = f"/api/ingresos/{ingreso_id}/%"
                 pat2 = f"/api/ingresos/{ingreso_id}/"
                 pat3 = f"/api/quotes/{ingreso_id}/%"
@@ -1470,7 +1599,7 @@ class IngresoHistorialView(APIView):
                     method = (r.get("method") or "").upper()
                     table_name = "ingresos"
                     record_id = ingreso_id
-                    # Heurística por ruta
+                    # Heur�stica por ruta
                     if "/accesorios/" in path:
                         table_name = "ingreso_accesorios"
                     elif "/fotos/" in path:
@@ -1511,7 +1640,7 @@ class CerrarReparacionView(APIView):
         require_roles(request, ["jefe","jefe_veedor","admin"])
         r = (request.data or {}).get("resolucion")
         if r not in ("reparado","no_reparado","no_se_encontro_falla","presupuesto_rechazado"):
-            return Response({"detail": "resolucion inválida"}, status=400)
+            return Response({"detail": "resolucion inv�lida"}, status=400)
 
         with connection.cursor() as cur:
             _set_audit_user(request)
@@ -1655,7 +1784,7 @@ class NuevoIngresoView(APIView):
                 existing_id = dup["id"]
                 return Response({"ok": True, "ingreso_id": existing_id, "os": os_label(existing_id), "existing": True})
 
-        # Auto-chequeo de garantía de fábrica por N/S si el usuario no la marcó
+        # Auto-chequeo de garant�a de f�brica por N/S si el usuario no la marc�
         if numero_serie and not garantia_bool:
             try:
                 from ..trazabilidad import find_serial_sale_date
@@ -1758,7 +1887,7 @@ class NuevoIngresoView(APIView):
             return Response({"detail": "Usuario no autenticado"}, status=401)
         _set_audit_user(request)
 
-        # PostgreSQL-only build: motivo es texto válido según enum del modelo
+        # PostgreSQL-only build: motivo es texto v�lido seg�n enum del modelo
 
         equipo_variante = (request.data.get("equipo_variante") or "").strip() or None
         ingreso_id = exec_returning(
@@ -1914,7 +2043,7 @@ class IngresoDetalleView(APIView):
         except Exception:
             strong = False
         if strong:
-            # Pequeño delay best-effort para evitar carrera read-after-write
+            # Peque�o delay best-effort para evitar carrera read-after-write
             try:
                 time.sleep(0.12)
             except Exception:
@@ -2018,7 +2147,7 @@ class IngresoDetalleView(APIView):
         except Exception:
             accs_alq = []
         row["alquiler_accesorios_items"] = accs_alq
-        # Resolver técnico solicitado (última solicitud pendiente si existe)
+        # Resolver técnico solicitado (�ltima solicitud pendiente si existe)
         try:
             req = q(
                 """
@@ -2037,7 +2166,7 @@ class IngresoDetalleView(APIView):
         except Exception:
             req = None
         if not req:
-            # Fallback: usar audit_log si la auditoría está habilitada/cargada
+            # Fallback: usar audit_log si la auditor�a est� habilitada/cargada
             try:
                 path1 = f"/api/ingresos/{ingreso_id}/solicitar-asignacion/"
                 path2 = f"/api/ingresos/{ingreso_id}/solicitar-asignacion"
@@ -2131,11 +2260,11 @@ class IngresoDetalleView(APIView):
                 sets_no_estado.append("fecha_servicio=%s")
                 params_no_estado.append(dt)
                 fecha_present = True
-        # Si el rol es técnico, solo el asignado puede editar diagnóstico/trabajos/fecha
+        # Si el rol es técnico, solo el asignado puede editar diagn�stico/trabajos/fecha
         if rol == "tecnico" and any(k in d for k in ("descripcion_problema", "trabajos_realizados", "fecha_servicio")):
             uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
             if int(asignado_a or 0) != int(uid or 0):
-                raise PermissionDenied("Solo el técnico asignado puede editar diagnóstico y reparación")
+                raise PermissionDenied("Solo el técnico asignado puede editar diagn�stico y reparaci�n")
         if any(k in d for k in ("remito_salida", "factura_numero", "fecha_entrega")):
             if _rol(request) not in {"jefe", "jefe_veedor", "admin", "recepcion"}:
                 raise PermissionDenied("No autorizado para editar datos de entrega")
@@ -2227,7 +2356,7 @@ class IngresoDetalleView(APIView):
                 "UPDATE devices SET numero_serie = NULLIF(%s,'') WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
                 [ns, ingreso_id],
             )
-            # Si no vino 'garantia' explícito, auto-chequear por N/S
+            # Si no vino 'garantia' expl�cito, auto-chequear por N/S
             if "garantia" not in d:
                 try:
                     from ..trazabilidad import find_serial_sale_date
@@ -2258,7 +2387,7 @@ class IngresoDetalleView(APIView):
             params_no_estado.append((d.get("informe_preliminar") or "").strip())
         if "garantia" in d:
             if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar garantia de fábrica")
+                raise PermissionDenied("No autorizado para editar garantia de f�brica")
             exec_void(
                 "UPDATE devices SET garantia_bool=%s WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
                 [bool(d.get("garantia")), ingreso_id],
@@ -2336,9 +2465,17 @@ class IngresoDetalleView(APIView):
             if not asignado_a:
                 raise ValidationError("Antes de diagnosticar, asigne un tecnico al ingreso")
             with transaction.atomic():
-                if sets_no_estado:
-                    params_tmp = list(params_no_estado) + [ingreso_id]
-                    q(f"UPDATE ingresos SET {', '.join(sets_no_estado)} WHERE id=%s", params_tmp)
+                # Auto-setear fecha_servicio solo en la transición ingresado -> diagnosticado
+                # si no vino explícita en el payload y aún está NULL en DB.
+                sets_tmp = list(sets_no_estado)
+                params_tmp = list(params_no_estado)
+                if not fecha_present:
+                    # Establecer solo si actualmente es NULL (COALESCE mantiene existente)
+                    sets_tmp.append("fecha_servicio=COALESCE(fecha_servicio, %s)")
+                    params_tmp.append(timezone.now())
+                if sets_tmp:
+                    params_all = list(params_tmp) + [ingreso_id]
+                    q(f"UPDATE ingresos SET {', '.join(sets_tmp)} WHERE id=%s", params_all)
                 q("UPDATE ingresos SET estado='diagnosticado' WHERE id=%s AND estado='ingresado'", [ingreso_id])
             return Response({"ok": True})
         if promote_from_asignado:

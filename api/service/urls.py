@@ -14,7 +14,7 @@ from .views import (
 
     # listados / generales
     CustomersListView, PendientesGeneralView,
-    AprobadosParaRepararView, AprobadosYReparadosView, AprobadosCombinadosView, LiberadosView,
+    AprobadosParaRepararView, AprobadosYReparadosView, AprobadosView, LiberadosView,
     GeneralEquiposView, GeneralPorClienteView, GeneralPorClienteExportView,
 
     # ingresos nuevos + derivaci�n
@@ -95,7 +95,7 @@ urlpatterns = [
     path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
 
     # ALIAS de compatibilidad con el front (si exist�an)
-    path("ingresos/aprobados/", AprobadosCombinadosView.as_view()),
+    path("ingresos/aprobados/", AprobadosView.as_view()),
     path("ingresos/reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
 

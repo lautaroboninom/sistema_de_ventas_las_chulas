@@ -63,7 +63,7 @@ class IngresoListItemSerializer(serializers.Serializer):
     tipo_equipo = serializers.CharField(allow_blank=True, required=False)
     fecha_servicio = serializers.DateTimeField(required=False, allow_null=True)
     fecha_entrega = serializers.DateTimeField(required=False, allow_null=True)
-    fecha_aprobacion = serializers.DateTimeField(required=False, allow_null=True)
+    fecha_aprobado = serializers.DateTimeField(required=False, allow_null=True)
     
     # Campos opcionales que algunas vistas ya traen
     fecha_reparado = serializers.DateTimeField(required=False, allow_null=True)

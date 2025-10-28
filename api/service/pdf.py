@@ -903,7 +903,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         y -= (ROW_H + ROW_GAP)
 
         # Observaciones (Descripción + Trabajos)
-        obs_txt = " \n\n Trabajos realizados:\n ".join(
+        obs_txt = " \n\n Trabajos a realizar:\n ".join(
             [t for t in [(head.get("descripcion_problema") or "").strip(),
                          (head.get("trabajos_realizados") or "").strip()] if t]
         ) or "-"
