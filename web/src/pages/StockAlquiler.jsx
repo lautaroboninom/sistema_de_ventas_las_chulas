@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { getGeneralEquipos } from "../lib/api";
 import { ingresoIdOf, formatOS, norm, tipoEquipoOf, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import { useAuth } from "../context/AuthContext";
+import useQueryState from "../hooks/useQueryState";
 
 // Catlogo (DB):
 const TARGET_ID = 2;
@@ -25,7 +26,7 @@ export default function StockAlquiler() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
   const nav = useNavigate();
 
   const { user, loading: authLoading } = useAuth();
@@ -63,14 +64,14 @@ export default function StockAlquiler() {
   }, [authLoading, user]);
 
   const filtered = useMemo(() => {
-    const needle = norm(filter);
+    const needle = norm(q);
     if (!needle) return rows;
     return rows.filter(r => {
       if (!estadoValido(r)) return false;
       const campos = [formatOS(r), r?.marca, catalogEquipmentLabel(r), tipoEquipoOf(r), r?.numero_serie, r?.numero_interno, r?.razon_social];
       return campos.some(c => norm(c).includes(needle));
     });
-  }, [rows, filter]);
+  }, [rows, q]);
 
   const marcaOf = (row) => (row?.marca ?? row?.equipo?.marca ?? "-");
   const modeloOf = (row) => {
@@ -102,8 +103,8 @@ export default function StockAlquiler() {
       <div className="flex items-center gap-2 mb-3">
         <input
           className="border rounded p-2 w-full max-w-md"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
           placeholder="Filtrar por OS, marca, equipo, serie"
         />
       </div>

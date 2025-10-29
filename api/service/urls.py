@@ -4,7 +4,7 @@ from .views import (
     # salud / login
     ping, LoginView, LogoutView, SessionView, ForgotPasswordView, ResetPasswordView,
 
-    # flujo ingresos / t�cnico
+    # flujo ingresos / ténico
     MisPendientesView,
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     NoAplicaPresupuestoView, QuitarNoAplicaPresupuestoView,
@@ -17,18 +17,18 @@ from .views import (
     AprobadosParaRepararView, AprobadosYReparadosView, AprobadosView, LiberadosView,
     GeneralEquiposView, GeneralPorClienteView, GeneralPorClienteExportView,
 
-    # ingresos nuevos + derivaci�n
+    # ingresos nuevos + derivación
     NuevoIngresoView, DerivarIngresoView, DerivacionesPorIngresoView, DevolverDerivacionView,
     
 
-    # cat�logos
+    # catálogos
     CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
     IngresoAlquilerAccesoriosView, IngresoAlquilerAccesorioDetailView,
     CatalogoMarcasView, CatalogoModelosView,
     ModeloVarianteView,
-    # cat�logo jer�rquico marca/tipo/modelo/variante
+    # catálogos jerárquico marca/tipo/modelo/variante
     CatalogoTiposView, CatalogoModelosDeTipoView, CatalogoVariantesView, CatalogoMarcasPorTipoView,
     # Tipos equipo general (ABM)
     TiposEquipoView,  # tipos equipo (sugerencias + ABM)
@@ -37,7 +37,7 @@ from .views import (
     CatalogoTiposCreateView, CatalogoTipoDetailView,
     CatalogoModelosCreateView, CatalogoModeloDetailView, CatalogoVariantesCreateView, CatalogoVarianteDetailView,
 
-    # administraci�n de usuarios
+    # administración de usuarios
     UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
     CatalogoRolesView, CerrarReparacionView,
 
@@ -72,7 +72,7 @@ urlpatterns = [
     path("auth/forgot/", ForgotPasswordView.as_view()),
     path("auth/reset/", ResetPasswordView.as_view()),
 
-    # t�cnico / ingresos (acciones)
+    # ténico / ingresos (acciones)
     path("tecnico/mis-pendientes/", MisPendientesView.as_view()),
     path("ingresos/<int:ingreso_id>/reparado/", MarcarReparadoView.as_view()),
     path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
@@ -108,7 +108,7 @@ urlpatterns = [
     path("equipos/garantia-reparacion/", GarantiaReparacionCheckView.as_view()),
     path("equipos/garantia-fabrica/", GarantiaFabricaCheckView.as_view()),
 
-    # ingresos nuevos / derivaci�n
+    # ingresos nuevos / derivación
     path("ingresos/nuevo/", NuevoIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivar/", DerivarIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/derivaciones/", DerivacionesPorIngresoView.as_view()),
@@ -171,7 +171,7 @@ urlpatterns = [
 
 
 
-    # (si us�s los endpoints para asignar t�cnico y setear t�cnico de marca/modelo)
+    # (si us�s los endpoints para asignar ténico y setear ténico de marca/modelo)
     path('catalogos/marcas/<int:bid>/tecnico/', MarcaTecnicoView.as_view()),
     path('catalogos/marcas/<int:bid>/tecnico/aplicar-a-modelos/', MarcaAplicarTecnicoAModelosView.as_view()),
     path('catalogos/marcas/<int:bid>/modelos/<int:mid>/tecnico/', ModeloTecnicoView.as_view()),
@@ -185,7 +185,7 @@ urlpatterns = [
     path("quotes/<int:ingreso_id>/pdf/", QuotePdfView.as_view()),
     path("quotes/<int:ingreso_id>/anular/", AnularPresupuestoView.as_view()),
 
-    # t�cnico / ingresos (acciones)
+    # ténico / ingresos (acciones)
 
 
     path("ingresos/<int:ingreso_id>/remito/", RemitoSalidaPdfView.as_view()),   # remito de salida (nuevo)
@@ -197,7 +197,7 @@ urlpatterns = [
     # - listado general (sugerencias para asignaci�n): plural "catalogos"
     # - listado general (sugerencias): plural "catalogos"
     path("catalogos/tipos-equipo/", TiposEquipoView.as_view()),
-    # - ABM cat�logo general (no por marca)
+    # - ABM catálogos general (no por marca)
     # - ABM por marca (tabla marca_tipos_equipo)
     path("catalogo/tipos-equipo/<int:tipo_id>/", CatalogoTipoDetailView.as_view()),
     # - ABM de series/modelos y variantes

@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS ingresos (
   recibido_por         INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
   comentarios          TEXT,
   garantia_reparacion  BOOLEAN,
+  garantia_fabrica     BOOLEAN,
   faja_garantia        TEXT,
   presupuesto_estado   quote_estado NOT NULL DEFAULT 'pendiente',
   asignado_a           INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,

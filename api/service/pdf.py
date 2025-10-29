@@ -74,7 +74,7 @@ def _get_data(ingreso_id: int):
             COALESCE(c.telefono_2, '') AS cliente_telefono_2,
             COALESCE(c.email, '') AS cliente_email,
             d.numero_serie,
-            COALESCE(d.garantia_bool, false) AS garantia,
+            COALESCE(t.garantia_fabrica, false) AS garantia,
             COALESCE(b.nombre,'') AS marca,
             m.tipo_equipo as equipo,
             COALESCE(m.nombre,'') AS modelo,

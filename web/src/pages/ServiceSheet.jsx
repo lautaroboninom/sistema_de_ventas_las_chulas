@@ -113,6 +113,7 @@ export default function ServiceSheet() {
   const [trabajos, setTrabajos] = useState("");
   const [resolucion, setResolucion] = useState("");
   const [fechaServStr, setFechaServStr] = useState("");
+  const [toastMsg, setToastMsg] = useState("");
   const [showReparadoToast, setShowReparadoToast] = useState(false);
   const [savingDiag, setSavingDiag] = useState(false);
   const canResolve = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]);
@@ -582,6 +583,7 @@ export default function ServiceSheet() {
           patch={patch}
           setErr={setErr}
           refreshIngreso={refreshIngreso}
+          setToastMsg={setToastMsg}
           setShowReparadoToast={setShowReparadoToast}
           savingDiag={savingDiag}
           canManagePhotos={canManagePhotos}
@@ -665,6 +667,11 @@ export default function ServiceSheet() {
         </div>
       )}
 
+      {toastMsg && (
+        <div className="fixed right-4 top-4 bg-emerald-600 text-white px-4 py-2 rounded shadow-lg" role="status">
+          {toastMsg}
+        </div>
+      )}
       {showReparadoToast && (
         <div className="fixed right-4 top-4 bg-emerald-600 text-white px-4 py-2 rounded shadow-lg" role="status">
           Marcado como reparado

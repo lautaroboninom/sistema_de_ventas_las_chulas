@@ -13,12 +13,13 @@ import {
   norm,
 } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
+import useQueryState from "../hooks/useQueryState";
 
 export default function Tecnico() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
 
   const navigate = useNavigate();
 
@@ -66,7 +67,7 @@ export default function Tecnico() {
   }, []);
 
   const filteredRows = useMemo(() => {
-    const needle = norm(filter);
+    const needle = norm(q);
     if (!needle) return rows;
     return rows.filter((row) => {
       const campos = [
@@ -80,9 +81,9 @@ export default function Tecnico() {
       ];
       return campos.some((campo) => norm(campo).includes(needle));
     });
-  }, [rows, filter]);
+  }, [rows, q]);
 
-  const displayRows = filter ? filteredRows : rows;
+  const displayRows = q ? filteredRows : rows;
 
   const StateSquare = ({ checked, label, disabled }) => {
     const cls = [
@@ -154,8 +155,8 @@ export default function Tecnico() {
             <input
               className="border rounded p-2 w-full max-w-md"
               placeholder="Filtrar por OS, cliente, equipo, serie, estado..."
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
             />
           </div>
           {displayRows.length === 0 ? (

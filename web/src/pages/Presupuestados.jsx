@@ -9,6 +9,7 @@ import { ingresoIdOf,
   tipoEquipoOf,
   formatMoney,
   resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import useQueryState from "../hooks/useQueryState";
 
 // ENDPOINT para "presupuestados" (ya emitidos/enviados)
 const ENDPOINT = "/api/ingresos/presupuestados/"; // <-- AJUSTAR si tu API usa otra ruta
@@ -17,7 +18,7 @@ export default function JefePresupuestos() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
   const [busyId, setBusyId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [exporting, setExporting] = useState(false);
@@ -50,7 +51,7 @@ export default function JefePresupuestos() {
   }, []);
 
   const filtered = useMemo(() => {
-    const needle = norm(filter);
+    const needle = norm(q);
     if (!needle) return rows;
     return rows.filter((row) => {
       const campos = [
@@ -66,7 +67,7 @@ export default function JefePresupuestos() {
       ];
       return campos.some((c) => norm(c).includes(needle));
     });
-  }, [rows, filter]);
+  }, [rows, q]);
 
   const visibleIds = useMemo(() => new Set(filtered.map((r) => ingresoIdOf(r))), [filtered]);
   const allVisibleSelected = useMemo(() => {
@@ -163,8 +164,8 @@ export default function JefePresupuestos() {
       <div className="flex items-center gap-2 mb-3">
         <input
           type="text"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
           placeholder="Filtrar por OS, cliente, equipo, estado, monto"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar presupuestados"

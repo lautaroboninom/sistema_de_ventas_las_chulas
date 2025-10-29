@@ -3,6 +3,7 @@ import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
+import useQueryState from "../hooks/useQueryState";
 
 // Ajust si tu backend usa otro endpoint
 const ENDPOINT = "/api/ingresos/pendientes/";
@@ -11,7 +12,7 @@ export default function PendientesGeneral() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
   const navigate = useNavigate();
 
   async function load() {
@@ -38,7 +39,7 @@ export default function PendientesGeneral() {
 
   // Aplico filtro y luego ordeno: devueltos primero, urgentes despus, luego por fecha_creacion asc
   const filteredAndSorted = useMemo(() => {
-    const needle = norm(filter);
+    const needle = norm(q);
     const base = needle
       ? rows.filter((row) => {
           const campos = [
@@ -73,7 +74,7 @@ export default function PendientesGeneral() {
       const dtB = rawB ? new Date(rawB).getTime() : Number.POSITIVE_INFINITY;
       return dtA - dtB;
     });
-  }, [rows, filter]);
+  }, [rows, q]);
 
   const go = (row) => {
     const id = ingresoIdOf(row);
@@ -101,8 +102,8 @@ export default function PendientesGeneral() {
       <div className="flex items-center gap-2 mb-3">
         <input
           type="text"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
           placeholder="Filtrar por OS, cliente, equipo, estado, serie..."
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar pendientes"

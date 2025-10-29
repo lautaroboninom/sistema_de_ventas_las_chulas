@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import api, { getClientes, downloadAuth } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import useQueryState from "../hooks/useQueryState";
 
 
 
@@ -11,11 +12,11 @@ export default function GeneralPorCliente() {
   const [loadingClientes, setLoadingClientes] = useState(true);
   const [errClientes, setErrClientes] = useState("");
 
-  const [sel, setSel] = useState("");
+  const [sel, setSel] = useQueryState("cliente_id", "");
   const [rows, setRows] = useState([]);
   const [loadingRows, setLoadingRows] = useState(false);
   const [errRows, setErrRows] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [exporting, setExporting] = useState(false);
 
@@ -62,7 +63,7 @@ export default function GeneralPorCliente() {
   }
 
   const filtered = useMemo(() => {
-    const needle = norm(filter);
+    const needle = norm(q);
     if (!needle) return rows;
     return rows.filter((row) => {
       const campos = [
@@ -78,7 +79,9 @@ export default function GeneralPorCliente() {
       ];
       return campos.some((c) => norm(c).includes(needle));
     });
-  }, [rows, filter]);
+  }, [rows, q]);
+
+  // Mantener el comportamiento actual: buscar sólo al presionar el botón
 
   const visibleIds = useMemo(() => new Set(filtered.map((r) => ingresoIdOf(r))), [filtered]);
   const allVisibleSelected = useMemo(() => {
@@ -173,8 +176,8 @@ export default function GeneralPorCliente() {
         </button>
         <input
           type="text"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
           placeholder="Filtrar resultados por OS, equipo, serie, estado"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar resultados"

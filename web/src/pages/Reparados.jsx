@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import useQueryState from "../hooks/useQueryState";
 
 // Ajust si tu backend usa otra ruta
 
@@ -14,7 +15,7 @@ export default function Reparados() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
   const navigate = useNavigate();
 
   async function load() {
@@ -36,7 +37,7 @@ export default function Reparados() {
   }, []);
 
   const filtered = useMemo(() => {
-    const needle = norm(filter);
+    const needle = norm(q);
     if (!needle) return rows;
     return rows.filter((row) => {
       const campos = [
@@ -51,7 +52,7 @@ export default function Reparados() {
       ];
       return campos.some((c) => norm(c).includes(needle));
     });
-  }, [rows, filter]);
+  }, [rows, q]);
 
   const go = (row) => {
     const id = ingresoIdOf(row);
@@ -79,8 +80,8 @@ export default function Reparados() {
       <div className="flex items-center gap-2 mb-3">
         <input
           type="text"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
           placeholder="Filtrar por OS, cliente, marca, equipo, serie"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar reparados"

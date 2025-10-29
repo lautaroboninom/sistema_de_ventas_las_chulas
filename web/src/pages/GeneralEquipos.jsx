@@ -4,6 +4,7 @@ import api, { getGeneralEquipos } from "../lib/api";
 import { useSearchParams } from "react-router-dom";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso } from "../lib/ui-helpers";
+import useQueryState from "../hooks/useQueryState";
 
 export default function GeneralEquipos() {
   const [rows, setRows] = useState([]);
@@ -12,7 +13,7 @@ export default function GeneralEquipos() {
   const [page, setPage] = useState(1);
   const [hasNext, setHasNext] = useState(false);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
   const navigate = useNavigate();
   const [search] = useSearchParams();
   const pageSize = 200;
@@ -65,7 +66,7 @@ export default function GeneralEquipos() {
     const delivered = search.get('delivered');
     const fromD = from ? new Date(from+"T00:00:00Z") : null;
     const toD = to ? new Date(to+"T23:59:59Z") : null;
-    const needle = norm(filter);
+    const needle = norm(q);
     const base = rows.filter((row) => {
       if (delivered === '1') {
         const ent = row?.fecha_entrega ? new Date(row.fecha_entrega) : null;
@@ -91,7 +92,7 @@ export default function GeneralEquipos() {
       ];
       return campos.some((c) => norm(c).includes(needle));
     });
-  }, [rows, filter]);
+  }, [rows, q]);
 
   const go = (row) => {
     const id = ingresoIdOf(row);
@@ -136,8 +137,8 @@ export default function GeneralEquipos() {
       <div className="flex items-center gap-2 mb-3">
         <input
           type="text"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
           placeholder="Filtrar por OS, cliente, tipo de equipo, marca, modelo, variante, estado, serie..."
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar histórico"

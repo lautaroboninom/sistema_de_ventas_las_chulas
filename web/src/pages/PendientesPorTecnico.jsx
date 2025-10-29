@@ -4,16 +4,17 @@ import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
+import useQueryState from "../hooks/useQueryState";
 
 
 export default function PendientesPorTecnico() {
     
   const [tecnicos, setTecnicos] = useState([]);
-  const [tecnicoId, setTecnicoId] = useState("");
+  const [tecnicoId, setTecnicoId] = useQueryState("tecnico_id", "");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
   const nav = useNavigate();
 
   useEffect(() => { getTecnicos().then(setTecnicos).catch(e=>setErr(e.message)); }, []);
@@ -33,13 +34,13 @@ export default function PendientesPorTecnico() {
   useEffect(()=>{ load(); }, [tecnicoId]);
 
   const filtered = useMemo(()=> {
-    const needle = norm(filter);
+    const needle = norm(q);
     if (!needle) return rows;
     return rows.filter(r=>{
       const campos = [formatOS(r), r?.razon_social, r?.marca, r?.modelo, tipoEquipoOf(r), r?.numero_serie, r?.numero_interno, r?.estado];
       return campos.some(c => norm(c).includes(needle));
     });
-  }, [rows, filter]);
+  }, [rows, q]);
 
   return (
     <div className="card">
@@ -50,7 +51,7 @@ export default function PendientesPorTecnico() {
           <option value="">-- Seleccionar tcnico --</option>
           {tecnicos.map(t=> <option key={t.id} value={t.id}>{t.nombre}</option>)}
         </select>
-        <input className="border rounded p-2 w-full max-w-md" placeholder="Filtrar por OS, cliente, marca, equipo, serie" value={filter} onChange={e=>setFilter(e.target.value)} />
+        <input className="border rounded p-2 w-full max-w-md" placeholder="Filtrar por OS, cliente, marca, equipo, serie" value={q} onChange={e=>setQ(e.target.value)} />
       </div>
 
       {!tecnicoId ? <div className="text-sm text-gray-500">Eleg un tcnico para ver sus pendientes.</div> :

@@ -33,6 +33,7 @@ export default function DiagnosticoTab({
   patch,
   setErr,
   refreshIngreso,
+  setToastMsg,
   setShowReparadoToast,
   savingDiag,
   // fotos
@@ -223,10 +224,19 @@ export default function DiagnosticoTab({
               className="bg-emerald-600 text-white px-3 py-2 rounded"
               onClick={async () => {
                 try {
-                  await postMarcarReparado(id);
+                  const resp = await postMarcarReparado(id);
                   await refreshIngreso();
-                  setShowReparadoToast(true);
-                  setTimeout(() => setShowReparadoToast(false), 2000);
+                  // Toast original de reparado
+                  if (typeof setShowReparadoToast === 'function') {
+                    setShowReparadoToast(true);
+                    setTimeout(() => setShowReparadoToast(false), 2000);
+                  }
+                  // Mostrar aviso extra solo si hubo movimiento automático (MG)
+                  if (resp && resp.auto_moved) {
+                    const movedMsg = `Marcado como reparado. Movido a ${resp.ubicacion_nombre || resp.auto_moved_to || 'Estantería de Alquiler'}`;
+                    setToastMsg(movedMsg);
+                    setTimeout(() => setToastMsg("") , 3000);
+                  }
                 } catch (e) {
                   setErr(e?.message || "No se pudo marcar como reparado");
                 }

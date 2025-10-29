@@ -140,7 +140,8 @@ class DevolverDerivacionView(APIView):
                        d.numero_serie,
                        COALESCE(b.nombre,'') AS marca,
                        COALESCE(m.nombre,'') AS modelo,
-                       COALESCE(m.tipo_equipo,'') AS tipo_equipo
+                       COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                       COALESCE(d.n_de_control,'') AS numero_interno
                   FROM ingresos t
                   JOIN devices d   ON d.id = t.device_id
                   JOIN customers c ON c.id = d.customer_id
@@ -160,7 +161,7 @@ class DevolverDerivacionView(APIView):
                     f"El equipo derivado fue devuelto del servicio externo y se reencolo como 'ingresado'.\n\n"
                     f"Cliente: {info.get('razon_social','')}\n"
                     f"Equipo: {info.get('marca','')} {info.get('modelo','')}\n"
-                    f"Numero de serie: {info.get('numero_serie','')}\n\n"
+                    f"Numero de serie: {info.get('numero_interno','') + " " + info.get('numero_serie','')}\n\n"
                     f"Hoja de servicio: /ingresos/{ingreso_id}\n"
                 )
                 try:
@@ -219,7 +220,8 @@ class EquiposDerivadosView(APIView):
                    COALESCE(b.nombre,'') AS marca,
                    COALESCE(m.nombre,'') AS modelo,
                    COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                   NULLIF(t.equipo_variante,'') AS equipo_variante
+                   NULLIF(t.equipo_variante,'') AS equipo_variante,
+                   COALESCE(d.n_de_control,'') AS numero_interno
             FROM equipos_derivados ed
             JOIN ingresos t   ON t.id = ed.ingreso_id
             JOIN devices  d   ON d.id = t.device_id

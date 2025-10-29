@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { getUbicaciones, getGeneralEquipos } from "../lib/api";
 import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, nsPreferInternoOf } from "../lib/ui-helpers";
 import { useNavigate } from "react-router-dom";
+import useQueryState from "../hooks/useQueryState";
 
 export default function Depositos() {
   const [ubicaciones, setUbicaciones] = useState([]);
-  const [ubicacionId, setUbicacionId] = useState("");
+  const [ubicacionId, setUbicacionId] = useQueryState("ubicacion_id", "");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");

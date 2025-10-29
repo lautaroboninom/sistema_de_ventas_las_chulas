@@ -14,6 +14,7 @@ import {
   nsPreferInternoOf,
 } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
+import useQueryState from "../hooks/useQueryState";
 
 // Endpoint combinado del backend
 const ENDPOINT = "/api/ingresos/aprobados/";
@@ -22,7 +23,7 @@ export default function Aprobados() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [filter, setFilter] = useState("");
+  const [q, setQ] = useQueryState("q", "");
   const navigate = useNavigate();
   const { user } = useAuth();
   const release = canRelease(user);
@@ -46,7 +47,7 @@ export default function Aprobados() {
   }, []);
 
   const filtered = useMemo(() => {
-    const needle = norm(filter);
+    const needle = norm(q);
     if (!needle) return rows;
     return rows.filter((row) => {
       const campos = [
@@ -61,7 +62,7 @@ export default function Aprobados() {
       ];
       return campos.some((c) => norm(c).includes(needle));
     });
-  }, [rows, filter]);
+  }, [rows, q]);
 
   const go = (row) => {
     const id = ingresoIdOf(row);
@@ -89,8 +90,8 @@ export default function Aprobados() {
       <div className="flex items-center gap-2 mb-3">
         <input
           type="text"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
           placeholder="Filtrar por OS, cliente, marca, equipo, serie"
           className="border rounded p-2 w-full max-w-md"
           aria-label="Filtrar aprobados"
@@ -181,4 +182,3 @@ export default function Aprobados() {
     </div>
   );
 }
-
