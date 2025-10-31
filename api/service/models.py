@@ -1,4 +1,4 @@
-#service/models.py
+﻿#service/models.py
 from django.db import models
 
 class User(models.Model):
@@ -50,11 +50,15 @@ class Device(models.Model):
     marca = models.ForeignKey(Marca, null=True, on_delete=models.SET_NULL, db_column="marca_id")
     model = models.ForeignKey(Model, null=True, on_delete=models.SET_NULL, db_column="model_id")
     numero_serie = models.TextField(null=True)
+    numero_interno = models.TextField(null=True)
+    tipo_equipo = models.TextField(null=True)
+    variante = models.TextField(null=True)
+    garantia_vence = models.DateField(null=True)
     propietario = models.TextField(null=True)
-    garantia_bool = models.BooleanField(null=True)
-    etiq_garantia_ok = models.BooleanField(null=True)
     n_de_control = models.TextField(null=True)
     alquilado = models.BooleanField(default=False)
+    alquiler_a = models.TextField(null=True)
+    ubicacion_id = models.IntegerField(null=True)
     class Meta:
         managed = False
         db_table = "devices"
@@ -78,6 +82,7 @@ class Ingreso(models.Model):
     presupuesto_estado = models.TextField()
     asignado_a = models.IntegerField(null=True)
     etiqueta_qr = models.TextField(null=True)
+    etiq_garantia_ok = models.BooleanField(null=True)
 
     class Meta:
         managed = False

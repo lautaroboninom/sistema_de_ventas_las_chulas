@@ -51,7 +51,7 @@ export default function NuevoIngreso() {
   const [catModelos, setCatModelos] = useState([]);
 
   // Form principal
-  const [form, setForm] = useState({
+  const [form, setForm] = useState({ etiq_garantia_ok: false,
     cliente: { id: null, razon_social: "", cod_empresa: "", telefono: "" },
     equipo: {
       marca_id: "",
@@ -145,7 +145,7 @@ export default function NuevoIngreso() {
     return () => clearTimeout(h);
   }, [form.equipo.numero_serie, form.equipo.numero_interno]);
 
-  // Garantía de fbrica (por N°/S en Excels) - debounce 400ms
+  // Garantía de fábrica (por N°/S en Excels) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const marcaSel = (() => {
@@ -258,7 +258,7 @@ export default function NuevoIngreso() {
       .catch((e) => setErr(e?.message || "Error cargando modelos"));
   }, [marcaId, tipoSel]);
 
-  // Variantes desde Catálogo segn modelo interno seleccionado
+  // Variantes desde Catálogo según modelo interno seleccionado
   useEffect(() => {
     const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
     if (!m || !marcaId || !catTipoId) {
@@ -416,6 +416,7 @@ export default function NuevoIngreso() {
           doc: propietario.doc || "",
         },
         empresa_facturar: (empresaFact || "SEPID").toUpperCase(),
+        etiq_garantia_ok: !!form.etiq_garantia_ok,
       };
 
       const r = await postNuevoIngreso(payload);
@@ -480,7 +481,7 @@ export default function NuevoIngreso() {
                 list="clientes_rs"
                 value={clienteRsInput}
                 onChange={(e) => onClienteRsChange(e.target.value)}
-                placeholder="Escrib y eleg de la lista"
+                placeholder="Escribí y elegí de la lista"
                 required
               />
               <datalist id="clientes_rs">
@@ -498,7 +499,7 @@ export default function NuevoIngreso() {
                 list="clientes_cod"
                 value={clienteCodInput}
                 onChange={(e) => onClienteCodChange(e.target.value)}
-                placeholder="Opcional: pods buscar por código"
+                placeholder="Opcional: podés buscar por código"
               />
               <datalist id="clientes_cod">
                 {(Array.isArray(clientes) ? clientes : [])
@@ -522,8 +523,8 @@ export default function NuevoIngreso() {
             </div>
           )}
           <p className="text-xs text-gray-600 mt-2">
-            Debés seleccionar un cliente existente. Puede buscar por <b>Razón social</b> o por
-            <b> Código</b>; si complets ambos, deben corresponder al mismo cliente.
+            Debés seleccionar un cliente existente. Podés buscar por <b>Razón social</b> o por
+            <b> Código</b>; si completás ambos, deben corresponder al mismo cliente.
           </p>
         </fieldset>
 
@@ -584,7 +585,7 @@ export default function NuevoIngreso() {
                 onChange={onChange("equipo.modelo_id")}
                 disabled={!marcaId || !modelos.length}
               >
-                <option value="">{!marcaId ? "Elegí marca primero" : "Seleccion modelo"}</option>
+                <option value="">{!marcaId ? "Elegí marca primero" : "Seleccioná modelo"}</option>
                 {modelos.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.nombre}
@@ -609,9 +610,9 @@ export default function NuevoIngreso() {
               </datalist>
             </div>
 
-            {/* técnico asignado */}
+            {/* Técnico asignado */}
             <div className="md:col-span-2">
-              <label className="text-sm">técnico asignado</label>
+              <label className="text-sm">Técnico asignado</label>
               <Select
                 value={tecnicoId ?? ""}
                 onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}
@@ -726,7 +727,7 @@ export default function NuevoIngreso() {
                     list="accesorios_catalogo"
                     value={nuevoAcc.descripcion}
                     onChange={(e) => setNuevoAcc((s) => ({ ...s, descripcion: e.target.value }))}
-                    placeholder="Escrib y eleg de la lista"
+                    placeholder="Escribí y elegí de la lista"
                   />
                   <datalist id="accesorios_catalogo">
                     {(Array.isArray(accesCatalogo) ? accesCatalogo : []).map((a) => (
@@ -752,7 +753,7 @@ export default function NuevoIngreso() {
                       (a) => (a.nombre || "").trim().toLowerCase() === d
                     );
                     if (!acc) {
-                      setErr("Elegí una descripcin válida de la lista");
+                      setErr("Elegí una descripción válida de la lista");
                       return;
                     }
                     setAccItems((list) => [
@@ -808,6 +809,25 @@ export default function NuevoIngreso() {
             </div>
           </div>
         </fieldset>
+
+        {/* Recepción */}
+        <div className="border rounded p-3">
+          <label className="text-sm font-semibold">Recepción</label>
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              id="etiqok"
+              type="checkbox"
+              checked={!!form.etiq_garantia_ok}
+              onChange={(e) => setForm((f) => ({ ...f, etiq_garantia_ok: !!e.target.checked }))}
+            />
+            <label htmlFor="etiqok" className="text-sm">
+              Faja de garantía OK (etiquetas en buen estado)
+            </label>
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            Marcá si al ingresar el equipo la faja/etiquetas están en buen estado.
+          </div>
+        </div>
 
         <div className="flex gap-3">
           <button

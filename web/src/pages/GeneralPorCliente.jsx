@@ -126,6 +126,12 @@ export default function GeneralPorCliente() {
     }
   }
 
+  // Cargar automáticamente cuando cambia el cliente (o si viene por URL)
+  useEffect(() => {
+    buscar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel]);
+
   const go = (row) => {
     const id = ingresoIdOf(row);
     if (!id) return;
@@ -165,15 +171,7 @@ export default function GeneralPorCliente() {
             </option>
           ))}
         </select>
-        <button
-          className="btn"
-          onClick={buscar}
-          disabled={!sel || loadingRows}
-          aria-busy={loadingRows ? "true" : "false"}
-          title={!sel ? "Eleg un cliente para buscar" : "Buscar ingresos del cliente"}
-        >
-          Buscar
-        </button>
+
         <input
           type="text"
           value={q}

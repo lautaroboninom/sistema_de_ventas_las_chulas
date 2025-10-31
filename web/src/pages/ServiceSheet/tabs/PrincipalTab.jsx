@@ -477,7 +477,7 @@ export default function PrincipalTab(props) {
           </Row>
         </div>
 
-        {/* Columna derecha: Estado/Asignacin/ubicacion */}
+        {/* Columna derecha: Estado/Asignación/ubicación */}
         <div className="border rounded p-4">
           <h2 className="font-semibold mb-2">Estado</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
@@ -535,7 +535,7 @@ export default function PrincipalTab(props) {
                       {savingTech ? "Guardando..." : "Guardar"}
                     </button>
                     {mailEnviado && (
-                      <div className="text-xs text-emerald-700">Se envio el mail</div>
+                      <div className="text-xs text-emerald-700">Se envió el mail</div>
                     )}
                     {(data?.tecnico_solicitado_id && data?.tecnico_solicitado_id !== (data?.asignado_a ?? null)) && (
                       <div className="text-xs text-amber-700 mt-1">{pendingLabel}</div>
@@ -631,7 +631,7 @@ export default function PrincipalTab(props) {
                   {savingUb ? "Guardando..." : "Guardar"}
                 </button>
               </div>
-              <div className="text-xs text-gray-500">La ubicación puede modificarse desde aquí..</div>
+              <div className="text-xs text-gray-500">La ubicación puede modificarse desde aquí.</div>
             </div>
           </div>
           {/* Comentarios (debajo de Asignación y Ubicación) */}
@@ -645,6 +645,18 @@ export default function PrincipalTab(props) {
               />
             ) : (
               <div className="whitespace-pre-wrap">{data.comentarios || "-"}</div>
+            )}
+          </div>
+          <div className="mt-4">
+            <h3 className="font-medium mb-2">Recepción</h3>
+            {editBasics ? (
+              <input
+                type="checkbox"
+                checked={!!(formBasics?.etiq_garantia_ok)}
+                onChange={(e) => setFormBasics((s) => ({ ...(s || {}), etiq_garantia_ok: e.target.checked }))}
+              />
+            ) : (
+              <span>{data?.etiq_garantia_ok ? "Sí" : "No"}</span>
             )}
           </div>
         </div>
@@ -832,7 +844,27 @@ export default function PrincipalTab(props) {
       <div className="border rounded p-4 mt-4">
         <h2 className="font-semibold mb-2">Alquiler</h2>
         <Row label="¿Se alquiló?">
-          <input type="checkbox" checked={!!data.alquilado} onChange={(e) => patch({ alquilado: e.target.checked })} />
+          <input
+            type="checkbox"
+            checked={!!data.alquilado}
+            disabled={!!data.alquilado}
+            onChange={async (e) => {
+              const checked = e.target.checked;
+              try {
+                if (checked) {
+                  const target = (ubicaciones || []).find((u) => (u?.nombre || "").trim().toLowerCase() === "alquilado");
+                  if (target && target.id != null) {
+                    setUbicacionId(String(target.id));
+                    await patch({ alquilado: true, ubicacion_id: Number(target.id) });
+                    return;
+                  }
+                }
+                await patch({ alquilado: checked });
+              } catch (err) {
+                setErr && setErr(err?.message || "No se pudo actualizar el estado de alquiler");
+              }
+            }}
+          />
         </Row>
         <Row label="¿A quién?">
           <input className="border rounded p-1 w-80" value={data.alquiler_a || ""} onChange={(e) => patch({ alquiler_a: e.target.value })} />
@@ -911,6 +943,7 @@ export default function PrincipalTab(props) {
     </>
   );
 }
+
 
 
 

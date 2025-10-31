@@ -1,4 +1,4 @@
-﻿from io import BytesIO
+from io import BytesIO
 from decimal import Decimal
 from django.db import connection
 from reportlab.pdfgen import canvas
@@ -176,7 +176,7 @@ def _get_derivacion_data(ingreso_id: int, deriv_id: int | None = None) -> dict |
             m.tipo_equipo AS equipo,
             NULLIF(t.equipo_variante,'') AS equipo_variante,
             COALESCE(d.numero_serie,'') AS numero_serie,
-            COALESCE(d.n_de_control,'') AS numero_interno,
+            COALESCE(d.numero_interno,'') AS numero_interno,
             COALESCE(t.informe_preliminar,'') AS informe_preliminar,
             ed.id           AS deriv_id,
             COALESCE(ed.remit_deriv,'')    AS remit_deriv,

@@ -383,7 +383,7 @@ class AprobarPresupuestoView(APIView):
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,
                   COALESCE(d.numero_serie,'') AS numero_serie,
-                  COALESCE(d.n_de_control,'') AS numero_interno
+                  COALESCE(d.numero_interno,'') AS numero_interno
                 FROM ingresos t
                 LEFT JOIN users   u ON u.id = t.asignado_a
                 JOIN devices      d ON d.id = t.device_id

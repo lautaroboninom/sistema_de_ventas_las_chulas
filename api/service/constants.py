@@ -8,6 +8,8 @@ DEFAULT_LOCATION_NAMES = [
     "Sarmiento",
     "Depósito SEPID",
     "Desguace",
+    "Alquilado",
+    "Vendido",
 ]
 
 # Remapeos de alias de ubicaciones a forma canónica

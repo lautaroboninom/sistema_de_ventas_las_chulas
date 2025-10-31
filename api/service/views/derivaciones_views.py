@@ -1,4 +1,4 @@
-﻿from django.conf import settings
+from django.conf import settings
 from django.db import transaction
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -141,7 +141,7 @@ class DevolverDerivacionView(APIView):
                        COALESCE(b.nombre,'') AS marca,
                        COALESCE(m.nombre,'') AS modelo,
                        COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                       COALESCE(d.n_de_control,'') AS numero_interno
+                       COALESCE(d.numero_interno,'') AS numero_interno
                   FROM ingresos t
                   JOIN devices d   ON d.id = t.device_id
                   JOIN customers c ON c.id = d.customer_id
@@ -221,7 +221,7 @@ class EquiposDerivadosView(APIView):
                    COALESCE(m.nombre,'') AS modelo,
                    COALESCE(m.tipo_equipo,'') AS tipo_equipo,
                    NULLIF(t.equipo_variante,'') AS equipo_variante,
-                   COALESCE(d.n_de_control,'') AS numero_interno
+                    COALESCE(d.numero_interno,'') AS numero_interno
             FROM equipos_derivados ed
             JOIN ingresos t   ON t.id = ed.ingreso_id
             JOIN devices  d   ON d.id = t.device_id
