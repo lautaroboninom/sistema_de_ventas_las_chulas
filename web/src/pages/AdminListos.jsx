@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateOnly, norm, tipoEquipoOf, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 import { resolutionLabel } from "../lib/constants";
 import useQueryState from "../hooks/useQueryState";
@@ -136,7 +136,7 @@ export default function AdminListos() {
                 <th scope="col" className="p-2">OS</th>
                 <th scope="col" className="p-2">Cliente</th>
                 <th scope="col" className="p-2">Equipo</th>
-                <th scope="col" className="p-2">Resolucin</th>
+                <th scope="col" className="p-2">Resolución</th>
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Fecha listo</th>
                 <th scope="col" className="p-2 text-right">Acciones</th>
@@ -158,11 +158,11 @@ export default function AdminListos() {
                   <td className="p-2">{row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}</td>
                   <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   <td className="p-2">
-                    <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolucin" />
+                    <StatusChip value={resolutionLabel(row?.resolucion)} title="Resolución" />
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">
-                    {formatDateTime(row?.fecha_entrega ?? row?.fecha_listo ?? row?.fecha_reparado ?? row?.fecha_estado ?? row?.estado_fecha)}
+                    {formatDateOnly(row?.fecha_entrega ?? row?.fecha_listo ?? row?.fecha_reparado ?? row?.fecha_estado ?? row?.estado_fecha)}
                   </td>
                   <td className="p-2">
                     <div className="flex gap-2 justify-end">

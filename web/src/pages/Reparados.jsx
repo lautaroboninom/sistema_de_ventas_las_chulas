@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateOnly, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import useQueryState from "../hooks/useQueryState";
 
 // Ajust si tu backend usa otra ruta
@@ -131,9 +131,9 @@ export default function Reparados() {
                   <td className="p-2">{catalogEquipmentLabel(row) ?? "-"}</td>
                   
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateOnly(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">
-                    {formatDateTime(
+                    {formatDateOnly(
                       row?.fecha_reparado ??
                         row?.fecha_reparacion ??
                         row?.reparado_fecha ??

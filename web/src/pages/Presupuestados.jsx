@@ -4,7 +4,7 @@ import api, { getBlob, downloadAuth } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf,
   formatOS,
-  formatDateTime,
+  formatDateOnly,
   norm,
   tipoEquipoOf,
   formatMoney,
@@ -262,7 +262,7 @@ export default function JefePresupuestos() {
                     <td className="p-2">{row?.estado ?? "-"}</td>
                     <td className="p-2">{formatMoney(monto, moneda)}</td>
                     <td className="p-2 whitespace-nowrap">
-                      {formatDateTime(row?.presupuesto_fecha_emision ?? row?.fecha_emision)}
+                      {formatDateOnly(row?.presupuesto_fecha_emision ?? row?.fecha_emision)}
                     </td>
                     <td className="p-2">
                       <div className="flex gap-2 justify-end">

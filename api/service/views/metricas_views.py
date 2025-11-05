@@ -306,7 +306,12 @@ class MetricasSeriesView(APIView):
         for r in aprobar_rows:
             k = r.get("ym")
             if k in data:
-                data[k]["t_aprobar_hours_vals"].append(max(0.0, (r.get("mins") or 0) / 60.0))
+                v = r.get("mins") or 0
+                try:
+                    v = float(v)
+                except Exception:
+                    pass
+                data[k]["t_aprobar_hours_vals"].append(max(0.0, v / 60.0))
 
         # TAT (Ingreso -> Entregado) por mes (días calendario)
         tat_rows = q((
@@ -666,7 +671,14 @@ class MetricasCalibracionView(APIView):
             "WHERE q.fecha_emitido BETWEEN %s AND %s AND q.fecha_aprobado IS NOT NULL"
             f"{where_i}\n"
         ), [since, until, *where_params]) or []
-        apro_hours = [max(0.0, (r.get("mins") or 0) / 60.0) for r in t_aprob_rows]
+        apro_hours = []
+        for r in t_aprob_rows:
+            v = r.get("mins") or 0
+            try:
+                v = float(v)
+            except Exception:
+                pass
+            apro_hours.append(max(0.0, v / 60.0))
 
         t_rep_rows = q((
             "SELECT q.fecha_aprobado, r.reparado_ts\n"

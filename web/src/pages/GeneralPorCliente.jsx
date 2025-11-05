@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { getClientes, downloadAuth } from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateOnly, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import useQueryState from "../hooks/useQueryState";
 
 
@@ -281,9 +281,9 @@ export default function GeneralPorCliente() {
                     try { const s = String(v); return s.charAt(0).toUpperCase() + s.slice(1); } catch { return String(v); }
                   })()}</td>
                   <td className="p-2">{row?.ubicacion_nombre ?? row?.ubicacion_id ?? "-"}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateOnly(resolveFechaIngreso(row))}</td>
                   <td className="p-2 whitespace-nowrap">
-                    {formatDateTime(row?.presupuesto_fecha_emision || row?.presupuesto_fecha_envio)}
+                {formatDateOnly(row?.presupuesto_fecha_emision || row?.presupuesto_fecha_envio)}
                   </td>
                 </tr>
               ))}
@@ -297,4 +297,3 @@ export default function GeneralPorCliente() {
     </div>
   );
 }
-

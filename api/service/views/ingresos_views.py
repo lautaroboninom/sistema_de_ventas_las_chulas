@@ -1,6 +1,5 @@
-﻿from django.db import connection, transaction
+from django.db import connection, transaction
 import time
-import os
 import json
 import logging
 from django.utils import timezone
@@ -23,6 +22,8 @@ from .helpers import (
     _norm_txt,
     _rol,
     _set_audit_user,
+    _frontend_url,
+    _email_append_footer_text,
     exec_returning,
     exec_void,
     last_insert_id,
@@ -38,6 +39,84 @@ from ..serializers import (
     IngresoDetailWithAccesoriosSerializer,
     IngresoListItemSerializer,
 )
+
+
+# Helpers locales (sin mover módulos por ahora)
+def _equipolabel_row(r):
+    try:
+        tipo = (r.get("tipo_equipo") or "").strip()
+        marca = (r.get("marca") or "").strip()
+        modelo = (r.get("modelo") or "").strip()
+        parts = [p for p in [tipo, marca, modelo] if p]
+        return " | ".join(parts) if parts else "-"
+    except Exception:
+        return "-"
+
+
+def _ns_label(r):
+    try:
+        interno = (r.get("numero_interno") or "").strip()
+        serie = (r.get("numero_serie") or "").strip()
+        return interno or serie or "-"
+    except Exception:
+        return "-"
+
+
+def _send_mail_with_fallback(subject, body, recipients):
+    debug = {}
+    try:
+        debug.update({
+            "backend": getattr(settings, "EMAIL_BACKEND", None),
+            "host": getattr(settings, "EMAIL_HOST", None),
+            "port": getattr(settings, "EMAIL_PORT", None),
+            "use_tls": getattr(settings, "EMAIL_USE_TLS", None),
+            "use_ssl": getattr(settings, "EMAIL_USE_SSL", None),
+            "from": getattr(settings, "DEFAULT_FROM_EMAIL", None),
+            "recipients": list(recipients or []),
+        })
+    except Exception:
+        pass
+    if not recipients:
+        logger.warning("email no recipients configured")
+        return False, debug
+    try:
+        sent = send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients, fail_silently=False)
+        ok = bool(sent and sent > 0)
+        return ok, debug
+    except Exception as e:
+        try:
+            debug["error"] = str(e)
+            debug["exception"] = e.__class__.__name__
+        except Exception:
+            pass
+        try:
+            port_cfg = int(getattr(settings, "EMAIL_PORT", 0) or 0)
+        except Exception:
+            port_cfg = 0
+        if port_cfg == 587:
+            try:
+                conn = get_connection(
+                    backend="django.core.mail.backends.smtp.EmailBackend",
+                    host=getattr(settings, "EMAIL_HOST", None),
+                    port=465,
+                    username=getattr(settings, "EMAIL_HOST_USER", None),
+                    password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
+                    use_tls=False,
+                    use_ssl=True,
+                    fail_silently=False,
+                )
+                msg = EmailMessage(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients, connection=conn)
+                sent2 = msg.send()
+                ok2 = bool(sent2 and sent2 > 0)
+                debug["fallback"] = {"mode": "ssl_465", "sent": ok2}
+                return ok2, debug
+            except Exception as e2:
+                try:
+                    debug.setdefault("fallback", {})["error"] = str(e2)
+                    debug.setdefault("fallback", {})["exception"] = e2.__class__.__name__
+                except Exception:
+                    pass
+        return False, debug
 
 
 class MisPendientesView(APIView):
@@ -112,7 +191,12 @@ class PendientesPresupuestoView(APIView):
                 JOIN customers c ON c.id=d.customer_id
                 LEFT JOIN marcas b ON b.id=d.marca_id
                 LEFT JOIN models m ON m.id=d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
+                LEFT JOIN quotes q ON q.id = (
+                  SELECT q2.id FROM quotes q2
+                  WHERE q2.ingreso_id = t.id
+                  ORDER BY (q2.fecha_emitido IS NOT NULL) DESC, q2.fecha_emitido DESC, q2.id DESC
+                  LIMIT 1
+                )
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE COALESCE(t.presupuesto_estado, 'pendiente') = 'pendiente'
                   AND LOWER(loc.nombre) = LOWER(%s)
@@ -167,7 +251,12 @@ class PresupuestadosView(APIView):
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
+                LEFT JOIN quotes q ON q.id = (
+                  SELECT q2.id FROM quotes q2
+                  WHERE q2.ingreso_id = t.id
+                  ORDER BY (q2.fecha_emitido IS NOT NULL) DESC, q2.fecha_emitido DESC, q2.id DESC
+                  LIMIT 1
+                )
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE (
                         q.estado::text IN ('emitido','enviado','presupuestado')
@@ -186,27 +275,27 @@ class PresupuestadosExportView(APIView):
     """
     Exporta a Excel (.xlsx) filas de 'presupuestados' dadas por sus IDs.
 
-    ParÃ¡metros query:
+    Parametros query:
       - ids: lista separada por comas de IDs de ingresos. Ej: ?ids=10,11,15
 
     Columnas:
-      OS, Cliente, Equipo, N/S, Monto sin IVA, Fecha emisiÃ³n
+      OS, Cliente, Equipo, N/S, Monto sin IVA, Fecha emision
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         ids_raw = (request.GET.get("ids") or "").strip()
         if not ids_raw:
-            return Response({"detail": "ParÃ¡metro 'ids' requerido"}, status=400)
+            return Response({"detail": "Parametro 'ids' requerido"}, status=400)
 
         try:
             ids = [int(x) for x in ids_raw.split(",") if x.strip()]
         except Exception:
-            return Response({"detail": "ParÃ¡metro 'ids' invÃ¡lido"}, status=400)
+            return Response({"detail": "Parametro 'ids' invalido"}, status=400)
 
         # Evitar excesos accidentales
         if len(ids) > 1000:
-            return Response({"detail": "Demasiados IDs (mÃ©ximo 1000)"}, status=400)
+            return Response({"detail": "Demasiados IDs (maximo 1000)"}, status=400)
 
         # Traer datos necesarios. Reutilizamos estructura del listado 'presupuestados'.
         with connection.cursor() as cur:
@@ -232,7 +321,12 @@ class PresupuestadosExportView(APIView):
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
+                LEFT JOIN quotes q ON q.id = (
+                  SELECT q2.id FROM quotes q2
+                  WHERE q2.ingreso_id = t.id
+                  ORDER BY (q2.fecha_emitido IS NOT NULL) DESC, q2.fecha_emitido DESC, q2.id DESC
+                  LIMIT 1
+                )
                WHERE t.id = ANY(%s)
                ORDER BY COALESCE(q.fecha_emitido, t.fecha_ingreso, NOW()) ASC
                 """,
@@ -251,26 +345,16 @@ class PresupuestadosExportView(APIView):
             "Equipo",
             "N/S",
             "Monto sin IVA",
-            "Fecha emisiÃ³n",
+            "Fecha emision",
         ]
         ws.append(headers)
 
-        def _equipolabel(r):
-            tipo = (r.get("tipo_equipo") or "").strip()
-            marca = (r.get("marca") or "").strip()
-            modelo = (r.get("modelo") or "").strip()
-            parts = [p for p in [tipo, marca, modelo] if p]
-            return " | ".join(parts) if parts else "-"
-
-        def _ns(r):
-            interno = (r.get("numero_interno") or "").strip()
-            serie = (r.get("numero_serie") or "").strip()
-            return interno or serie or "-"
+        # formato de equipo y N/S via helpers _equipolabel_row y _ns_label
 
         for r in rows:
             os_txt = os_label(r.get("id"))
-            equipo = _equipolabel(r)
-            ns_val = _ns(r)
+            equipo = _equipolabel_row(r)
+            ns_val = _ns_label(r)
             monto = r.get("subtotal_sin_iva")
             fecha = r.get("fecha_emision")
             # Serializar fecha a texto corto si existe
@@ -318,19 +402,19 @@ class MarcarReparadoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, ingreso_id: int):
         require_roles(request, ["tecnico", "jefe", "jefe_veedor"])
-        # Solo el tÃ©cnico asignado puede marcar como reparado (salvo jefes)
+        # Solo el tecnico asignado puede marcar como reparado (salvo jefes)
         try:
             if _rol(request) == "tecnico":
                 row = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
                 uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
                 if not row or int(row.get("asignado_a") or 0) != int(uid or 0):
-                    raise PermissionDenied("Solo el tÃ©cnico asignado puede marcar como reparado")
+                    raise PermissionDenied("Solo el tecnico asignado puede marcar como reparado")
         except PermissionDenied:
             raise
         except Exception:
             # En duda, permitir solo a roles superiores
             if _rol(request) == "tecnico":
-                raise PermissionDenied("Solo el tÃ©cnico asignado puede marcar como reparado")
+                raise PermissionDenied("Solo el tecnico asignado puede marcar como reparado")
         # Leer estado/presupuesto previos para decidir envio (idempotencia)
         try:
             _prev_row = q(
@@ -346,12 +430,12 @@ class MarcarReparadoView(APIView):
         _set_audit_user(request)
         exec_void("UPDATE ingresos SET estado='reparado' WHERE id=%s", [ingreso_id])
 
-        # Movimiento automÃ¡tico a EstanterÃ­a de Alquiler si el equipo es "MG ####"
+        # Movimiento automÃ¡tico a EstanterÃ­Â­a de Alquiler si el equipo es "MG ####"
         auto_moved = False
         auto_moved_to = None
         new_ubic_id = None
         try:
-            # Leer nÃºmeros para detecciÃ³n MG y ubicaciÃ³n actual
+            # Leer nÃšmeros para detecciÃ³n MG y ubicaciÃ³n actual
             info = q(
                 """
                 SELECT COALESCE(d.numero_serie,'') AS numero_serie,
@@ -377,7 +461,7 @@ class MarcarReparadoView(APIView):
                     ensure_default_locations()
                 except Exception:
                     pass
-                target_name = "EstanterÃ­a de Alquiler"
+                target_name = "EstanterÃ­Â­a de Alquiler"
                 loc_row = q(
                     "SELECT id, nombre FROM locations WHERE LOWER(nombre)=LOWER(%s) LIMIT 1",
                     [target_name],
@@ -436,17 +520,16 @@ class MarcarReparadoView(APIView):
                 f"N/S: {_ns or '-'}",
             ]
             try:
-                _fe = getattr(settings, "FRONTEND_ORIGIN", "") or ""
-            except Exception:
-                _fe = ""
-            if _fe:
-                try:
-                    _base = _fe.rstrip('/')
-                except Exception:
-                    _base = _fe
+                _url = _frontend_url(request, f"/ingresos/{ingreso_id}") + "?tab=principal"
                 _lines.append("")
-                _lines.append(f"Abrir hoja: {_base}/ingresos/{ingreso_id}?tab=principal")
+                _lines.append(f"Abrir hoja: {_url}")
+            except Exception:
+                pass
             _body = "\n".join(_lines)
+            try:
+                _body = _email_append_footer_text(_body)
+            except Exception:
+                pass
 
             _recips = getattr(settings, "ASSIGNMENT_REQUEST_RECIPIENTS", []) or []
             if not isinstance(_recips, (list, tuple)):
@@ -464,62 +547,19 @@ class MarcarReparadoView(APIView):
                     )
                     return
                 try:
-                    _sent = send_mail(
-                        _subject,
-                        _body,
-                        getattr(settings, "DEFAULT_FROM_EMAIL", None),
-                        _recips,
-                        fail_silently=False,
-                    )
-                    _ok = bool(_sent and _sent > 0)
+                    _ok, _dbg = _send_mail_with_fallback(_subject, _body, _recips)
                     logger.info(
                         "repair_completed_email sent=%s ingreso_id=%s recipients=%s backend=%s",
-                        _ok,
+                        bool(_ok),
                         ingreso_id,
                         _recips,
                         getattr(settings, "EMAIL_BACKEND", ""),
                     )
-                except Exception as e:
+                except Exception:
                     logger.exception(
                         "repair_completed_email failed",
-                        extra={"ingreso_id": ingreso_id, "recipients": _recips, "error": str(e)},
+                        extra={"ingreso_id": ingreso_id, "recipients": _recips},
                     )
-                    try:
-                        _port_cfg = int(getattr(settings, "EMAIL_PORT", 0) or 0)
-                    except Exception:
-                        _port_cfg = 0
-                    if _port_cfg == 587:
-                        try:
-                            _conn = get_connection(
-                                backend="django.core.mail.backends.smtp.EmailBackend",
-                                host=getattr(settings, "EMAIL_HOST", None),
-                                port=465,
-                                username=getattr(settings, "EMAIL_HOST_USER", None),
-                                password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
-                                use_tls=False,
-                                use_ssl=True,
-                                fail_silently=False,
-                            )
-                            _msg = EmailMessage(
-                                _subject,
-                                _body,
-                                getattr(settings, "DEFAULT_FROM_EMAIL", None),
-                                _recips,
-                                connection=_conn,
-                            )
-                            _sent2 = _msg.send()
-                            _ok2 = bool(_sent2 and _sent2 > 0)
-                            logger.info(
-                                "repair_completed_email fallback ssl_465 sent=%s ingreso_id=%s recipients=%s",
-                                _ok2,
-                                ingreso_id,
-                                _recips,
-                            )
-                        except Exception:
-                            logger.exception(
-                                "repair_completed_email fallback ssl_465 failed",
-                                extra={"ingreso_id": ingreso_id, "recipients": _recips},
-                            )
 
             try:
                 try:
@@ -538,9 +578,9 @@ class MarcarReparadoView(APIView):
             if auto_moved:
                 resp.update({
                     "auto_moved": True,
-                    "auto_moved_to": auto_moved_to or "EstanterÃ­a de Alquiler",
+                    "auto_moved_to": auto_moved_to or "EstanterÃ­Â­a de Alquiler",
                     "ubicacion_id": new_ubic_id,
-                    "ubicacion_nombre": auto_moved_to or "EstanterÃ­a de Alquiler",
+                    "ubicacion_nombre": auto_moved_to or "EstanterÃ­Â­a de Alquiler",
                 })
         except Exception:
             pass
@@ -557,6 +597,38 @@ class EntregarIngresoView(APIView):
             return Response({"detail": "remito_salida requerido"}, status=400)
         factura = (data.get("factura_numero") or "").strip() or None
         fecha_entrega = data.get("fecha_entrega") or None
+        # Si es CAMBIO, verificar serie contra la cargada al cerrar
+        serial_confirm = (data.get("serial_confirm") or "").strip()
+        try:
+            with connection.cursor() as cur:
+                cur.execute(
+                    "SELECT resolucion FROM ingresos WHERE id=%s",
+                    [ingreso_id],
+                )
+                row = cur.fetchone()
+                cur_resol = (row[0] if row else None) or ""
+                if cur_resol == "cambio":
+                    cur.execute(
+                        """
+                        SELECT 1 FROM information_schema.columns
+                         WHERE table_name='ingresos' AND column_name='serial_cambio'
+                           AND table_schema = ANY(current_schemas(true))
+                         LIMIT 1
+                        """
+                    )
+                    has_col = cur.fetchone() is not None
+                    if has_col:
+                        cur.execute("SELECT serial_cambio FROM ingresos WHERE id=%s", [ingreso_id])
+                        r2 = cur.fetchone()
+                        db_serial = ((r2[0] if r2 else None) or "").strip()
+                        if db_serial:
+                            if not serial_confirm:
+                                return Response({"detail": "serial_confirm requerido para entregar con resolucion 'cambio'"}, status=400)
+                            if (serial_confirm or "").strip().upper() != db_serial.upper():
+                                return Response({"detail": "La serie de confirmaci0n no coincide con la Serie (Cambio)"}, status=409)
+        except Exception:
+            # fallback: no bloquear la entrega por errores de verificacion
+            pass
         _set_audit_user(request)
         with transaction.atomic():
             with connection.cursor() as cur:
@@ -642,7 +714,12 @@ class GeneralPorClienteView(APIView):
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
+                LEFT JOIN quotes q ON q.id = (
+                  SELECT q2.id FROM quotes q2
+                  WHERE q2.ingreso_id = t.id
+                  ORDER BY (q2.fecha_emitido IS NOT NULL) DESC, q2.fecha_emitido DESC, q2.id DESC
+                  LIMIT 1
+                )
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE c.id = %s
                   AND LOWER(loc.nombre) = LOWER(%s)
@@ -659,9 +736,9 @@ class GeneralPorClienteExportView(APIView):
     Exporta a Excel (.xlsx) el "general por cliente" (no entregados / no alquilados).
 
     GET /api/clientes/<customer_id>/general/export/
-      ParÃ¡metros opcionales:
+      Parametros opcionales:
         - ids: lista separada por comas para limitar la exportaciÃ³n a esos ingresos
-
+        - ids: lista separada por comas para limitar la exportacion a esos ingresos
     Columnas del Excel:
       OS, Cliente, Equipo, N/S, Estado, Fecha ingreso
     """
@@ -674,10 +751,9 @@ class GeneralPorClienteExportView(APIView):
             try:
                 ids = [int(x) for x in ids_raw.split(",") if x.strip()]
             except Exception:
-                return Response({"detail": "ParÃ¡metro 'ids' invÃ¡lido"}, status=400)
+                return Response({"detail": "Parametro 'ids' invalido"}, status=400)
             if len(ids) > 1000:
-                return Response({"detail": "Demasiados IDs (mÃ©ximo 1000)"}, status=400)
-
+                return Response({"detail": "Demasiados IDs (maximo 1000)"}, status=400)
         with connection.cursor() as cur:
             _set_audit_user(request)
             if ids:
@@ -743,17 +819,7 @@ class GeneralPorClienteExportView(APIView):
         headers = ["OS", "Cliente", "Equipo", "N/S", "Estado", "Presupuesto", "Fecha ingreso"]
         ws.append(headers)
 
-        def _equipolabel(r):
-            tipo = (r.get("tipo_equipo") or "").strip()
-            marca = (r.get("marca") or "").strip()
-            modelo = (r.get("modelo") or "").strip()
-            parts = [p for p in [tipo, marca, modelo] if p]
-            return " | ".join(parts) if parts else "-"
-
-        def _ns(r):
-            interno = (r.get("numero_interno") or "").strip()
-            serie = (r.get("numero_serie") or "").strip()
-            return interno or serie or "-"
+        # formato de equipo y N/S via helpers _equipolabel_row y _ns_label
 
         def _presu_label(v):
             if not v:
@@ -772,8 +838,8 @@ class GeneralPorClienteExportView(APIView):
 
         for r in rows:
             os_txt = os_label(r.get("id"))
-            equipo = _equipolabel(r)
-            ns_val = _ns(r)
+            equipo = _equipolabel_row(r)
+            ns_val = _ns_label(r)
             estado = (r.get("estado") or "-")
             presu = _presu_label(r.get("presupuesto_estado"))
             fecha = r.get("fecha_ingreso")
@@ -840,7 +906,12 @@ class AprobadosParaRepararView(APIView):
                 JOIN customers c ON c.id=d.customer_id
                 LEFT JOIN marcas b ON b.id=d.marca_id
                 LEFT JOIN models m ON m.id=d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
+                LEFT JOIN quotes q ON q.id = (
+                  SELECT q2.id FROM quotes q2
+                  WHERE q2.ingreso_id = t.id
+                  ORDER BY (q2.fecha_emitido IS NOT NULL) DESC, q2.fecha_emitido DESC, q2.id DESC
+                  LIMIT 1
+                )
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE LOWER(loc.nombre) = LOWER(%s)
                   AND (
@@ -990,6 +1061,7 @@ class GeneralEquiposView(APIView):
 
         estados = [e.strip() for e in estado_raw.split(",") if e.strip()] if estado_raw else []
         excluir_estados = [e.strip() for e in excluir_estados_raw.split(",") if e.strip()] if excluir_estados_raw else []
+        solo_taller_param_present = ("solo_taller" in request.GET)
         solo_taller = solo_taller_raw in ("1", "true", "yes", "y", "t")
         delivered = delivered_raw in ("1", "true", "yes", "y", "t")
         page = int(page_raw) if page_raw.isdigit() and int(page_raw) > 0 else 1
@@ -1017,6 +1089,11 @@ class GeneralEquiposView(APIView):
                         params.append(int(ubic_id_raw))
                 except Exception:
                     pass
+            # Optional 'solo_taller' filter: only apply when explicitly requested
+            if not (ubic or (ubic_id_raw and ubic_id_raw.isdigit())):
+                if solo_taller_param_present and solo_taller:
+                    wh.append("LOWER(loc.nombre) = LOWER(%s)")
+                    params.append("taller")
             if estados:
                 placeholders = ",".join(["%s"] * len(estados))
                 wh.append(f"t.estado IN ({placeholders})")
@@ -1025,7 +1102,7 @@ class GeneralEquiposView(APIView):
                 placeholders = ",".join(["%s"] * len(excluir_estados))
                 wh.append(f"t.estado NOT IN ({placeholders})")
                 params.extend(excluir_estados)
-            # BÃºsqueda exacta por N/S o por MG (formato 'MG ####')
+            # BÃšsqueda exacta por N/S o por MG (formato 'MG ####')
             if q_raw:
                 needle = q_raw.strip()
                 needle_ns = needle.replace(" ", "").upper()
@@ -1065,7 +1142,7 @@ class GeneralEquiposView(APIView):
 
             order_sql = "ORDER BY t.id DESC"
             if delivered:
-                order_sql = "ORDER BY t.id DESC NULLS LAST"
+                order_sql = "ORDER BY t.id DESC"
 
             limit_sql = ""
             limit_params = []
@@ -1092,7 +1169,12 @@ class GeneralEquiposView(APIView):
                 JOIN customers c ON c.id = d.customer_id
                 LEFT JOIN marcas b ON b.id = d.marca_id
                 LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN quotes q ON q.ingreso_id = t.id
+                LEFT JOIN quotes q ON q.id = (
+                  SELECT q2.id FROM quotes q2
+                  WHERE q2.ingreso_id = t.id
+                  ORDER BY (q2.fecha_emitido IS NOT NULL) DESC, q2.fecha_emitido DESC, q2.id DESC
+                  LIMIT 1
+                )
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 {where_sql}
                 {order_sql}
@@ -1125,7 +1207,7 @@ class IngresoAsignarTecnicoView(APIView):
         ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
         if not ok:
-            return Response({"detail": "tÃ©cnico invÃ¡lido"}, status=400)
+            return Response({"detail": "tecnico invalido"}, status=400)
         try:
             prev = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
             logger.info(f"[AsignarTecnico] ingreso={ingreso_id} prev={prev and prev.get('asignado_a')} new={tecnico_id}")
@@ -1215,15 +1297,17 @@ class IngresoAsignarTecnicoView(APIView):
                     f"Equipo: {equipo or '-'}",
                     f"N/S: {ns or '-'}",
                 ]
-                fe = getattr(settings, "FRONTEND_ORIGIN", "") or ""
-                if fe:
-                    try:
-                        base = fe.rstrip('/')
-                    except Exception:
-                        base = fe
+                try:
+                    url = _frontend_url(request, f"/ingresos/{ingreso_id}") + "?tab=principal"
                     lines.append("")
-                    lines.append(f"Abrir hoja: {base}/ingresos/{ingreso_id}?tab=principal")
+                    lines.append(f"Abrir hoja: {url}")
+                except Exception:
+                    pass
                 body = "\n".join(lines)
+                try:
+                    body = _email_append_footer_text(body)
+                except Exception:
+                    pass
                 cc_list = getattr(settings, "ASSIGNMENT_NOTIFY_CC", []) or []
                 if not isinstance(cc_list, (list, tuple)):
                     cc_list = [str(cc_list)] if cc_list else []
@@ -1242,8 +1326,12 @@ class IngresoAsignarTecnicoView(APIView):
                     pass
                 if recips:
                     try:
-                        sent = send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, fail_silently=False)
-                        email_sent = bool(sent and sent > 0)
+                        _sent, _dbg = _send_mail_with_fallback(subject, body, recips)
+                        email_sent = bool(_sent)
+                        try:
+                            email_debug.update(_dbg or {})
+                        except Exception:
+                            pass
                         logger.info("assign_notify sent=%s ingreso_id=%s to=%s", email_sent, ingreso_id, email_to)
                     except Exception as e:
                         try:
@@ -1253,34 +1341,6 @@ class IngresoAsignarTecnicoView(APIView):
                             pass
                         logger.exception("assign_notify failed", extra={"ingreso_id": ingreso_id, "to": email_to, "recipients": recips})
                         email_sent = False
-                        try:
-                            port_cfg = int(getattr(settings, "EMAIL_PORT", 0) or 0)
-                        except Exception:
-                            port_cfg = 0
-                        if port_cfg == 587:
-                            try:
-                                conn = get_connection(
-                                    backend="django.core.mail.backends.smtp.EmailBackend",
-                                    host=getattr(settings, "EMAIL_HOST", None),
-                                    port=465,
-                                    username=getattr(settings, "EMAIL_HOST_USER", None),
-                                    password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
-                                    use_tls=False,
-                                    use_ssl=True,
-                                    fail_silently=False,
-                                )
-                                msg = EmailMessage(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, connection=conn)
-                                sent2 = msg.send()
-                                email_sent = bool(sent2 and sent2 > 0)
-                                email_debug["fallback"] = {"mode": "ssl_465", "sent": email_sent}
-                                logger.info("assign_notify fallback ssl_465 sent=%s ingreso_id=%s to=%s", email_sent, ingreso_id, email_to)
-                            except Exception as e2:
-                                try:
-                                    email_debug.setdefault("fallback", {})["error"] = str(e2)
-                                    email_debug.setdefault("fallback", {})["exception"] = e2.__class__.__name__
-                                except Exception:
-                                    pass
-                                logger.exception("assign_notify fallback ssl_465 failed", extra={"ingreso_id": ingreso_id, "to": email_to})
                 else:
                     logger.warning("assign_notify no recipient email configured", extra={"ingreso_id": ingreso_id})
             except Exception as e:
@@ -1311,7 +1371,7 @@ class IngresoSolicitarAsignacionView(APIView):
         require_roles(request, ["tecnico"])
         uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
         if not uid:
-            return Response({"detail": "Usuario invÃ¡lido"}, status=400)
+            return Response({"detail": "Usuario invalido"}, status=400)
 
         # Si ya estÃ¡ asignado a este tÃ©cnico, responder OK y no hacer nada
         try:
@@ -1327,7 +1387,7 @@ class IngresoSolicitarAsignacionView(APIView):
                 exec_void(
                 """
                 INSERT INTO ingreso_assignment_requests(ingreso_id, usuario_id, status, created_at)
-                VALUES (, %s))
+                VALUES (%s, %s, 'solicitado', NOW())
                 """,
                 [ingreso_id, uid],
                 )
@@ -1363,38 +1423,36 @@ class IngresoSolicitarAsignacionView(APIView):
             equipo = " | ".join([p for p in [info.get("tipo_equipo") or "", info.get("marca") or "", info.get("modelo") or ""] if p])
             ns = info.get("numero_serie") or ""
 
-            subject = f"Solicitud de asignaciÃ³n {os_txt} - {cliente}"
+            subject = f"Solicitud de asignacion {os_txt} - {cliente}"
             lines = [
-                f"El tÃ©cnico {tech_name} solicita asignaciÃ³n.",
+                f"El tecnico {tech_name} solicita asignacion.",
                 f"OS: {os_txt}",
                 f"Cliente: {cliente}",
                 f"Equipo: {equipo or '-'}",
                 f"N/S: {ns or '-'}",
             ]
-            # Agregar link al frontend si estÃ¡ configurado
-            fe = getattr(settings, "FRONTEND_ORIGIN", "") or ""
-            if fe:
+            qs_parts = ["tab=principal"]
+            try:
+                if uid:
+                    qs_parts.append(f"tecnico_id={int(uid)}")
+            except Exception:
+                pass
+            qs = ("?" + "&".join(qs_parts)) if qs_parts else ""
+            try:
+                url = _frontend_url(request, f"/ingresos/{ingreso_id}") + qs
                 lines.append("")
-                try:
-                    base = fe.rstrip('/')
-                except Exception:
-                    base = fe
-                qs_parts = ["tab=principal"]
-                try:
-                    if uid:
-                        qs_parts.append(f"tecnico_id={int(uid)}")
-                except Exception:
-                    pass
-                qs = ("?" + "&".join(qs_parts)) if qs_parts else ""
-                lines.append(f"Abrir hoja: {base}/ingresos/{ingreso_id}{qs}")
+                lines.append(f"Abrir hoja: {url}")
+            except Exception:
+                pass
             body = "\n".join(lines)
-
-            # Destinatarios: desde settings.ASSIGNMENT_REQUEST_RECIPIENTS (lista),
-            # con fallback a emails conocidos de la empresa
+            try:
+                body = _email_append_footer_text(body)
+            except Exception:
+                pass
+            # Destinatarios: primero los configurados, luego fallback a correos de la empresa
             recips = getattr(settings, "ASSIGNMENT_REQUEST_RECIPIENTS", []) or []
             if not isinstance(recips, (list, tuple)):
                 recips = [str(recips)] if recips else []
-            # Fallbacks
             if not recips:
                 fallback1 = getattr(settings, "COMPANY_FOOTER_EMAIL_2", None)
                 fallback2 = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
@@ -1416,8 +1474,12 @@ class IngresoSolicitarAsignacionView(APIView):
 
             if recips:
                 try:
-                    sent = send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, fail_silently=False)
-                    email_sent = bool(sent and sent > 0)
+                    sent, dbg = _send_mail_with_fallback(subject, body, recips)
+                    email_sent = bool(sent)
+                    try:
+                        email_debug.update(dbg or {})
+                    except Exception:
+                        pass
                     logger.info(
                         "assignment_request_email sent=%s ingreso_id=%s user_id=%s recipients=%s backend=%s",
                         email_sent, ingreso_id, uid, recips, getattr(settings, "EMAIL_BACKEND", ""),
@@ -1433,42 +1495,6 @@ class IngresoSolicitarAsignacionView(APIView):
                         extra={"ingreso_id": ingreso_id, "user_id": uid, "recipients": recips},
                     )
                     email_sent = False
-
-                    # Fallback: si el puerto configurado es 587 (STARTTLS), intentar 465 (SSL implÃ­cito)
-                    try:
-                        port_cfg = int(getattr(settings, "EMAIL_PORT", 0) or 0)
-                    except Exception:
-                        port_cfg = 0
-                    if port_cfg == 587:
-                        try:
-                            conn = get_connection(
-                                backend="django.core.mail.backends.smtp.EmailBackend",
-                                host=getattr(settings, "EMAIL_HOST", None),
-                                port=465,
-                                username=getattr(settings, "EMAIL_HOST_USER", None),
-                                password=getattr(settings, "EMAIL_HOST_PASSWORD", None),
-                                use_tls=False,
-                                use_ssl=True,
-                                fail_silently=False,
-                            )
-                            msg = EmailMessage(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recips, connection=conn)
-                            sent2 = msg.send()
-                            email_sent = bool(sent2 and sent2 > 0)
-                            email_debug["fallback"] = {"mode": "ssl_465", "sent": email_sent}
-                            logger.info(
-                                "assignment_request_email fallback ssl_465 sent=%s ingreso_id=%s user_id=%s recipients=%s",
-                                email_sent, ingreso_id, uid, recips,
-                            )
-                        except Exception as e2:
-                            try:
-                                email_debug.setdefault("fallback", {})["error"] = str(e2)
-                                email_debug.setdefault("fallback", {})["exception"] = e2.__class__.__name__
-                            except Exception:
-                                pass
-                            logger.exception(
-                                "assignment_request_email fallback ssl_465 failed",
-                                extra={"ingreso_id": ingreso_id, "user_id": uid, "recipients": recips},
-                            )
             else:
                 logger.warning(
                     "assignment_request_email no recipients configured",
@@ -1551,7 +1577,7 @@ class IngresoHistorialView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request, ingreso_id: int):
         require_roles(request, ["jefe", "jefe_veedor", "admin"])
-        # Flag opcional para incluir la auditorÃ­a HTTP (audit_log) en la respuesta
+        # Flag opcional para incluir la auditorÃ­Â­a HTTP (audit_log) en la respuesta
         def _param_truthy(name: str) -> bool:
             v = (request.query_params.get(name) or "").strip().lower()
             return v in {"1", "true", "yes", "on"}
@@ -1571,7 +1597,7 @@ class IngresoHistorialView(APIView):
             except Exception:
                 rows = []
             if include_audit:
-                # Complementar con auditorÃ­a HTTP (audit_log), pero sin expandir por clave
+                # Complementar con auditorÃ­Â­a HTTP (audit_log), pero sin expandir por clave
                 pat1 = f"/api/ingresos/{ingreso_id}/%"
                 pat2 = f"/api/ingresos/{ingreso_id}/"
                 pat3 = f"/api/quotes/{ingreso_id}/%"
@@ -1662,7 +1688,7 @@ class IngresoHistorialView(APIView):
                     method = (r.get("method") or "").upper()
                     table_name = "ingresos"
                     record_id = ingreso_id
-                    # HeurÃ­stica por ruta
+                    # HeurÃ­Â­stica por ruta
                     if "/accesorios/" in path:
                         table_name = "ingreso_accesorios"
                     elif "/fotos/" in path:
@@ -1702,16 +1728,46 @@ class CerrarReparacionView(APIView):
     def post(self, request, ingreso_id: int):
         require_roles(request, ["jefe","jefe_veedor","admin"])
         r = (request.data or {}).get("resolucion")
-        if r not in ("reparado","no_reparado","no_se_encontro_falla","presupuesto_rechazado"):
-            return Response({"detail": "resolucion invÃ¡lida"}, status=400)
+        if r not in ("reparado","no_reparado","no_se_encontro_falla","presupuesto_rechazado","cambio"):
+            return Response({"detail": "resolucion invalida"}, status=400)
+
+        serial_cambio = (request.data or {}).get("serial_cambio")
+        if r == "cambio":
+            if not (serial_cambio or "").strip():
+                return Response({"detail": "serial_cambio requerido para resolucion 'cambio'"}, status=400)
+            serial_cambio = (serial_cambio or "").strip()
 
         with connection.cursor() as cur:
             _set_audit_user(request)
-            cur.execute("""
-                 UPDATE ingresos
-                    SET resolucion = %s
-                  WHERE id = %s
-            """, [r, ingreso_id])
+            # Detectar si existe columna serial_cambio
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'ingresos' AND column_name = 'serial_cambio'
+                   AND table_schema = ANY(current_schemas(true))
+                 LIMIT 1
+                """
+            )
+            has_serial_col = cur.fetchone() is not None
+            if r == "cambio" and has_serial_col:
+                cur.execute(
+                    """
+                    UPDATE ingresos
+                       SET resolucion = %s,
+                           serial_cambio = %s
+                     WHERE id = %s
+                    """,
+                    [r, serial_cambio, ingreso_id],
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE ingresos
+                       SET resolucion = %s
+                     WHERE id = %s
+                    """,
+                    [r, ingreso_id],
+                )
         return Response({"ok": True})
 
 
@@ -1826,35 +1882,39 @@ class NuevoIngresoView(APIView):
         prop_doc = (prop.get("doc") or "").strip()
 
         numero_serie = (equipo.get("numero_serie") or "").strip()
+        ns_key = (numero_serie or "").replace(" ", "").replace("-", "").upper()
         garantia_bool = bool(equipo.get("garantia"))
 
-        if numero_serie:
+        if ns_key:
             dup = q(
                 """
                 SELECT t.id
                   FROM ingresos t
                   JOIN devices d ON d.id = t.device_id
-                 WHERE d.customer_id = %s
-                   AND d.numero_serie = %s
-                   AND t.estado <> 'entregado'
+                 WHERE REPLACE(REPLACE(UPPER(d.numero_serie),' ',''),'-','') = %s
+                   AND t.estado NOT IN ('entregado','alquilado')
                  ORDER BY t.id DESC
                  LIMIT 1
                 """,
-                [customer_id, numero_serie],
+                [ns_key],
                 one=True,
             )
             if dup:
                 existing_id = dup["id"]
                 return Response({"ok": True, "ingreso_id": existing_id, "os": os_label(existing_id), "existing": True})
 
-        # Auto-chequeo de garantÃ­a de fÃ¡brica por N/S si el usuario no la marcÃ³
+        # Auto-chequeo de garantÃ­Â­a de fÃ¡brica por N/S si el usuario no la marcÃ³
         # no auto-calculo de garantia de fabrica por ahora (se toma del payload)
 
         dev = None
-        if numero_serie:
+        if ns_key:
             dev = q(
-                "SELECT id FROM devices WHERE numero_serie=%s AND customer_id=%s",
-                [numero_serie, customer_id],
+                """
+                SELECT id FROM devices
+                 WHERE REPLACE(REPLACE(UPPER(numero_serie),' ',''),'-','') = %s
+                 LIMIT 1
+                """,
+                [ns_key],
                 one=True,
             )
         dev = dev if dev else None
@@ -1862,23 +1922,48 @@ class NuevoIngresoView(APIView):
             device_id = dev["id"]
         else:
             if connection.vendor == "postgresql":
+                # Intentar insertar y capturar conflicto por N/S normalizado.
                 device_id = exec_returning(
                     """
                     INSERT INTO devices (customer_id, marca_id, model_id, numero_serie, numero_interno)
-                    VALUES (, %s), NULLIF(%s,''))
+                    VALUES (%s, %s, %s, %s, NULLIF(%s,''))
+                    ON CONFLICT DO NOTHING
                     RETURNING id
                     """,
                     [customer_id, equipo["marca_id"], equipo["modelo_id"], numero_serie, numero_interno]
                 )
+                if not device_id and ns_key:
+                    # Fallback de carrera: esperar brevemente a que otro commit sea visible
+                    row_dev = None
+                    for _ in range(3):
+                        row_dev = q(
+                            """
+                            SELECT id FROM devices
+                             WHERE REPLACE(REPLACE(UPPER(numero_serie),' ',''),'-','') = %s
+                             LIMIT 1
+                            """,
+                            [ns_key],
+                            one=True,
+                        )
+                        if row_dev:
+                            break
+                        time.sleep(0.05)
+                    device_id = row_dev and int(row_dev.get("id"))
             else:
                 exec_void(
                     """
                     INSERT INTO devices (customer_id, marca_id, model_id, numero_serie, numero_interno)
-                    VALUES (, %s), NULLIF(%s,''))
+                    VALUES (%s, %s, %s, %s, NULLIF(%s,''))
                     """,
                     [customer_id, equipo["marca_id"], equipo["modelo_id"], numero_serie, numero_interno]
                 )
                 device_id = last_insert_id()
+        # Actualizar snapshot de cliente del device al del ingreso actual
+        if device_id and customer_id:
+            try:
+                exec_void("UPDATE devices SET customer_id=%s WHERE id=%s", [customer_id, device_id])
+            except Exception:
+                pass
         if numero_interno:
             exec_void("UPDATE devices SET numero_interno = NULLIF(%s,'') WHERE id=%s", [numero_interno, device_id])
 
@@ -1942,7 +2027,7 @@ class NuevoIngresoView(APIView):
             return Response({"detail": "Usuario no autenticado"}, status=401)
         _set_audit_user(request)
 
-        # PostgreSQL-only build: motivo es texto vÃ¡lido segÃºn enum del modelo
+        # PostgreSQL-only build: motivo es texto vÃ¡lido segÃšn enum del modelo
 
         equipo_variante = (request.data.get("equipo_variante") or "").strip() or None
         ingreso_id = exec_returning(
@@ -2009,7 +2094,7 @@ class NuevoIngresoView(APIView):
             ref = (it.get("referencia") or "").strip() or None
             desc = (it.get("descripcion") or "").strip() or None
             exec_void(
-              "INSERT INTO ingreso_accesorios(ingreso_id, accesorio_id, referencia, descripcion) VALUES (, %s)",
+              "INSERT INTO ingreso_accesorios(ingreso_id, accesorio_id, referencia, descripcion) VALUES (%s, %s, %s, %s)",
               [ingreso_id, acc_id, ref, desc]
             )
 
@@ -2070,20 +2155,56 @@ class GarantiaReparacionCheckView(APIView):
 class GarantiaFabricaCheckView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
-        from ..trazabilidad import find_serial_sale_date
+        # Fuente de verdad: Ãºltimo ingreso del equipo
         ns = (request.GET.get("numero_serie") or "").strip()
-        marca = (request.GET.get("marca") or "").strip()
-        if not ns:
+        mg = (request.GET.get("numero_interno") or request.GET.get("mg") or "").strip()
+        if mg and not mg.upper().startswith("MG"):
+            mg = "MG " + mg
+
+        if not ns and not mg:
             return Response({"within_365_days": False, "fecha_venta": None, "found": False})
-        fecha, meta = find_serial_sale_date(ns, brand_hint=marca or None)
-        if not fecha:
+
+        wh = []
+        params = []
+        if ns:
+            wh.append("d.numero_serie = %s")
+            params.append(ns)
+        if mg:
+            wh.append("d.numero_interno = %s")
+            params.append(mg)
+        sql_where = " OR ".join(wh) if wh else "1=0"
+        try:
+            row = q(
+                f"""
+                SELECT t.id AS ingreso_id,
+                       COALESCE(t.garantia_fabrica,false) AS garantia,
+                       COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                       d.id AS device_id
+                  FROM ingresos t
+                  JOIN devices d ON d.id = t.device_id
+                 WHERE {sql_where}
+                 ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
+                 LIMIT 1
+                """,
+                params,
+                one=True,
+            )
+        except Exception:
+            row = None
+
+        if not row:
             return Response({"within_365_days": False, "fecha_venta": None, "found": False})
-        # Comparar con hoy (timezone aware -> usar date de Buenos Aires)
-        today = timezone.localdate()
-        within = (today - fecha).days <= 365
+
+        garantia = bool(row.get("garantia"))
+        meta = {
+            "source": "ingreso",
+            "ingreso_id": row.get("ingreso_id"),
+            "device_id": row.get("device_id"),
+            "fecha_ingreso": row.get("fecha_ingreso"),
+        }
         return Response({
-            "within_365_days": bool(within),
-            "fecha_venta": fecha.isoformat(),
+            "within_365_days": garantia,
+            "fecha_venta": None,
             "found": True,
             "meta": meta,
         })
@@ -2114,7 +2235,7 @@ class IngresoDetalleView(APIView):
               t.fecha_ingreso,
               t.fecha_servicio,
               t.garantia_reparacion,
-              t.etiq_garantia_ok,
+              COALESCE(t.etiq_garantia_ok, true) AS etiq_garantia_ok,
               t.faja_garantia,
               t.remito_ingreso,
               t.remito_salida,
@@ -2146,7 +2267,6 @@ class IngresoDetalleView(APIView):
               d.model_id,
               COALESCE(m.nombre,'') AS modelo,
               COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-              COALESCE(m.tipo_equipo,'') AS tipo_equipo,
               c.id AS customer_id,
               c.razon_social,
               c.cod_empresa,
@@ -2165,6 +2285,23 @@ class IngresoDetalleView(APIView):
         )
         if not row:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
+        # Agregar serial_cambio si existe la columna
+        try:
+            with connection.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT 1 FROM information_schema.columns
+                     WHERE table_name='ingresos' AND column_name='serial_cambio'
+                       AND table_schema = ANY(current_schemas(true))
+                     LIMIT 1
+                    """
+                )
+                if cur.fetchone() is not None:
+                    cur.execute("SELECT serial_cambio FROM ingresos WHERE id=%s", [row["id"]])
+                    sc = cur.fetchone()
+                    row["serial_cambio"] = (sc[0] if sc else None)
+        except Exception:
+            pass
         row["os"] = os_label(row["id"])
         if not row.get("fecha_creacion"):
             row["fecha_creacion"] = row.get("fecha_ingreso")
@@ -2203,7 +2340,7 @@ class IngresoDetalleView(APIView):
         except Exception:
             accs_alq = []
         row["alquiler_accesorios_items"] = accs_alq
-        # Resolver tÃ©cnico solicitado (Ãºltima solicitud pendiente si existe)
+        # Resolver tÃ©cnico solicitado (Ãšltima solicitud pendiente si existe)
         try:
             req = q(
                 """
@@ -2222,7 +2359,7 @@ class IngresoDetalleView(APIView):
         except Exception:
             req = None
         if not req:
-            # Fallback: usar audit_log si la auditorÃ­a estÃ¡ habilitada/cargada
+            # Fallback: usar audit_log si la auditorÃ­Â­a estÃ¡ habilitada/cargada
             try:
                 path1 = f"/api/ingresos/{ingreso_id}/solicitar-asignacion/"
                 path2 = f"/api/ingresos/{ingreso_id}/solicitar-asignacion"
@@ -2316,11 +2453,11 @@ class IngresoDetalleView(APIView):
                 sets_no_estado.append("fecha_servicio=%s")
                 params_no_estado.append(dt)
                 fecha_present = True
-        # Si el rol es tÃ©cnico, solo el asignado puede editar diagnÃ³stico/trabajos/fecha
+        # Si el rol es tecnico, solo el asignado puede editar diagnostico/trabajos/fecha
         if rol == "tecnico" and any(k in d for k in ("descripcion_problema", "trabajos_realizados", "fecha_servicio")):
             uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
             if int(asignado_a or 0) != int(uid or 0):
-                raise PermissionDenied("Solo el tÃ©cnico asignado puede editar diagnÃ³stico y reparaciÃ³n")
+                raise PermissionDenied("Solo el tecnico asignado puede editar diagnostico y reparacion")
         if any(k in d for k in ("remito_salida", "factura_numero", "fecha_entrega")):
             if _rol(request) not in {"jefe", "jefe_veedor", "admin", "recepcion"}:
                 raise PermissionDenied("No autorizado para editar datos de entrega")
@@ -2430,44 +2567,7 @@ class IngresoDetalleView(APIView):
                         return Response({"detail": "Ingreso no encontrado"}, status=404)
                     cur_dev_id = int(row_cur["device_id"])
                     if cur_dev_id != target_id:
-                        # Capturar NS previo y nuevo para auditoría
-                        try:
-                            prev_ns_row = q("SELECT numero_serie FROM devices WHERE id=%s", [cur_dev_id], one=True)
-                            prev_ns = (prev_ns_row or {}).get("numero_serie")
-                        except Exception:
-                            prev_ns = None
-                        try:
-                            new_ns_row = q("SELECT numero_serie FROM devices WHERE id=%s", [target_id], one=True)
-                            new_ns = (new_ns_row or {}).get("numero_serie") or ns
-                        except Exception:
-                            new_ns = ns
-
                         exec_void("UPDATE ingresos SET device_id=%s WHERE id=%s", [target_id, ingreso_id])
-                        # Audit (best-effort): registrar cambio de device_id
-                        try:
-                            user_id = getattr(getattr(request, "user", None), "id", None)
-                            user_role = rol
-                            with connection.cursor() as cur:
-                                cur.execute(
-                                    """
-                                    INSERT INTO audit.change_log (ts, user_id, user_role, ingreso_id, table_name, record_id, column_name, old_value, new_value)
-                                    VALUES (now(), %s, %s, %s, 'ingresos', %s, 'device_id', %s, %s)
-                                    """,
-                                    [user_id, user_role, ingreso_id, ingreso_id, cur_dev_id, target_id],
-                                )
-                                # Registrar también cambio lógico de numero_serie en la hoja
-                                cur.execute(
-                                    """
-                                    INSERT INTO audit.change_log (ts, user_id, user_role, ingreso_id, table_name, record_id, column_name, old_value, new_value)
-                                    VALUES (now(), %s, %s, %s, 'ingresos', %s, 'numero_serie', %s, %s)
-                                    """,
-                                    [user_id, user_role, ingreso_id, ingreso_id, prev_ns, new_ns],
-                                )
-                        except Exception:
-                            try:
-                                logger.info("[ReasignacionNS] ingreso=%s device_prev=%s device_new=%s (audit skipped)", ingreso_id, cur_dev_id, target_id)
-                            except Exception:
-                                pass
                         # Resincronizar snapshot del device anterior (si tiene otros ingresos)
                         try:
                             last_old = q(
@@ -2482,7 +2582,7 @@ class IngresoDetalleView(APIView):
                                 one=True,
                             )
                             if last_old and last_old.get("id"):
-                                # Disparar trigger de snapshot actualizando la misma fila (no-op lógica)
+                                # Disparar trigger de snapshot actualizando la misma fila (no-op lÃ³gica)
                                 exec_void(
                                     "UPDATE ingresos SET fecha_creacion=fecha_creacion WHERE id=%s",
                                     [int(last_old["id"])],
@@ -2492,50 +2592,19 @@ class IngresoDetalleView(APIView):
                     # No modificar numero_serie en devices si ya existe ese device
                 else:
                     # Fallback: si no existe device con ese N/S, actualizar el N/S del device actual
-                    try:
-                        row_cur = q("SELECT device_id FROM ingresos WHERE id=%s", [ingreso_id], one=True)
-                        cur_dev_id = row_cur and int(row_cur.get("device_id"))
-                        prev_ns_row = q("SELECT numero_serie FROM devices WHERE id=%s", [cur_dev_id], one=True) if cur_dev_id else None
-                        prev_ns = (prev_ns_row or {}).get("numero_serie")
-                    except Exception:
-                        cur_dev_id, prev_ns = None, None
                     exec_void(
                         "UPDATE devices SET numero_serie = NULLIF(%s,'') WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
                         [ns, ingreso_id],
                     )
-                    # Audit (best-effort): registrar cambio de numero_serie en la hoja del ingreso
-                    try:
-                        user_id = getattr(getattr(request, "user", None), "id", None)
-                        user_role = rol
-                        with connection.cursor() as cur:
-                            cur.execute(
-                                """
-                                INSERT INTO audit.change_log (ts, user_id, user_role, ingreso_id, table_name, record_id, column_name, old_value, new_value)
-                                VALUES (now(), %s, %s, %s, 'ingresos', %s, 'numero_serie', %s, %s)
-                                """,
-                                [user_id, user_role, ingreso_id, ingreso_id, prev_ns, ns],
-                            )
-                    except Exception:
-                        pass
             else:
-                # Si viene vacío, limpiar N/S del device actual
+                # Si viene vacÃ­o, limpiar N/S del device actual
                 exec_void(
                     "UPDATE devices SET numero_serie = NULLIF(%s,'') WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
                     [ns, ingreso_id],
                 )
-            # Si no vino 'garantia' explÃ­cito, auto-chequear por N/S
-            if False and "garantia" not in d:
-                try:
-                    from ..trazabilidad import find_serial_sale_date
-                    fch, _meta = find_serial_sale_date(ns)
-                    if fch is not None:
-                        en_garantia = (timezone.localdate() - fch).days <= 365
-                        exec_void(
-                            "UPDATE devices SET garantia_bool=%s WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
-                            [bool(en_garantia), ingreso_id],
-                        )
-                except Exception:
-                    pass
+            # Si no vino 'garantia' explÃ­Â­cito, auto-chequear por N/S
+            # removed: auto-chequeo de garantÃ­a por N/S (fuente: Ãºltimo ingreso)
+                # (bloque removido)
         # Permitir actualizar variante de equipo (texto libre)
         if "equipo_variante" in d:
             if rol not in ROL_EDIT_BASICS:
@@ -2552,17 +2621,17 @@ class IngresoDetalleView(APIView):
                 raise PermissionDenied("No autorizado para editar informe preliminar")
             sets_no_estado.append("informe_preliminar = NULLIF(%s,'')")
             params_no_estado.append((d.get("informe_preliminar") or "").strip())
-        if False and "garantia" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar garantia de fÃ¡brica")
-            exec_void(
-                "UPDATE devices SET garantia_bool=%s WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
-                [bool(d.get("garantia")), ingreso_id],
-            )
-        # Actualizar garantia de fÃ¡brica a nivel de ingreso cuando se envÃ­a en el PATCH
+        # (actualizaciÃ³n de garantÃ­a en devices removida)
+            # bloque removido
+
+
+
+
+
+        # Actualizar garantia de fÃ¡brica a nivel de ingreso cuando se envÃ­Â­a en el PATCH
         if "garantia" in d:
             if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar garantia de fÇ­brica")
+                raise PermissionDenied("No autorizado para editar garantia de fabrica")
             sets_no_estado.append("garantia_fabrica=%s")
             params_no_estado.append(bool(d.get("garantia")))
         if "comentarios" in d:
@@ -2639,7 +2708,7 @@ class IngresoDetalleView(APIView):
                 raise ValidationError("Antes de diagnosticar, asigne un tecnico al ingreso")
             with transaction.atomic():
                 # Auto-setear fecha_servicio solo en la transiciÃ³n ingresado -> diagnosticado
-                # si no vino explÃ­cita en el payload y aÃºn estÃ¡ NULL en DB.
+                # si no vino explÃ­Â­cita en el payload y aÃšn estÃ¡ NULL en DB.
                 sets_tmp = list(sets_no_estado)
                 params_tmp = list(params_no_estado)
                 if not fecha_present:

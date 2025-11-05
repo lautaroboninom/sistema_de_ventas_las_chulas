@@ -12,7 +12,7 @@ export default function ProtectedRoute({ children, roles }) {
   }
 
   if (roles && roles.length && !roles.includes(user.rol)) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/403" replace />;
   }
   return children;
 }

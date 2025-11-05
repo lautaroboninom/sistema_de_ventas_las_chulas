@@ -1,8 +1,8 @@
 import Row from "../../../components/Row";
 import IngresoPhotos from "../../../components/IngresoPhotos";
-import { RESOLUCION_OPTIONS } from "../../../lib/constants";
-import { postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso } from "../../../lib/api";
-import { useState } from "react";
+import { RESOLUCION_OPTIONS, RESOLUCION } from "../../../lib/constants";
+import { getBlob, postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso } from "../../../lib/api";
+import { useEffect, useState } from "react";
 
 export default function DiagnosticoTab({
   id,
@@ -43,6 +43,46 @@ export default function DiagnosticoTab({
   const [deletingAccId, setDeletingAccId] = useState(null);
   const [savingAll, setSavingAll] = useState(false);
   const [savingResol, setSavingResol] = useState(false);
+  const [serialCambio, setSerialCambio] = useState("");
+
+  useEffect(() => {
+    try {
+      const v = (data?.serial_cambio || "").toString();
+      setSerialCambio(v);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.id]);
+
+  async function saveResolucionCambioAware() {
+    try {
+      if (!resolucion) { setErr("SeleccionÃ¡ una resoluciÃ³n."); return; }
+      if (String(resolucion) === RESOLUCION.CAMBIO) {
+        const s = (serialCambio || "").trim();
+        if (!s) { setErr("Ingrese la Serie (Cambio)."); return; }
+      }
+      setSavingResol(true);
+      const payload = String(resolucion) === RESOLUCION.CAMBIO
+        ? { resolucion, serial_cambio: (serialCambio || "").trim() }
+        : { resolucion };
+      await postCerrarReparacion(id, payload);
+      await refreshIngreso();
+      try {
+        if (String(resolucion) === RESOLUCION.CAMBIO) {
+          const blob = await getBlob(`/api/ingresos/${id}/remito/`);
+          if (blob instanceof Blob) {
+            const url = URL.createObjectURL(blob);
+            window.open(url, "_blank", "noopener");
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+          }
+        }
+      } catch {}
+      setErr("");
+    } catch (e) {
+      setErr(e?.message || "No se pudo guardar la resoluciÃ³n");
+    } finally {
+      setSavingResol(false);
+    }
+  }
 
 
   async function addAccesorio() {
@@ -208,10 +248,22 @@ export default function DiagnosticoTab({
                 </select>
               </div>
 
+              {String(resolucion) === RESOLUCION.CAMBIO && (
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Serie (Cambio)</label>
+                  <input
+                    className="border rounded p-2 w-64"
+                    value={serialCambio}
+                    onChange={(e) => setSerialCambio(e.target.value)}
+                    placeholder="Ej.: MG 1234 o serie del equipo entregado"
+                  />
+                </div>
+              )}
+
               <button
                 className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
                 disabled={savingResol || !resolucion}
-                onClick={saveResolucion}
+                onClick={saveResolucionCambioAware}
                 type="button"
               >
                 {savingResol ? "Guardando..." : "Guardar resolución"}
@@ -283,4 +335,3 @@ export default function DiagnosticoTab({
     </div>
   );
 }
-

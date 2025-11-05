@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateOnly, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 import useQueryState from "../hooks/useQueryState";
 
@@ -174,7 +174,7 @@ export default function PendientesGeneral() {
                       <StatusChip value={row?.estado} />
                     </td>
                     <td className="p-2">{nsPreferInternoOf(row)}</td>
-                    <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
+                    <td className="p-2 whitespace-nowrap">{formatDateOnly(resolveFechaIngreso(row))}</td>
                   </tr>
                 );
               })}

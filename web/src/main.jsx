@@ -8,6 +8,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import "./index.css";
 import App from "./App";
 import Login from "./pages/Login";
+import Forbidden from "./pages/Forbidden.jsx";
 import Tecnico from "./pages/Tecnico";
 import Presupuestados from "./pages/Presupuestados.jsx";
 import PendientesPresupuesto from "./pages/PendientesPresupuesto.jsx";
@@ -53,6 +54,7 @@ const router = createBrowserRouter([
   // pblicas
   { path: "/login", element: <Login /> },
   { path: "/recuperar", element: <ForgotPassword /> },
+  { path: "/403", element: <Forbidden /> },
   { path: "/restablecer", element: <ResetPassword /> },
 
   // privadas (layout App)

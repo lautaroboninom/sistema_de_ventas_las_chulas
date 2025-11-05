@@ -90,7 +90,7 @@ export default function ServiceSheet() {
   const [err, setErr] = useState("");
 
   // entrega
-  const [entrega, setEntrega] = useState({ remito_salida: "", factura_numero: "", fecha_entrega: "" });
+  const [entrega, setEntrega] = useState({ remito_salida: "", factura_numero: "", fecha_entrega: "", serial_confirm: "" });
   const canEditEntrega = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.RECEPCION]);
   const [editEntrega, setEditEntrega] = useState(false);
   const [savingEntrega, setSavingEntrega] = useState(false);

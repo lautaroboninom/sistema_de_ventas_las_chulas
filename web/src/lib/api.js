@@ -1,4 +1,5 @@
   // web/src/lib/api.js
+import { MOTIVO_OPTIONS } from "./constants";
 
   // === BASE del API robusto ===
   // 1) Si est definida VITE_API_URL, la usamos.
@@ -26,10 +27,14 @@
       setToken(null);
     } finally {
       const path = window.location.pathname || "";
+      const search = window.location.search || "";
+      const hash = window.location.hash || "";
+      const current = `${path}${search}${hash}` || "/";
       // No redirigir si estamos en rutas pblicas de auth
       const safePaths = new Set(["/login", "/restablecer", "/recuperar"]);
       if (!safePaths.has(path)) {
-        window.location.replace("/login");
+        const next = encodeURIComponent(current);
+        window.location.replace(`/login?next=${next}`);
         return;
       }
       // Mantenernos en la ruta pblica actual
@@ -60,6 +65,23 @@
       const p = window.location.pathname || "";
       const publicAuth = p.startsWith("/restablecer") || p.startsWith("/recuperar") || p === "/login";
       if (!publicAuth) forceLogout();
+    }
+
+    // Algunos despliegues pueden responder 403 con mensajes de no autenticado.
+    if (res.status === 403) {
+      const msg = (typeof data === "string" ? data : (data?.detail || ""))?.toString().toLowerCase();
+      const looksUnauth =
+        msg.includes("credentials were not provided") ||
+        msg.includes("not authenticated") ||
+        msg.includes("no autenticado") ||
+        msg.includes("token expirado") ||
+        msg.includes("token inválido") ||
+        msg.includes("token invalido");
+      if (looksUnauth) {
+        const p = window.location.pathname || "";
+        const publicAuth = p.startsWith("/restablecer") || p.startsWith("/recuperar") || p === "/login";
+        if (!publicAuth) forceLogout();
+      }
     }
 
     if (!res.ok) {
@@ -281,7 +303,15 @@ export const postModelo = (brandId, payloadOrNombre) => {
     api.post(`/api/catalogos/modelos/merge/`, { source_id: sourceId, target_id: targetId });
 
   export const getUbicaciones = () => api.get("/api/catalogos/ubicaciones/");
-  export const getMotivos = () => api.get("/api/catalogos/motivos/");
+  export const getMotivos = async () => {
+    try {
+      const res = await api.get("/api/catalogos/motivos/");
+      const arr = Array.isArray(res) ? res : [];
+      return arr.length ? arr : (MOTIVO_OPTIONS || []);
+    } catch (_) {
+      return MOTIVO_OPTIONS || [];
+    }
+  };
   export const getAccesoriosCatalogo = () => api.get("/api/catalogos/accesorios/");
 
   export const getProveedoresExternos = () =>
@@ -416,7 +446,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   // Bsqueda por referencia de accesorio
   export const buscarAccesorioPorRef = (ref) =>
     api.get(`/api/accesorios/buscar/?ref=${encodeURIComponent(ref||"")}`);
-  // Entregar (requiere remito; opcional factura y fecha)
+  // Entregar (requiere remito; opcional factura y fecha; si resolucion=cambio: serial_confirm requerido)
   export const postEntregarIngreso = (ingresoId, payload) =>
     api.post(`/api/ingresos/${ingresoId}/entregar/`, payload);
   export const getPendientesGeneral = () => api.get("/api/ingresos/pendientes/");
@@ -543,7 +573,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
 
   // Cerrar reparacin (setea la resolucin)
   export async function postCerrarReparacion(id, body) {
-    // body = { resolucion: "reparado" | "no_reparado" | "no_se_encontro_falla" | "presupuesto_rechazado" }
+    // body = { resolucion: "reparado" | "no_reparado" | "no_se_encontro_falla" | "presupuesto_rechazado" | "cambio", serial_cambio?: string }
     return api.post(`/api/ingresos/${id}/cerrar/`, body);
   }
 

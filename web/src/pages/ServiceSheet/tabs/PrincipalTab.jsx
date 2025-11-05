@@ -447,6 +447,9 @@ export default function PrincipalTab(props) {
                 <span>{data.remito_ingreso || "-"}</span>
               )}
             </Row>
+            <Row label={"Faja de garantía"}>
+              <span>{data?.etiq_garantia_ok ? "OK" : "Abiertas"}</span>
+            </Row>
           </div>
           {/* Notas */}
           <h2 className="font-semibold mt-4 mb-2">Notas</h2>
@@ -647,18 +650,7 @@ export default function PrincipalTab(props) {
               <div className="whitespace-pre-wrap">{data.comentarios || "-"}</div>
             )}
           </div>
-          <div className="mt-4">
-            <h3 className="font-medium mb-2">Recepción</h3>
-            {editBasics ? (
-              <input
-                type="checkbox"
-                checked={!!(formBasics?.etiq_garantia_ok)}
-                onChange={(e) => setFormBasics((s) => ({ ...(s || {}), etiq_garantia_ok: e.target.checked }))}
-              />
-            ) : (
-              <span>{data?.etiq_garantia_ok ? "Sí" : "No"}</span>
-            )}
-          </div>
+          
         </div>
       </div>
 
@@ -716,6 +708,17 @@ export default function PrincipalTab(props) {
                   onChange={(e) => setEntrega({ ...entrega, fecha_entrega: e.target.value })}
                 />
               </div>
+              {String(data?.resolucion || "") === "cambio" && (
+                <div>
+                  <label className="text-sm">Verificar serie (Cambio)</label>
+                  <input
+                    className="border rounded p-2 w-full"
+                    value={entrega.serial_confirm || ""}
+                    onChange={(e) => setEntrega({ ...entrega, serial_confirm: e.target.value })}
+                    placeholder="Ingrese la serie nueva para confirmar"
+                  />
+                </div>
+              )}
             </div>
             <div className="mt-3">
               <button
@@ -725,6 +728,12 @@ export default function PrincipalTab(props) {
                     if (!entrega.remito_salida.trim()) {
                       setErr("El remito es requerido para entregar.");
                       return;
+                    }
+                    if (String(data?.resolucion || "") === "cambio") {
+                      if (!String(entrega?.serial_confirm || "").trim()) {
+                        setErr("Debe verificar la Serie (Cambio) antes de entregar.");
+                        return;
+                      }
                     }
                     await postEntregarIngreso(id, entrega);
                     await refreshIngreso();

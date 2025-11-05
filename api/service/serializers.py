@@ -149,6 +149,7 @@ class IngresoDetailSerializer(serializers.Serializer):
     propietario_doc = serializers.CharField(allow_blank=True, allow_null=True, required=False)
 
     resolucion = serializers.CharField(allow_null=True, allow_blank=True)
+    serial_cambio = serializers.CharField(allow_null=True, allow_blank=True, required=False)
 
     # Solicitud de asignación (opcional, calculado desde logs/tabla auxiliar)
     tecnico_solicitado_id = serializers.IntegerField(allow_null=True, required=False)

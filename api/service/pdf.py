@@ -22,6 +22,7 @@ RESOLUTION_LABELS = {
     "no_reparado": "No reparado",
     "no_se_encontro_falla": "No se encontró falla",
     "presupuesto_rechazado": "Presupuesto rechazado",
+    "cambio": "Cambio",
 }
 
 def resolution_label(value: str) -> str:
@@ -75,6 +76,7 @@ def _get_data(ingreso_id: int):
             COALESCE(c.email, '') AS cliente_email,
             d.numero_serie,
             COALESCE(t.garantia_fabrica, false) AS garantia,
+            COALESCE(t.etiq_garantia_ok, true) AS etiq_ok,
             COALESCE(b.nombre,'') AS marca,
             m.tipo_equipo as equipo,
             COALESCE(m.nombre,'') AS modelo,
@@ -93,6 +95,30 @@ def _get_data(ingreso_id: int):
         LEFT JOIN quotes q ON q.ingreso_id=t.id
         WHERE t.id=%s
     """, [ingreso_id], one=True)
+
+    # Agregar serial_cambio si existe la columna
+    try:
+        row = _q(
+            """
+            SELECT 1 FROM information_schema.columns
+             WHERE table_name='ingresos' AND column_name='serial_cambio'
+               AND table_schema = ANY(current_schemas(true))
+             LIMIT 1
+            """,
+            [],
+            one=True,
+        )
+        if row:
+            sc = _q("SELECT serial_cambio FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+            if isinstance(sc, dict):
+                head["serial_cambio"] = sc.get("serial_cambio")
+            else:
+                try:
+                    head["serial_cambio"] = sc[0] if sc else None
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
     items = _q("""
         SELECT descripcion, qty
@@ -284,7 +310,7 @@ def render_remito_derivacion_pdf(ingreso_id: int, deriv_id: int | None = None, p
             title_w = 75
         c.setFont("Helvetica-Bold", 12.8)
         c.drawString(x + title_w + 3 * mm, y_top - 5 * mm, f"{head['ingreso_id']}")
-        # Subtítulo
+        # Subtí­tulo
         c.setFont("Helvetica-Bold", 11)
         c.drawString(x, y_top - 12 * mm, "EQUIPO DERIVADO")
         # Logo
@@ -484,13 +510,18 @@ def _draw_block(c, x, y, title, value, width, font="Helvetica", fsize=9, leading
     y -= leading
     c.setFont(font, fsize)
     max_text_width = width
-    for line in _wrap_lines(value or "â€”", font, fsize, max_text_width):
+    for line in _wrap_lines(value or "-", font, fsize, max_text_width):
         c.drawString(x, y, line)
         y -= leading
     return y
 
-def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None, remito=None):
-    h = 28 * mm
+def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None, remito=None, etiq_ok=None):
+    # Mostrar "Fajas de garantía: Abiertas" solo si las fajas NO están OK
+    try:
+        show_faja = not bool(etiq_ok)
+    except Exception:
+        show_faja = False
+    h = (34 * mm) if show_faja else (24 * mm)
     c.setFillColor(colors.whitesmoke)
     c.roundRect(x, y - h, w, h, 4, stroke=0, fill=1)
     c.setFillColor(colors.black)
@@ -515,11 +546,18 @@ def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None, 
         c.drawString(cx, base_y, label)
         c.setFillColor(colors.black)
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(cx, base_y - 6*mm, value or "â€”")
+        c.drawString(cx, base_y - 6*mm, value or "-")
 
     col(0, "Marca", (marca or "").upper())
     col(1, "Modelo", (modelo or "").upper())
     col(2, "Número de serie", (numero_serie or "").upper())
+    # Línea adicional solo si fajas abiertas
+    if show_faja:
+        c.setFont("Helvetica", 9)
+        c.setFillColor(colors.grey)
+        c.drawString(x + 5*mm, y - 28*mm, "Fajas de garantía:")
+        c.setFillColor(colors.black)
+        c.drawString(x + 42*mm, y - 28*mm, "Abiertas")
     return y - h - 8
 
 def render_quote_pdf(ingreso_id: int):
@@ -639,9 +677,8 @@ def render_quote_pdf(ingreso_id: int):
     y = _draw_equipment_panel(
         c, ml, y, W - 2*ml,
         head.get("marca"), head.get("modelo"), head.get("numero_serie"),
-        equipo=head.get("equipo"),remito = head.get("remito_ingreso"),
+        equipo=head.get("equipo"), remito=head.get("remito_ingreso"), etiq_ok=head.get("etiq_ok"),
     )
-
     y -= 5
     if head.get("informe_preliminar"):
         y = _draw_block(c, ml, y, "Info. preliminar", head["informe_preliminar"], W-2*ml) - 6
@@ -668,7 +705,7 @@ def render_quote_pdf(ingreso_id: int):
 
     diag = (head.get("descripcion_problema") or "").strip()
     trab = (head.get("trabajos_realizados") or "").strip()
-    diag_trab = (diag + ("\n" if diag and trab else "") + trab) or "â€”"
+    diag_trab = (diag + ("\n" if diag and trab else "") + trab) or "-"
     y = _draw_block(c, ml, y, "Detalle Rep. (Diagnóstico / Trabajos a realizar)", diag_trab, W-2*ml) - 2
 
     y -= 6
@@ -689,7 +726,7 @@ def render_quote_pdf(ingreso_id: int):
     forma_pago = head.get("forma_pago") or "30 F.F."
     c.drawString(ml, y, f"FormaPago: {forma_pago}"); y -= 12
     c.drawString(ml, y, "PlazoEntrega: < 5 DÍAS HÁBILES"); y -= 12
-    c.drawString(ml, y, "Garantía: 90 DÍAS"); y -= 12
+    c.drawString(ml, y, "Garantí­a: 90 DÍAS"); y -= 12
     c.drawString(ml, y, "Mant. de Oferta: 7 DÍAS"); y -= 18
 
     fecha = fecha_larga(head["fecha_emitido"])
@@ -736,7 +773,7 @@ def _fetchone_dict(cur):
 # =========================
 def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     """
-    Orden de salida en 3 franjas (proporción 2â€“2â€“1).
+    Orden de salida en 3 franjas (proporción 2-2-1).
     Cajas de 5 mm de alto y separación vertical (ROW_GAP) aumentada +3 mm para evitar solapes.
     """
     head, _items = _get_data(ingreso_id)
@@ -907,6 +944,13 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
             [t for t in [(head.get("descripcion_problema") or "").strip(),
                          (head.get("trabajos_realizados") or "").strip()] if t]
         ) or "-"
+        try:
+            if (head.get("Resolucion") or "").strip().lower() == "cambio":
+                sc_val = (head.get("serial_cambio") or "").strip()
+                if sc_val:
+                    obs_txt = f"Serie (Cambio): {sc_val}\n\n" + obs_txt
+        except Exception:
+            pass
         paragraph_in_box(inner_x, y - obs_h, inner_w, obs_h, "Observaciones", obs_txt)
         y -= (obs_h + 2.6 * mm)
 
@@ -916,7 +960,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         c.setFillColor(colors.black); box(inner_x + 18 * mm, y - (SIGN_H/2), 60 * mm, SIGN_H)
 
         c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
-        c.drawString(inner_x + 118 * mm, y, "Costo Neto:")
+        c.drawString(inner_x + 111 * mm, y - 1 * mm, "Costo neto (SIN IVA):")
         # Draw box and value for net cost (subtotal)
         x_box = inner_x + 138 * mm
         w_box = 24 * mm
@@ -983,7 +1027,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         # Correr el QR a la izquierda para no superponer con el logo
         renderPDF.draw(d, c, W - margin - 80 * mm, y_top - height + 20 * mm)
 
-    # --- 2â€“2â€“1 ---
+    # --- 2-2-1 ---
     y = H - margin
     draw_form(y, h_each_form, "ORIGINAL")
     y -= (h_each_form + gap)

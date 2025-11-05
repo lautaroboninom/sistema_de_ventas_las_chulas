@@ -16,7 +16,9 @@ export default function Login() {
   const loc = useLocation();
   const { login } = useAuth();
 
-  const from = loc.state?.from?.pathname || "/";
+  const params = new URLSearchParams(loc.search || "");
+  const nextParam = params.get("next");
+  const from = nextParam || loc.state?.from?.pathname || "/";
 
   // Verificacion rapida del backend para diferenciar error de red vs. credenciales
   useEffect(() => {

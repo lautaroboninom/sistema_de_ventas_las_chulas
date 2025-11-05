@@ -1,4 +1,4 @@
-// web/src/pages/NuevoIngreso.jsx (reconstruido)
+// web/src/pages/NuevoIngreso.jsx (UTF-8 authoring; will be re-encoded to Windows-1252)
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -22,6 +22,15 @@ const Input = (p) => <input {...p} className={`border rounded p-2 w-full ${p.cla
 const Select = (p) => <select {...p} className={`border rounded p-2 w-full ${p.className || ""}`} />;
 const TextArea = (p) => <textarea {...p} className={`border rounded p-2 w-full ${p.className || ""}`} />;
 
+// clone helper (fallback if structuredClone is missing)
+function clone(obj) {
+  try {
+    return typeof structuredClone === "function" ? structuredClone(obj) : JSON.parse(JSON.stringify(obj));
+  } catch (_) {
+    return JSON.parse(JSON.stringify(obj));
+  }
+}
+
 export default function NuevoIngreso() {
   const navigate = useNavigate();
 
@@ -30,7 +39,7 @@ export default function NuevoIngreso() {
   const [motivos, setMotivos] = useState([]);
   const [modelos, setModelos] = useState([]);
 
-  // Marca escribible + tipo
+  // Marca y tipo
   const [marcaTxt, setMarcaTxt] = useState("");
   const [marcaId, setMarcaId] = useState(null);
   const [tiposEquipo, setTiposEquipo] = useState([]);
@@ -43,15 +52,15 @@ export default function NuevoIngreso() {
   const [clienteRsInput, setClienteRsInput] = useState("");
   const [clienteCodInput, setClienteCodInput] = useState("");
 
-  // Variante (opcional)
+  // Variantes (opcional)
   const [varianteTxt, setVarianteTxt] = useState("");
   const [varianteSugeridas, setVarianteSugeridas] = useState([]);
-  // Catálogo (tipos/modelos) para sugerir variantes
   const [catTipoId, setCatTipoId] = useState(null);
   const [catModelos, setCatModelos] = useState([]);
 
   // Form principal
-  const [form, setForm] = useState({ etiq_garantia_ok: false,
+  const [form, setForm] = useState({
+    etiq_garantia_ok: false,
     cliente: { id: null, razon_social: "", cod_empresa: "", telefono: "" },
     equipo: {
       marca_id: "",
@@ -65,7 +74,7 @@ export default function NuevoIngreso() {
     comentarios: "",
     garantia_reparacion: false,
     remito_ingreso: "",
-    fecha_ingreso: "", // opcional: si viene vaca, se usar hoy() en el backend
+    fecha_ingreso: "",
   });
 
   // Accesorios
@@ -83,12 +92,17 @@ export default function NuevoIngreso() {
   const [loading, setLoading] = useState(false);
   const [out, setOut] = useState(null);
   const [err, setErr] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const [clientesPerm, setClientesPerm] = useState(true);
+  const [garRepLoading, setGarRepLoading] = useState(false);
+  const [garRepError, setGarRepError] = useState(false);
 
   // Helpers de clientes
   const findClienteByRS = (v) =>
-    clientes.find((c) => (c.razon_social || "").toLowerCase() === String(v).trim().toLowerCase());
+    (clientes || []).find((c) => (c.razon_social || "").toLowerCase() === String(v || "").trim().toLowerCase());
   const findClienteByCod = (v) =>
-    clientes.find((c) => String(c.cod_empresa || "").toLowerCase() === String(v).trim().toLowerCase());
+    (clientes || []).find((c) => String(c.cod_empresa || "").toLowerCase() === String(v || "").trim().toLowerCase());
 
   function resolveCliente(rsVal, codVal) {
     const byRs = rsVal ? findClienteByRS(rsVal) : null;
@@ -101,115 +115,131 @@ export default function NuevoIngreso() {
 
   function syncClienteFromInputs(rsVal, codVal) {
     const c = resolveCliente(rsVal, codVal);
-    if (c) {
-      setSelectedCliente(c);
-      setForm((f) => ({
-        ...f,
-        cliente: {
-          id: c.id,
-          razon_social: c.razon_social,
-          cod_empresa: c.cod_empresa || "",
-          telefono: c.telefono || "",
-        },
-      }));
-    } else {
-      setSelectedCliente(null);
-      setForm((f) => ({
-        ...f,
-        cliente: {
-          id: null,
-          razon_social: rsVal || "",
-          cod_empresa: codVal || "",
-          telefono: "",
-        },
-      }));
-    }
+    setSelectedCliente(c);
+    setForm((f0) => {
+      const f = clone(f0);
+      f.cliente = {
+        id: c?.id || null,
+        razon_social: rsVal || "",
+        cod_empresa: codVal || "",
+        telefono: c?.telefono || "",
+      };
+      return f;
+    });
   }
 
-  // Garantía de reparación (por N°/S o N° interno MG) - debounce 400ms
+  // Garantía de reparación (por N/S o MG) - debounce 400ms
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const mg = (form.equipo.numero_interno || "").trim();
     if (!ns && !mg) {
       setForm((f) => ({ ...f, garantia_reparacion: false }));
+      setGarRepLoading(false);
+      setGarRepError(false);
       return;
     }
     const h = setTimeout(async () => {
       try {
+        setGarRepLoading(true);
+        setGarRepError(false);
         const r = await checkGarantiaReparacion(ns, mg);
-        setForm((f) => ({ ...f, garantia_reparacion: !!r.within_90_days }));
+        setForm((f) => ({ ...f, garantia_reparacion: !!r?.within_90_days }));
+        setGarRepLoading(false);
       } catch {
-        /* noop */
+        setGarRepLoading(false);
+        setGarRepError(true);
       }
     }, 400);
     return () => clearTimeout(h);
   }, [form.equipo.numero_serie, form.equipo.numero_interno]);
 
-  // Garantía de fábrica (por N°/S en Excels) - debounce 400ms
+  // Garantía de fábrica por N/S (debounce 400ms)
   useEffect(() => {
     const ns = (form.equipo.numero_serie || "").trim();
     const marcaSel = (() => {
-      const m = marcas.find((x) => x.id === (marcaId || form.equipo.marca_id));
+      const m = (marcas || []).find((x) => x.id === (marcaId || form.equipo.marca_id));
       return m?.nombre || "";
     })();
     if (!ns) {
-      // Si no hay N°/S, no marcar
       setForm((f) => ({ ...f, equipo: { ...f.equipo, garantia: false } }));
       return;
     }
     const h = setTimeout(async () => {
       try {
         const r = await checkGarantiaFabrica(ns, marcaSel);
-        const enGarantia = !!r.within_365_days;
+        const enGarantia = !!r?.within_365_days;
         setForm((f) => ({ ...f, equipo: { ...f.equipo, garantia: enGarantia } }));
       } catch {
-        /* noop */
+        /* noop: no bloquear */
       }
     }, 400);
     return () => clearTimeout(h);
   }, [form.equipo.numero_serie, marcaId, form.equipo.marca_id, marcas]);
 
   const tipoEquipoSel = useMemo(() => {
-    const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
+    const m = (modelos || []).find((x) => x.id === Number(form.equipo.modelo_id));
     return m?.tipo_equipo || "";
   }, [modelos, form.equipo.modelo_id]);
 
-  // Carga inicial
+  // Carga inicial por secciones (mensajes por sección)
   useEffect(() => {
     (async () => {
+      const errs = [];
       try {
-        const [mks, mts, cls, accs, tps] = await Promise.all([
-          getMarcas(),
-          getMotivos(),
-          getClientes(),
-          getAccesoriosCatalogo(),
-          getTiposEquipo(),
-        ]);
+        const mks = await getMarcas();
         setMarcas(mks || []);
+      } catch (_) {
+        errs.push("Error cargando marcas");
+      }
+      try {
+        const mts = await getMotivos();
         setMotivos(mts || []);
+      } catch (_) {
+        errs.push("Error cargando motivos");
+      }
+      try {
+        const cls = await getClientes();
         setClientes(cls || []);
+        setClientesPerm(true);
+      } catch (e) {
+        const msg = String(e?.message || "");
+        if (msg.startsWith("403 ")) {
+          setClientesPerm(false);
+        } else if (msg.startsWith("401 ")) {
+          errs.push("No autenticado");
+        } else {
+          errs.push("Error cargando clientes");
+        }
+      }
+      try {
+        const accs = await getAccesoriosCatalogo();
         setAccesCatalogo(accs || []);
+      } catch (_) {
+        errs.push("Error cargando accesorios");
+      }
+      try {
+        const tps = await getTiposEquipo();
         const list = (tps || [])
           .map((t) => t?.nombre || t?.label || t?.name || t?.value || t)
           .map(String)
           .filter(Boolean);
         setTiposEquipo(Array.from(new Set(list)));
-        try {
-          const tecs = await getTecnicos();
-          setTecnicos(tecs || []);
-        } catch {}
-      } catch (e) {
-        setErr(e?.message || "Error cargando Catálogos");
+      } catch (_) {
+        errs.push("Error cargando tipos de equipo");
       }
+      try {
+        const tecs = await getTecnicos();
+        setTecnicos(tecs || []);
+      } catch (_) {
+        /* noop */
+      }
+      if (errs.length) setErr(errs.join(" | "));
     })();
   }, []);
 
-  // Cambio de marca
+  // Cambio de marca / tipo
   useEffect(() => {
-    setForm((f) => ({
-      ...f,
-      equipo: { ...f.equipo, marca_id: marcaId || "", modelo_id: "" },
-    }));
+    setForm((f) => ({ ...f, equipo: { ...f.equipo, marca_id: marcaId || "", modelo_id: "" } }));
 
     if (!marcaId) {
       setModelos([]);
@@ -224,12 +254,9 @@ export default function NuevoIngreso() {
           const norm = (s) => (s || "").toString().trim().toUpperCase();
           const filtered = list.filter((m) => norm(m.tipo_equipo) === norm(tipoSel));
           setModelos(filtered);
-          // si el modelo seleccionado no pertenece al filtro, limpiarlo
           const currentId = (form?.equipo?.modelo_id ?? "").toString();
           const exists = filtered.some((x) => String(x.id) === currentId);
-          if (!exists) {
-            setForm((f) => ({ ...f, equipo: { ...f.equipo, modelo_id: "" } }));
-          }
+          if (!exists) setForm((f) => ({ ...f, equipo: { ...f.equipo, modelo_id: "" } }));
         } else {
           setModelos(list);
         }
@@ -258,9 +285,9 @@ export default function NuevoIngreso() {
       .catch((e) => setErr(e?.message || "Error cargando modelos"));
   }, [marcaId, tipoSel]);
 
-  // Variantes desde Catálogo según modelo interno seleccionado
+  // Variantes desde catálogo según modelo interno seleccionado
   useEffect(() => {
-    const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
+    const m = (modelos || []).find((x) => x.id === Number(form.equipo.modelo_id));
     if (!m || !marcaId || !catTipoId) {
       setVarianteTxt("");
       setVarianteSugeridas([]);
@@ -270,12 +297,7 @@ export default function NuevoIngreso() {
     const cmatch = (catModelos || []).filter((cm) => {
       const a = (cm.name || "").trim().toUpperCase();
       const alias = (cm.alias || "").trim().toUpperCase();
-      return (
-        a === needle ||
-        a.includes(needle) ||
-        needle.includes(a) ||
-        (alias && (alias === needle || needle.includes(alias) || alias.includes(needle)))
-      );
+      return a === needle || a.includes(needle) || needle.includes(a) || (alias && (alias === needle || needle.includes(alias) || alias.includes(needle)));
     });
     if (cmatch.length !== 1) {
       setVarianteSugeridas([]);
@@ -286,9 +308,7 @@ export default function NuevoIngreso() {
     (async () => {
       try {
         const vars = await getCatalogVariantes(marcaId, catTipoId, cm.id);
-        const names = (vars || [])
-          .filter((v) => v && v.name)
-          .map((v) => v.name);
+        const names = (vars || []).filter((v) => v && v.name).map((v) => v.name);
         setVarianteSugeridas(names);
         if (names.length === 1) setVarianteTxt(names[0]);
       } catch {
@@ -297,19 +317,19 @@ export default function NuevoIngreso() {
     })();
   }, [form.equipo.modelo_id, modelos, marcaId, catTipoId, catModelos]);
 
-  // Si el modelo define técnico por defecto
+  // Técnico por modelo
   useEffect(() => {
-    const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
+    const m = (modelos || []).find((x) => x.id === Number(form.equipo.modelo_id));
     if (m?.tecnico_id) setTecnicoId(m.tecnico_id);
   }, [form.equipo.modelo_id, modelos]);
 
   // Fallback: técnico por marca si el modelo no define
   useEffect(() => {
-    const m = modelos.find((x) => x.id === Number(form.equipo.modelo_id));
+    const m = (modelos || []).find((x) => x.id === Number(form.equipo.modelo_id));
     if (m?.tecnico_id) {
       setTecnicoId(m.tecnico_id);
     } else {
-      const marcaObj = marcas.find((x) => x.id === marcaId);
+      const marcaObj = (marcas || []).find((x) => x.id === marcaId);
       if (marcaObj?.tecnico_id) setTecnicoId(marcaObj.tecnico_id);
     }
   }, [form.equipo.modelo_id, modelos, marcaId, marcas]);
@@ -317,7 +337,7 @@ export default function NuevoIngreso() {
   const onChange = (path) => (e) => {
     const v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
     setForm((prev) => {
-      const copy = structuredClone(prev);
+      const copy = clone(prev);
       const parts = path.split(".");
       let obj = copy;
       for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
@@ -329,7 +349,7 @@ export default function NuevoIngreso() {
   function onMarcaInput(val) {
     setMarcaTxt(val);
     const pool = tipoSel ? (marcasPorTipo.length ? marcasPorTipo : marcas) : marcas;
-    const match = pool.find((m) => (m.nombre || "").toLowerCase() === val.trim().toLowerCase());
+    const match = (pool || []).find((m) => (m.nombre || "").toLowerCase() === String(val || "").trim().toLowerCase());
     setMarcaId(match ? match.id : null);
   }
 
@@ -369,6 +389,7 @@ export default function NuevoIngreso() {
     setLoading(true);
     setErr("");
     setOut(null);
+    setNotice("");
 
     if (!form.equipo.marca_id) {
       setLoading(false);
@@ -378,6 +399,11 @@ export default function NuevoIngreso() {
     if (!form.equipo.modelo_id) {
       setLoading(false);
       setErr("Seleccioná un modelo.");
+      return;
+    }
+    if (!form.motivo) {
+      setLoading(false);
+      setErr("Seleccioná un motivo.");
       return;
     }
 
@@ -416,14 +442,18 @@ export default function NuevoIngreso() {
           doc: propietario.doc || "",
         },
         empresa_facturar: (empresaFact || "SEPID").toUpperCase(),
-        etiq_garantia_ok: !!form.etiq_garantia_ok,
+        // Checkbox representa "fajas abiertas" => etiq_garantia_ok debe ser la negación
+        etiq_garantia_ok: !form.etiq_garantia_ok,
       };
 
       const r = await postNuevoIngreso(payload);
       setOut(r);
+      if (r?.existing === true) {
+        setNotice("El ingreso ya existía; abriendo hoja");
+      }
       if (r?.ingreso_id) navigate(`/ingresos/${r.ingreso_id}`);
 
-      // Reset bsico
+      // Reset básico
       setMarcaTxt("");
       setMarcaId(null);
       setModelos([]);
@@ -431,6 +461,7 @@ export default function NuevoIngreso() {
       setClienteCodInput("");
       setSelectedCliente(null);
       setForm({
+        etiq_garantia_ok: false,
         cliente: { id: null, razon_social: "", cod_empresa: "", telefono: "" },
         equipo: { marca_id: "", modelo_id: "", numero_serie: "", numero_interno: "", garantia: false },
         motivo: "",
@@ -455,12 +486,15 @@ export default function NuevoIngreso() {
   const rsMatch = clienteRsInput ? findClienteByRS(clienteRsInput) : null;
   const codMatch = clienteCodInput ? findClienteByCod(clienteCodInput) : null;
   const clienteMismatch = rsMatch && codMatch && rsMatch.id !== codMatch.id;
-  const canSubmitCliente = !!resolveCliente(clienteRsInput, clienteCodInput);
+  const canSubmitCliente = !!resolveCliente(clienteRsInput, clienteCodInput)?.id;
 
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-4">
       <h1 className="text-2xl font-bold">Nuevo Ingreso (Orden de Servicio)</h1>
 
+      {notice && (
+        <div className="bg-blue-100 border border-blue-300 text-blue-700 p-2 rounded">{notice}</div>
+      )}
       {err && (
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded">{err}</div>
       )}
@@ -474,42 +508,49 @@ export default function NuevoIngreso() {
         {/* Cliente */}
         <fieldset className="border rounded p-3">
           <legend className="px-2 font-semibold">Cliente</legend>
+          {!clientesPerm && (
+            <div className="text-xs text-gray-600 mb-2">No tenés permisos para listar clientes</div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <label className="text-sm">Razón social</label>
               <Input
-                list="clientes_rs"
+                list={clientesPerm ? "clientes_rs" : undefined}
                 value={clienteRsInput}
                 onChange={(e) => onClienteRsChange(e.target.value)}
                 placeholder="Escribí y elegí de la lista"
                 required
               />
-              <datalist id="clientes_rs">
-                {(Array.isArray(clientes) ? clientes : []).map((c) => (
-                  <option key={c.id} value={c.razon_social} />
-                ))}
-              </datalist>
+              {clientesPerm && (
+                <datalist id="clientes_rs">
+                  {(Array.isArray(clientes) ? clientes : []).map((c) => (
+                    <option key={c.id} value={c.razon_social} />
+                  ))}
+                </datalist>
+              )}
               {clienteRsInput && !rsMatch && (
-                <div className="text-xs text-red-600 mt-1">Elegí una razón social de las sugeridas.</div>
+                <div className="text-xs text-red-600 mt-1">Debés seleccionar de la lista</div>
               )}
             </div>
             <div>
               <label className="text-sm">Código empresa</label>
               <Input
-                list="clientes_cod"
+                list={clientesPerm ? "clientes_cod" : undefined}
                 value={clienteCodInput}
                 onChange={(e) => onClienteCodChange(e.target.value)}
                 placeholder="Opcional: podés buscar por código"
               />
-              <datalist id="clientes_cod">
-                {(Array.isArray(clientes) ? clientes : [])
-                  .filter((c) => c.cod_empresa)
-                  .map((c) => (
-                    <option key={c.id} value={c.cod_empresa} />
-                  ))}
-              </datalist>
+              {clientesPerm && (
+                <datalist id="clientes_cod">
+                  {(Array.isArray(clientes) ? clientes : [])
+                    .filter((c) => c.cod_empresa)
+                    .map((c) => (
+                      <option key={c.id} value={c.cod_empresa} />
+                    ))}
+                </datalist>
+              )}
               {clienteCodInput && !codMatch && (
-                <div className="text-xs text-red-600 mt-1">Elegí un código de las sugerencias.</div>
+                <div className="text-xs text-red-600 mt-1">Debés seleccionar de la lista</div>
               )}
             </div>
             <div>
@@ -522,19 +563,12 @@ export default function NuevoIngreso() {
               El código no corresponde a la razón social seleccionada.
             </div>
           )}
-          <p className="text-xs text-gray-600 mt-2">
-            Debés seleccionar un cliente existente. Podés buscar por <b>Razón social</b> o por
-            <b> Código</b>; si completás ambos, deben corresponder al mismo cliente.
-          </p>
         </fieldset>
 
         {/* Empresa a facturar */}
         <div className="border rounded p-3">
           <label className="text-sm">Empresa a facturar</label>
-          <Select
-            value={empresaFact}
-            onChange={(e) => setEmpresaFact((e.target.value || "SEPID").toUpperCase())}
-          >
+          <Select value={empresaFact} onChange={(e) => setEmpresaFact((e.target.value || "SEPID").toUpperCase())}>
             <option value="SEPID">SEPID SA</option>
             <option value="MGBIO">MG BIO</option>
           </Select>
@@ -561,12 +595,7 @@ export default function NuevoIngreso() {
             {/* Marca (filtrada por tipo) */}
             <div className="md:col-span-2">
               <label className="text-sm">Marca</label>
-              <Input
-                list="marcas-list"
-                value={marcaTxt}
-                placeholder="Marca"
-                onChange={(e) => onMarcaInput(e.target.value)}
-              />
+              <Input list="marcas-list" value={marcaTxt} placeholder="Marca" onChange={(e) => onMarcaInput(e.target.value)} />
               <datalist id="marcas-list">
                 {(tipoSel && marcasPorTipo.length ? marcasPorTipo : marcas).map((m) => (
                   <option key={m.id} value={m.nombre} />
@@ -580,11 +609,7 @@ export default function NuevoIngreso() {
             {/* Modelo */}
             <div className="md:col-span-2">
               <label className="text-sm">Modelo</label>
-              <Select
-                value={form.equipo.modelo_id}
-                onChange={onChange("equipo.modelo_id")}
-                disabled={!marcaId || !modelos.length}
-              >
+              <Select value={form.equipo.modelo_id} onChange={onChange("equipo.modelo_id")} disabled={!marcaId || !modelos.length}>
                 <option value="">{!marcaId ? "Elegí marca primero" : "Seleccioná modelo"}</option>
                 {modelos.map((m) => (
                   <option key={m.id} value={m.id}>
@@ -597,12 +622,7 @@ export default function NuevoIngreso() {
             {/* Variante (opcional) */}
             <div className="md:col-span-4">
               <label className="text-sm">Variante (opcional)</label>
-              <Input
-                list="variantes_sugeridas"
-                value={varianteTxt}
-                onChange={(e) => setVarianteTxt(e.target.value)}
-                placeholder="Ej: 25, 25T, V30BT, etc."
-              />
+              <Input list="variantes_sugeridas" value={varianteTxt} onChange={(e) => setVarianteTxt(e.target.value)} placeholder="Ej: 25, 25T, V30BT, etc." />
               <datalist id="variantes_sugeridas">
                 {(varianteSugeridas || []).map((v, i) => (
                   <option key={i} value={v} />
@@ -613,55 +633,53 @@ export default function NuevoIngreso() {
             {/* Técnico asignado */}
             <div className="md:col-span-2">
               <label className="text-sm">Técnico asignado</label>
-              <Select
-                value={tecnicoId ?? ""}
-                onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}
-              >
+              <Select value={tecnicoId ?? ""} onChange={(e) => setTecnicoId(e.target.value ? Number(e.target.value) : null)}>
                 <option value="">-- Seleccionar técnico --</option>
-                {tecnicos.map((t) => (
+                {(tecnicos || []).map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.nombre}
+                    {t.nombre || t.email || t.id}
                   </option>
                 ))}
               </Select>
-              <div className="text-xs text-gray-600 mt-1">
-                Si el modelo tiene técnico por defecto, se completa solo.
-              </div>
             </div>
+          </div>
+        </fieldset>
 
+        {/* Equipo - datos de identificación y garantías */}
+        <fieldset className="border rounded p-3">
+          <legend className="px-2 font-semibold">Equipo - Identificación</legend>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {/* Número de serie */}
             <div className="md:col-span-2">
               <label className="text-sm">Número de serie</label>
               <Input value={form.equipo.numero_serie} onChange={onChange("equipo.numero_serie")} />
             </div>
 
-            {/* N° interno (MG) */}
+            {/* Número interno (MG) */}
             <div className="md:col-span-2">
-              <label className="text-sm">N° interno (MG)</label>
-              <Input
-                value={form.equipo.numero_interno}
-                onChange={onChange("equipo.numero_interno")}
-                placeholder="MG ..."
-              />
+              <label className="text-sm">Número interno (MG)</label>
+              <Input value={form.equipo.numero_interno} onChange={onChange("equipo.numero_interno")} placeholder="MG ..." />
             </div>
 
             {/* Garantías */}
             <div className="flex items-center gap-2">
-              <input
-                id="gar"
-                type="checkbox"
-                checked={form.equipo.garantia}
-                onChange={onChange("equipo.garantia")}
-              />
+              <input id="gar" type="checkbox" checked={form.equipo.garantia} onChange={onChange("equipo.garantia")} />
               <label htmlFor="gar">En Garantía</label>
             </div>
             <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.garantia_reparacion}
-                onChange={(e) => setForm((f) => ({ ...f, garantia_reparacion: e.target.checked }))}
-              />
+              <input type="checkbox" checked={form.garantia_reparacion} onChange={(e) => setForm((f) => ({ ...f, garantia_reparacion: e.target.checked }))} />
               <span className="text-sm">Garantía de reparación</span>
+              {garRepLoading && <span className="text-xs text-gray-500">...</span>}
+              {!garRepLoading && garRepError && <span className="text-xs text-gray-400">No disponible</span>}
+            </div>
+
+            {/* Etiquetas OK */}
+            <div className="md:col-span-2 flex items-center gap-2 mt-2">
+              <input id="etiqok" type="checkbox" checked={!!form.etiq_garantia_ok} onChange={(e) => setForm((f) => ({ ...f, etiq_garantia_ok: !!e.target.checked }))} />
+              <label htmlFor="etiqok" className="text-sm">Faja de garantía abiertas</label>
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Marcá si al ingresar el equipo la faja/etiquetas estaban en mal estado.
             </div>
           </div>
         </fieldset>
@@ -671,49 +689,36 @@ export default function NuevoIngreso() {
           <legend className="px-2 font-semibold">Ingreso</legend>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="text-sm">N° de remito</label>
-              <Input
-                value={form.remito_ingreso}
-                onChange={onChange("remito_ingreso")}
-                placeholder="Opcional"
-              />
+              <label className="text-sm">Número de remito</label>
+              <Input value={form.remito_ingreso} onChange={onChange("remito_ingreso")} placeholder="Opcional" />
             </div>
             <div>
               <label className="text-sm">Fecha de ingreso</label>
-              <Input
-                type="date"
-                value={form.fecha_ingreso}
-                onChange={onChange("fecha_ingreso")}
-              />
-              <div className="text-xs text-gray-500 mt-1">Si se deja vaco, se usa la fecha de hoy.</div>
+              <Input type="date" value={form.fecha_ingreso} onChange={onChange("fecha_ingreso")} />
+              <div className="text-xs text-gray-500 mt-1">Si se deja vacío, se usa la fecha de hoy.</div>
             </div>
             <div>
               <label className="text-sm">Motivo</label>
-              <Select value={form.motivo} onChange={onChange("motivo")}>
-                <option value="">Seleccion motivo</option>
+              <Select value={form.motivo} onChange={onChange("motivo")} required>
+                <option value="">Seleccioná motivo</option>
                 {motivos.map((m) => (
                   <option key={m.value} value={m.value}>
                     {m.label}
                   </option>
                 ))}
               </Select>
+              {!form.motivo && <div className="text-xs text-gray-600 mt-1">Seleccioná un motivo</div>}
             </div>
             <div className="text-sm text-gray-600 self-end">
-              Ubicacin inicial: <b>Taller</b> (se puede modificar desde la hoja de servicio)
+              Ubicación inicial: <b>Taller</b> (se puede modificar desde la hoja de servicio)
             </div>
             <div className="md:col-span-2">
               <label className="text-sm">Informe preliminar</label>
               <TextArea rows={3} value={form.informe_preliminar} onChange={onChange("informe_preliminar")} />
             </div>
-
             <div className="md:col-span-2">
               <label className="text-sm">Comentarios</label>
-              <TextArea
-                rows={3}
-                value={form.comentarios}
-                onChange={onChange("comentarios")}
-                placeholder="Notas internas u observaciones del ingreso"
-              />
+              <TextArea rows={3} value={form.comentarios} onChange={onChange("comentarios")} placeholder="Notas internas u observaciones del ingreso" />
             </div>
 
             {/* Accesorios */}
@@ -722,13 +727,7 @@ export default function NuevoIngreso() {
               <div className="flex flex-wrap items-end gap-3 mb-2">
                 <div className="grow min-w-[260px]">
                   <label className="block text-sm text-gray-600 mb-1">Descripción</label>
-                  <input
-                    className="border rounded p-2 w-full"
-                    list="accesorios_catalogo"
-                    value={nuevoAcc.descripcion}
-                    onChange={(e) => setNuevoAcc((s) => ({ ...s, descripcion: e.target.value }))}
-                    placeholder="Escribí y elegí de la lista"
-                  />
+                  <input className="border rounded p-2 w-full" list="accesorios_catalogo" value={nuevoAcc.descripcion} onChange={(e) => setNuevoAcc((s) => ({ ...s, descripcion: e.target.value }))} placeholder="Escribí y elegí de la lista" />
                   <datalist id="accesorios_catalogo">
                     {(Array.isArray(accesCatalogo) ? accesCatalogo : []).map((a) => (
                       <option key={a.id} value={a.nombre} />
@@ -736,104 +735,40 @@ export default function NuevoIngreso() {
                   </datalist>
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-600 mb-1">N° referencia</label>
-                  <Input
-                    value={nuevoAcc.referencia}
-                    onChange={(e) => setNuevoAcc((s) => ({ ...s, referencia: e.target.value }))}
-                    placeholder="Opcional"
-                  />
+                  <label className="block text-sm text-gray-600 mb-1">Número de referencia</label>
+                  <Input value={nuevoAcc.referencia} onChange={(e) => setNuevoAcc((s) => ({ ...s, referencia: e.target.value }))} placeholder="Opcional" />
                 </div>
-                <button
-                  type="button"
-                  className="bg-blue-600 text-white px-3 py-2 rounded"
-                  onClick={() => {
-                    const d = (nuevoAcc.descripcion || "").trim().toLowerCase();
-                    if (!d) return;
-                    const acc = accesCatalogo.find(
-                      (a) => (a.nombre || "").trim().toLowerCase() === d
-                    );
-                    if (!acc) {
-                      setErr("Elegí una descripción válida de la lista");
-                      return;
-                    }
-                    setAccItems((list) => [
-                      ...list,
-                      {
-                        accesorio_id: acc.id,
-                        referencia: (nuevoAcc.referencia || "").trim(),
-                        accesorio_nombre: acc.nombre,
-                      },
-                    ]);
-                    setNuevoAcc({ descripcion: "", referencia: "" });
-                  }}
-                >
-                  agregar
-                </button>
+                <button type="button" className="bg-blue-600 text-white px-3 py-2 rounded" onClick={() => {
+                  const d = (nuevoAcc.descripcion || "").trim().toLowerCase();
+                  if (!d) return;
+                  const acc = (accesCatalogo || []).find((a) => (a.nombre || "").trim().toLowerCase() === d);
+                  if (!acc) {
+                    setErr("Elegí una descripción válida de la lista");
+                    return;
+                  }
+                  setAccItems((list) => [
+                    ...list,
+                    { accesorio_id: acc.id, referencia: (nuevoAcc.referencia || "").trim(), accesorio_nombre: acc.nombre },
+                  ]);
+                  setNuevoAcc({ descripcion: "", referencia: "" });
+                }}>Agregar</button>
               </div>
-              {accItems.length === 0 ? (
-                <div className="text-sm text-gray-500">Sin accesorios cargados.</div>
-              ) : (
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="text-left">
-                      <th className="p-2">Descripción</th>
-                      <th className="p-2">N° referencia</th>
-                      <th className="p-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(Array.isArray(accItems) ? accItems : []).map((it, idx) => (
-                      <tr key={idx} className="border-t">
-                        <td className="p-2">
-                          {it.accesorio_nombre ||
-                            accesCatalogo.find((a) => String(a.id) === String(it.accesorio_id))?.nombre ||
-                            it.accesorio_id}
-                        </td>
-                        <td className="p-2">{it.referencia || "-"}</td>
-                        <td className="p-2">
-                          <button
-                            type="button"
-                            className="text-red-600"
-                            onClick={() => {
-                              setAccItems((list) => list.filter((_, i) => i !== idx));
-                            }}
-                          >
-                            quitar
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              {accItems.length > 0 && (
+                <ul className="list-disc pl-5 text-sm text-gray-700">
+                  {accItems.map((it, i) => (
+                    <li key={i}>{it.accesorio_nombre}{it.referencia ? ` (ref: ${it.referencia})` : ""}</li>
+                  ))}
+                </ul>
               )}
             </div>
           </div>
         </fieldset>
 
-        {/* Recepción */}
-        <div className="border rounded p-3">
-          <label className="text-sm font-semibold">Recepción</label>
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              id="etiqok"
-              type="checkbox"
-              checked={!!form.etiq_garantia_ok}
-              onChange={(e) => setForm((f) => ({ ...f, etiq_garantia_ok: !!e.target.checked }))}
-            />
-            <label htmlFor="etiqok" className="text-sm">
-              Faja de garantía OK (etiquetas en buen estado)
-            </label>
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            Marcá si al ingresar el equipo la faja/etiquetas están en buen estado.
-          </div>
-        </div>
-
         <div className="flex gap-3">
           <button
-            disabled={loading || !canSubmitCliente || !marcaId || !form.equipo.modelo_id}
+            disabled={loading || !canSubmitCliente || !marcaId || !form.equipo.modelo_id || !form.motivo}
             className={`px-4 py-2 rounded text-white ${
-              loading || !canSubmitCliente || !marcaId || !form.equipo.modelo_id
+              loading || !canSubmitCliente || !marcaId || !form.equipo.modelo_id || !form.motivo
                 ? "bg-blue-400 cursor-not-allowed"
                 : "bg-blue-600"
             }`}
@@ -845,5 +780,3 @@ export default function NuevoIngreso() {
     </div>
   );
 }
-
-

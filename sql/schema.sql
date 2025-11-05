@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS ingresos (
   propietario_doc      TEXT,
   descripcion_problema  TEXT,
   trabajos_realizados   TEXT,
+  serial_cambio         TEXT,
   resolucion           TEXT NULL
 );
 

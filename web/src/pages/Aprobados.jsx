@@ -7,7 +7,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ingresoIdOf,
   formatOS,
-  formatDateTime,
+  formatDateOnly,
   norm,
   tipoEquipoOf,
   catalogEquipmentLabel,
@@ -138,7 +138,7 @@ export default function Aprobados() {
                     <StatusChip value={row?.estado} />
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(
+                  <td className="p-2 whitespace-nowrap">{formatDateOnly(
                     row?.fecha_aprobado ||
                     row?.presupuesto_fecha_aprobacion ||
                     row?.fecha_reparado ||

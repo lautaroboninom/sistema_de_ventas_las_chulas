@@ -86,10 +86,6 @@ export default function TiposEquipo() {
       {err && <div className="bg-red-100 text-red-700 p-2 rounded mb-2">{err}</div>}
       {msg && <div className="bg-green-100 text-green-700 p-2 rounded mb-2">{msg}</div>}
 
-      <div className="mb-2">
-        <Input placeholder="Buscar tipo" value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
-
       <form onSubmit={handleAdd} className="border rounded p-3 mb-3 flex gap-2 items-end">
         <div className="flex-1">
           <label className="text-sm block mb-1">Nuevo tipo</label>
@@ -106,6 +102,10 @@ export default function TiposEquipo() {
           Agregar
         </button>
       </form>
+
+      <div className="mb-2">
+        <Input placeholder="Buscar tipo" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
 
       <ul className="border rounded divide-y max-h-96 overflow-auto">
         {filtered.map((it) => (

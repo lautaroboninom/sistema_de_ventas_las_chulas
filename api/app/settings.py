@@ -147,6 +147,8 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "UNAUTHENTICATED_USER": "django.contrib.auth.models.AnonymousUser",
     "UNAUTHENTICATED_TOKEN": None,
+    # Normaliza 401/403 y agrega WWW-Authenticate en 401
+    "EXCEPTION_HANDLER": "service.exceptions.handler",
 }
 
 # CORS

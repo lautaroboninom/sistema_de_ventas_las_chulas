@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getTecnicos } from "../lib/api";
 import api from "../lib/api";
 import { useNavigate } from "react-router-dom";
-import { ingresoIdOf, formatOS, formatDateTime, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateOnly, norm, tipoEquipoOf, resolveFechaIngreso, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 import useQueryState from "../hooks/useQueryState";
 
@@ -71,7 +71,7 @@ export default function PendientesPorTecnico() {
                   <td className="p-2">{catalogEquipmentLabel(row)}</td>
                   <td className="p-2"><StatusChip value={row.estado} /></td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
+                  <td className="p-2 whitespace-nowrap">{formatDateOnly(resolveFechaIngreso(row))}</td>
                 </tr>
               ))}
             </tbody>

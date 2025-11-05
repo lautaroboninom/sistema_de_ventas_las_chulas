@@ -3,6 +3,10 @@
 import { ESTADO_LABELS } from "../lib/constants";
 
 const VARIANTS = {
+  purple: {
+    wrapper: "bg-purple-50 text-purple-800 ring-1 ring-inset ring-purple-200",
+    dot: "bg-purple-500",
+  },
   amber: {
     wrapper: "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200",
     dot: "bg-amber-500",
@@ -65,6 +69,9 @@ function variantOf(value) {
 
   // Liberados
   if (s.includes("liberad")) return "indigo";
+
+  // Cambio (resolución)
+  if (s.includes("cambio")) return "purple";
 
   return "neutral";
 }
