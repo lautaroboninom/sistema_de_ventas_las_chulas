@@ -195,6 +195,16 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
         </div>
       </div>
 
+      {(data?.garantia || data?.garantia_reparacion) && (
+        <div className="bg-yellow-100 border border-yellow-300 text-yellow-800 p-2 rounded mb-3" role="status" aria-label="Aviso de garantía">
+          <span className="font-medium">Aviso:</span>
+          <span> Equipo en {data?.garantia ? "garantía de fábrica" : ""}{data?.garantia && data?.garantia_reparacion ? " y " : ""}{data?.garantia_reparacion ? "garantía de reparación" : ""}.</span>
+          {data?.faja_garantia ? (
+            <span className="ml-2 text-xs text-yellow-700">Faja: {data.faja_garantia}</span>
+          ) : null}
+        </div>
+      )}
+
       {qErr && (
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">{qErr}</div>
       )}
@@ -370,7 +380,6 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
     </div>
   );
 }
-
 
 
 

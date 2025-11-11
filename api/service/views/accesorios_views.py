@@ -14,6 +14,67 @@ class CatalogoAccesoriosView(APIView):
         rows = q("SELECT id, nombre FROM catalogo_accesorios WHERE activo ORDER BY nombre")
         return Response(rows)
 
+    def post(self, request):
+        # Alta y renombrado: solo jefes/admin/jefe_veedor
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        d = request.data or {}
+        new_name = (d.get("nombre") or "").strip()
+        old_name = (d.get("rename_from") or "").strip()
+        if not new_name:
+            return Response({"detail": "nombre requerido"}, status=400)
+
+        # Renombrar existente (case-insensitive)
+        if old_name and old_name.lower() != new_name.lower():
+            # Evitar colisiones por nombre (case-insensitive)
+            exists = q(
+                "SELECT id FROM catalogo_accesorios WHERE LOWER(TRIM(nombre))=LOWER(TRIM(%s))",
+                [new_name],
+                one=True,
+            )
+            if exists:
+                return Response({"detail": "ya existe"}, status=400)
+
+            exec_void(
+                "UPDATE catalogo_accesorios SET nombre=%s WHERE LOWER(TRIM(nombre))=LOWER(TRIM(%s))",
+                [new_name, old_name],
+            )
+            return Response({"ok": True, "renamed": True})
+
+        # Alta o reactivar si ya existe (case-insensitive)
+        row = q(
+            "SELECT id FROM catalogo_accesorios WHERE LOWER(TRIM(nombre))=LOWER(TRIM(%s))",
+            [new_name],
+            one=True,
+        )
+        if row:
+            exec_void(
+                "UPDATE catalogo_accesorios SET nombre=%s, activo=TRUE WHERE id=%s",
+                [new_name, row.get("id")],
+            )
+            return Response({"ok": True, "reactivated": True})
+
+        exec_void(
+            """
+            INSERT INTO catalogo_accesorios(nombre, activo)
+            VALUES (%s, TRUE)
+            ON CONFLICT (nombre) DO UPDATE SET activo=EXCLUDED.activo
+            """,
+            [new_name],
+        )
+        return Response({"ok": True, "created": True})
+
+    def delete(self, request):
+        # Baja lógica para no romper historiales que referencian el accesorio
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        nombre = (request.GET.get("nombre") or "").strip()
+        if not nombre:
+            return Response({"detail": "nombre requerido"}, status=400)
+        exec_void(
+            "UPDATE catalogo_accesorios SET activo=FALSE WHERE LOWER(TRIM(nombre))=LOWER(TRIM(%s))",
+            [nombre],
+        )
+        return Response({"ok": True})
+
 
 class IngresoAccesoriosView(APIView):
     permission_classes = [permissions.IsAuthenticated]

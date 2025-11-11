@@ -565,6 +565,42 @@ export default function NuevoIngreso() {
           )}
         </fieldset>
 
+        {/* Propietario: requerido si cliente es Particular */}
+        <div className="mt-4 border rounded p-3">
+          <h3 className="font-semibold mb-2">Propietario</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="text-sm">Nombre</label>
+              <Input
+                value={propietario.nombre}
+                onChange={(e) => setPropietario((p) => ({ ...p, nombre: e.target.value }))}
+                placeholder="Nombre del propietario"
+                required={selectedCliente?.razon_social?.trim().toLowerCase() === 'particular'}
+              />
+            </div>
+            <div>
+              <label className="text-sm">Contacto</label>
+              <Input
+                value={propietario.contacto}
+                onChange={(e) => setPropietario((p) => ({ ...p, contacto: e.target.value }))}
+                placeholder="Contacto (opcional)"
+              />
+            </div>
+            <div>
+              <label className="text-sm">CUIT</label>
+              <Input
+                value={propietario.doc}
+                onChange={(e) => setPropietario((p) => ({ ...p, doc: e.target.value }))}
+                placeholder="CUIT"
+                required={selectedCliente?.razon_social?.trim().toLowerCase() === 'particular'}
+              />
+            </div>
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            Obligatorio cuando el cliente es "Particular".
+          </div>
+        </div>
+
         {/* Empresa a facturar */}
         <div className="border rounded p-3">
           <label className="text-sm">Empresa a facturar</label>

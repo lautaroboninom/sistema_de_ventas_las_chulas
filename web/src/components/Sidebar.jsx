@@ -104,6 +104,7 @@ export default function Sidebar() {
               {showUsuarios && <LinkItem to="/usuarios">Usuarios</LinkItem>}
               <LinkItem to="/catalogo/clientes">Clientes</LinkItem>
               <LinkItem to="/catalogo/tipos-equipo">Tipos de equipo</LinkItem>
+              <LinkItem to="/catalogo/accesorios">Accesorios</LinkItem>
               <LinkItem to="/catalogo/marcas">Marcas &amp; Modelos</LinkItem>
               <LinkItem to="/catalogo/proveedores">Proveedores externos</LinkItem>
               <LinkItem to="/garantias">Garantías</LinkItem>

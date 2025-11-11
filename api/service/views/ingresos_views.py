@@ -1,4 +1,4 @@
-from django.db import connection, transaction
+﻿from django.db import connection, transaction
 import time
 import json
 import logging
@@ -200,11 +200,7 @@ class PendientesPresupuestoView(APIView):
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE COALESCE(t.presupuesto_estado, 'pendiente') = 'pendiente'
                   AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado','liberado','alquilado')
-                  AND (
-                       t.estado = 'diagnosticado'
-                    OR t.fecha_servicio IS NOT NULL
-                  )
+                  AND t.estado NOT IN ('ingresado','entregado','liberado','alquilado')
                 ORDER BY COALESCE(t.fecha_servicio, t.fecha_ingreso) ASC;
                 """,
                 ["taller"],
@@ -1881,6 +1877,15 @@ class NuevoIngresoView(APIView):
         prop_contacto = (prop.get("contacto") or "").strip()
         prop_doc = (prop.get("doc") or "").strip()
 
+        # Validacion: si el cliente es 'Particular', propietario.nombre y propietario.doc son obligatorios
+        try:
+            rs_lower = (c.get("razon_social") or "").strip().lower()
+        except Exception:
+            rs_lower = ""
+        if rs_lower == "particular":
+            if not prop_nombre or not prop_doc:
+                return Response({"detail": "Para cliente 'Particular' es obligatorio completar Nombre y CUIT del propietario"}, status=400)
+
         numero_serie = (equipo.get("numero_serie") or "").strip()
         ns_key = (numero_serie or "").replace(" ", "").replace("-", "").upper()
         garantia_bool = bool(equipo.get("garantia"))
@@ -1949,6 +1954,28 @@ class NuevoIngresoView(APIView):
                             break
                         time.sleep(0.05)
                     device_id = row_dev and int(row_dev.get("id"))
+                # Fallback adicional: si no hay N/S pero se especificó numero_interno (MG/NM/NV/CE),
+                # resolver device_id por numero_interno para manejar conflicto por índice único.
+                if not device_id and numero_interno:
+                    # Intento de match exacto primero
+                    row_dev = q("SELECT id FROM devices WHERE numero_interno = %s LIMIT 1", [numero_interno], one=True)
+                    if not row_dev:
+                        # Match normalizado (MG|NM|NV|CE #### -> cero a la izquierda) para mayor tolerancia
+                        row_dev = q(
+                            """
+                            SELECT id
+                              FROM devices
+                             WHERE numero_interno ~* '^(MG|NM|NV|CE)\\s*\\d{1,4}$'
+                               AND UPPER(REGEXP_REPLACE(numero_interno,
+                                   '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0'))) =
+                                   UPPER(REGEXP_REPLACE(%s,
+                                   '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0')))
+                             LIMIT 1
+                            """,
+                            [numero_interno],
+                            one=True,
+                        )
+                    device_id = device_id or (row_dev and int(row_dev.get("id")))
             else:
                 exec_void(
                     """
@@ -2030,6 +2057,12 @@ class NuevoIngresoView(APIView):
         # PostgreSQL-only build: motivo es texto vÃ¡lido segÃšn enum del modelo
 
         equipo_variante = (request.data.get("equipo_variante") or "").strip() or None
+
+        # Asegurar que tenemos un device_id válido antes de crear el ingreso
+        if not device_id:
+            return Response({
+                "detail": "No se pudo identificar el equipo. Ingrese número de serie o número interno válido."
+            }, status=400)
         ingreso_id = exec_returning(
             """
             INSERT INTO ingresos (
@@ -2255,9 +2288,9 @@ class IngresoDetalleView(APIView):
               COALESCE(l.nombre,'') AS ubicacion_nombre,
               t.asignado_a,
               COALESCE(u.nombre,'') AS asignado_a_nombre,
-              t.propietario_nombre,
-              t.propietario_contacto,
-              t.propietario_doc,
+              COALESCE(d.propietario_nombre, d.propietario) AS propietario_nombre,
+              COALESCE(d.propietario_contacto, '') AS propietario_contacto,
+              COALESCE(d.propietario_doc, '') AS propietario_doc,
               d.id AS device_id,
               COALESCE(d.numero_serie,'') AS numero_serie,
               COALESCE(d.numero_interno,'') AS numero_interno,
@@ -2283,6 +2316,15 @@ class IngresoDetalleView(APIView):
             [ingreso_id],
             one=True,
         )
+
+        # Snapshot inmediato en devices (fase 2: fuente de verdad)
+        try:
+            exec_void(
+                "UPDATE devices SET propietario_nombre = NULLIF(%s,''), propietario_contacto = NULLIF(%s,''), propietario_doc = NULLIF(%s,'') WHERE id = %s",
+                [prop_nombre, prop_contacto, prop_doc, device_id]
+            )
+        except Exception:
+            pass
         if not row:
             return Response({"detail": "Ingreso no encontrado"}, status=404)
         # Agregar serial_cambio si existe la columna
@@ -2514,6 +2556,19 @@ class IngresoDetalleView(APIView):
             if "propietario_doc" in d:
                 sets_no_estado.append("propietario_doc = NULLIF(%s,'')")
                 params_no_estado.append((d.get("propietario_doc") or "").strip())
+            # Fase 2: persistir también en devices
+            try:
+                exec_void(
+                    "UPDATE devices SET propietario_nombre = NULLIF(%s,''), propietario_contacto = NULLIF(%s,''), propietario_doc = NULLIF(%s,'') WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
+                    [
+                        (d.get("propietario_nombre") or "").strip(),
+                        (d.get("propietario_contacto") or "").strip(),
+                        (d.get("propietario_doc") or "").strip(),
+                        ingreso_id,
+                    ],
+                )
+            except Exception:
+                pass
         if any(k in d for k in ("razon_social", "cod_empresa", "telefono")):
             if rol not in ROL_EDIT_BASICS:
                 raise PermissionDenied("No autorizado para editar datos del cliente")

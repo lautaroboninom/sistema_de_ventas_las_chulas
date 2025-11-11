@@ -152,6 +152,9 @@ CREATE TABLE IF NOT EXISTS devices (
   garantia_vence   DATE,
   ubicacion_id     INTEGER NULL REFERENCES locations(id) ON DELETE SET NULL,
   propietario      TEXT,
+  propietario_nombre   TEXT,
+  propietario_contacto TEXT,
+  propietario_doc      TEXT,
   n_de_control     TEXT,    -- N° faja garantía (snapshot del último ingreso)
   alquilado        BOOLEAN NOT NULL DEFAULT FALSE,
   alquiler_a       TEXT

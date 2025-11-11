@@ -304,7 +304,7 @@ export default function PrincipalTab(props) {
                   data.propietario_contacto || "-"
                 )}
               </Row>
-              <Row label="Documento">
+              <Row label="CUIT">
                 {editBasics ? (
                   <input
                     className="border rounded p-1 w-64"

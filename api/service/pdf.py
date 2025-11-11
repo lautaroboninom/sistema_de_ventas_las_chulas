@@ -74,6 +74,9 @@ def _get_data(ingreso_id: int):
             COALESCE(c.telefono, '') AS cliente_telefono,
             COALESCE(c.telefono_2, '') AS cliente_telefono_2,
             COALESCE(c.email, '') AS cliente_email,
+            COALESCE(d.propietario_nombre, d.propietario, '') AS propietario_nombre,
+            COALESCE(d.propietario_contacto, '') AS propietario_contacto,
+            COALESCE(d.propietario_doc, '') AS propietario_doc,
             d.numero_serie,
             COALESCE(t.garantia_fabrica, false) AS garantia,
             COALESCE(t.etiq_garantia_ok, true) AS etiq_ok,
@@ -592,6 +595,23 @@ def render_quote_pdf(ingreso_id: int):
     EMPRESA_LINEA2 = getattr(settings, "COMPANY_HEADER_L2", "IMPORTADORES DE EQUIPOS")
     EMPRESA_LINEA3 = getattr(settings, "COMPANY_HEADER_L3", "MEDICOS Y REPARACIONES")
 
+    
+    # Ajustes de cliente/propietario para visualizacion (MGBIO y Particular)
+    try:
+        _cliente_rs = (head.get('cliente') or '').strip()
+        _cl_norm = _cliente_rs.lower()
+        _is_mgbio = ('mg' in _cl_norm and 'bio' in _cl_norm)
+        _is_particular = (_cl_norm == 'particular')
+        _has_owner = bool((head.get('propietario_nombre') or '').strip())
+        if (_is_mgbio or _is_particular) and _has_owner:
+            head['cliente'] = head.get('propietario_nombre') or head.get('cliente')
+            if (head.get('propietario_doc') or '').strip():
+                head['cliente_cuit'] = (head.get('propietario_doc') or '').strip()
+            if (head.get('propietario_contacto') or '').strip():
+                head['cliente_contacto'] = (head.get('propietario_contacto') or '').strip()
+    except Exception:
+        pass
+
     cliente_display = (head.get("cliente") or "Cliente").strip()
     os_label = f"OS {str(head['ingreso_id']).zfill(5)}"
     title = f"{os_label} {cliente_display}".strip()
@@ -800,6 +820,22 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         # Si falla el calculo, continuamos con los valores existentes
         pass
 
+        # Ajustes de cliente/propietario para visualizacion (MGBIO y Particular)
+    try:
+        _cliente_rs = (head.get('cliente') or '').strip()
+        _cl_norm = _cliente_rs.lower()
+        _is_mgbio = ('mg' in _cl_norm and 'bio' in _cl_norm)
+        _is_particular = (_cl_norm == 'particular')
+        _has_owner = bool((head.get('propietario_nombre') or '').strip())
+        if (_is_mgbio or _is_particular) and _has_owner:
+            head['cliente'] = head.get('propietario_nombre') or head.get('cliente')
+            if (head.get('propietario_doc') or '').strip():
+                head['cliente_cuit'] = (head.get('propietario_doc') or '').strip()
+            if (head.get('propietario_contacto') or '').strip():
+                head['cliente_contacto'] = (head.get('propietario_contacto') or '').strip()
+    except Exception:
+        pass
+
     empresa = _get_empresa_facturar(ingreso_id)
     L1, L2, L3 = _company_header_lines(empresa)
     _LOGO_THIS = _logo_path_for_company(empresa)
@@ -887,7 +923,6 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
             title_w = 75  # fallback aproximado
         c.setFont("Helvetica-Bold", 12.8)
         c.drawString(x + title_w + 3 * mm, y_top - 5 * mm, f"{head['ingreso_id']}")
-
         # Logo arriba a la derecha (sin nombre de empresa ni dirección para evitar solapes)
         draw_logo(W - margin - 26 * mm, y_top - 10 * mm, w=24 * mm)
 
@@ -896,6 +931,10 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
 
         c.setFont("Helvetica-Bold", 8.5)
         c.drawString(x, y_top - 11.5 * mm, "ENTREGA DE EQUIPO")
+        c.setFont("Helvetica", 9.2)
+        c.drawString(x + 35 * mm, y_top - 11.5 * mm, "  —    Fecha liberación: ")
+        c.drawString(x + 70 * mm, y_top - 11.5 * mm,datetime.now().strftime("%d/%m/%y"))
+        c.setFont("Helvetica-Bold", 12.8)
 
     def field_grid(y_top, height):
         inner_x = margin + 6 * mm
@@ -914,12 +953,25 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
             content_h - GRID_DOWN - (ROW_H + ROW_GAP) * 3 - SIGN_H - 7 * mm
         )
 
-        # r1: Cliente | Fecha | Prop.
-        label_value(inner_x, y - ROW_H, 74 * mm, ROW_H, "Cliente", head.get("cliente"))
-        label_value(inner_x + 76 * mm, y - ROW_H, 25 * mm, ROW_H, "Fecha",
-                    datetime.now().strftime("%d/%m/%y"), bold=True)
-        label_value(inner_x + 104 * mm, y - ROW_H, 36 * mm, ROW_H, "Prop.",
-                    head.get("propietario_nombre") or "")
+        # r1: Cliente | Fecha | CUIT (si Particular usa CUIT del propietario)
+        cliente_rs = (head.get("cliente") or "").strip()
+        is_particular = (cliente_rs.lower() == "particular")
+        comp_cliente = cliente_rs
+        if is_particular:
+            owner_nm = (head.get("propietario_nombre") or "").strip()
+            if owner_nm:
+                comp_cliente = f"Particular - {owner_nm}"
+        label_value(inner_x, y - ROW_H, 74 * mm, ROW_H, "Cliente", comp_cliente)
+        cuit_val = None
+        if is_particular:
+            cuit_val = (head.get("propietario_doc") or "").strip()
+        else:
+            cuit_val = (head.get("cliente_cuit") or "").strip()
+        label_value(inner_x + 76 * mm, y - ROW_H, 25 * mm, ROW_H, "CUIT",
+                    cuit_val or "")
+        label_value(inner_x + 104 * mm, y - ROW_H, 66 * mm, ROW_H, "Contacto",
+            head['cliente_contacto'], bold=False)
+        
         y -= (ROW_H + ROW_GAP)
 
         # r2: Equipo | Marca | Modelo | NumeroSerie
