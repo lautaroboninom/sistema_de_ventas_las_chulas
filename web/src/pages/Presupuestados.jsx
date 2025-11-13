@@ -130,7 +130,7 @@ export default function JefePresupuestos() {
     try {
       setBusyId(ingresoId);
       const shouldPrint = (row?.estado || "").toLowerCase() === "reparado" &&
-        window.confirm("Este equipo ya est reparado, imprimir remito de salida?");
+        window.confirm("Este equipo ya está reparado, imprimir remito de salida?");
       await api.post(`/api/quotes/${ingresoId}/aprobar/`);
       if (shouldPrint) {
         try {

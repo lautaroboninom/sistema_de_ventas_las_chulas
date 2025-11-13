@@ -677,37 +677,38 @@ export default function PrincipalTab(props) {
         </button>
       )}
 
-      {/* Entrega */}
-      <div className="border rounded p-4 mt-4">
+      {/* Entrega + Alquiler */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div className="border rounded p-4">
         <h2 className="font-semibold mb-2">Entrega</h2>
         {data.estado === "liberado" ? (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label className="text-sm">Remito salida (requerido)</label>
+            <div className="grid grid-cols-1 gap-3">
+                <Row label="Remito salida (requerido)">{
+
                 <input
                   className="border rounded p-2 w-full"
                   value={entrega.remito_salida}
                   onChange={(e) => setEntrega({ ...entrega, remito_salida: e.target.value })}
                 />
-              </div>
-              <div>
-                <label className="text-sm">Factura (opcional)</label>
+                }
+                </Row>
+              <Row label="Factura (opcional)">{
                 <input
                   className="border rounded p-2 w-full"
                   value={entrega.factura_numero}
                   onChange={(e) => setEntrega({ ...entrega, factura_numero: e.target.value })}
                 />
-              </div>
-              <div>
-                <label className="text-sm">Fecha entrega</label>
+              }</Row>
+
+              <Row label="Fecha entrega">{
                 <input
                   type="datetime-local"
                   className="border rounded p-2 w-full"
                   value={entrega.fecha_entrega}
                   onChange={(e) => setEntrega({ ...entrega, fecha_entrega: e.target.value })}
                 />
-              </div>
+              }</Row>
               {String(data?.resolucion || "") === "cambio" && (
                 <div>
                   <label className="text-sm">Verificar serie (Cambio)</label>
@@ -750,7 +751,7 @@ export default function PrincipalTab(props) {
         ) : (
           <>
             {!editEntrega && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div className="grid grid-cols-1 gap-3 text-sm">
                 <div>
                   <div className="text-gray-600">Remito salida</div>
                   <div className="font-medium">{data.remito_salida || "-"}</div>
@@ -774,7 +775,7 @@ export default function PrincipalTab(props) {
             )}
             {canEditEntrega && editEntrega && (
               <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 gap-3">
                   <div>
                     <label className="text-sm">Remito salida</label>
                     <input
@@ -847,10 +848,10 @@ export default function PrincipalTab(props) {
             )}
           </>
         )}
-      </div>
+        </div>
 
       {/* Alquiler */}
-      <div className="border rounded p-4 mt-4">
+      <div className="border rounded p-4">
         <h2 className="font-semibold mb-2">Alquiler</h2>
         <Row label="¿Se alquiló?">
           <input
@@ -948,6 +949,7 @@ export default function PrincipalTab(props) {
             )}
           </div>
         )}
+      </div>
       </div>
     </>
   );

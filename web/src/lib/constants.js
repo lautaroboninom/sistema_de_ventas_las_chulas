@@ -90,3 +90,12 @@ export const MOTIVO_OPTIONS = Object.entries(MOTIVO_LABELS).map(
 export const motivoLabel = (value) =>
   MOTIVO_LABELS[value] ?? String(value ?? "");
 
+// =========================
+// Métricas - Fecha mínima de corte (unificada)
+// =========================
+// Solo considerar ingresos con fecha_ingreso >= METRICAS_DESDE_MIN (inclusive)
+export const METRICAS_DESDE_MIN = '2025-06-26';
+export const clampDesdeMin = (s) => {
+  if (!s) return METRICAS_DESDE_MIN;
+  return s < METRICAS_DESDE_MIN ? METRICAS_DESDE_MIN : s;
+};

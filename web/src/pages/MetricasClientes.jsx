@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { getMetricasSeries, getTecnicos, getMarcas, getTiposEquipo } from "../lib/api";
+import { METRICAS_DESDE_MIN, clampDesdeMin } from "../lib/constants";
 
 export default function MetricasClientes() {
   const [search, setSearch] = useSearchParams();
-  const [desde, setDesde] = useState(() => search.get('from') || (()=>{const d=new Date(); d.setMonth(d.getMonth()-3); return d.toISOString().slice(0,10);})());
+  const [desde, setDesde] = useState(() => {
+    const s = search.get('from');
+    if (s) return clampDesdeMin(s);
+    const d = new Date(); d.setMonth(d.getMonth()-3);
+    return clampDesdeMin(d.toISOString().slice(0,10));
+  });
   const [hasta, setHasta] = useState(() => search.get('to') || new Date().toISOString().slice(0, 10));
   const [tecnicos, setTecnicos] = useState([]);
   const [marcas, setMarcas] = useState([]);
@@ -20,22 +26,24 @@ export default function MetricasClientes() {
     getTiposEquipo().then(setTipos).catch(()=>{});
   }, []);
 
+  const desdeClamped = useMemo(() => clampDesdeMin(desde), [desde]);
+
   useEffect(() => {
     const next = new URLSearchParams(search.toString());
-    next.set('from', desde); next.set('to', hasta);
+    next.set('from', desdeClamped); next.set('to', hasta);
     if (tecnicoId) next.set('tecnico_id', tecnicoId); else next.delete('tecnico_id');
     if (marcaId) next.set('marca_id', marcaId); else next.delete('marca_id');
     if (tipoEquipo) next.set('tipo_equipo', tipoEquipo); else next.delete('tipo_equipo');
     setSearch(next, { replace: true });
-  }, [desde, hasta, tecnicoId, marcaId, tipoEquipo]);
+  }, [desdeClamped, hasta, tecnicoId, marcaId, tipoEquipo]);
 
   useEffect(() => {
-    const params = { from: desde, to: hasta, group: 'cliente' };
+    const params = { from: desdeClamped, to: hasta, group: 'cliente' };
     if (tecnicoId) params.tecnico_id = tecnicoId;
     if (marcaId) params.marca_id = marcaId;
     if (tipoEquipo) params.tipo_equipo = tipoEquipo;
     getMetricasSeries(params).then(setData).catch(()=>{});
-  }, [desde, hasta, tecnicoId, marcaId, tipoEquipo]);
+  }, [desdeClamped, hasta, tecnicoId, marcaId, tipoEquipo]);
 
   function downloadCSV(filename, rows) {
     const bom = "\uFEFF";
@@ -71,27 +79,27 @@ export default function MetricasClientes() {
       o.rep = r.monto_repuestos || 0; map.set(k, o);
     });
     const rows = [header, ...Array.from(map.values()).sort((a,b)=> a.period.localeCompare(b.period) || a.cliente.localeCompare(b.cliente)).map(o => [o.period, o.cliente, o.entregados, o.facturacion, o.mo, o.rep])];
-    downloadCSV(`metricas_clientes_mensual_${desde}_${hasta}.csv`, rows);
+    downloadCSV(`metricas_clientes_mensual_${desdeClamped}_${hasta}.csv`, rows);
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Mtricas por clientes</h1>
-        <Link to="/metricas" className="text-blue-600 hover:underline"> Volver a Mtricas</Link>
+        <h1 className="text-xl font-semibold">Métricas por clientes</h1>
+        <Link to="/metricas" className="text-blue-600 hover:underline"> Volver a Métricas</Link>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
         <div>
           <div className="text-sm text-gray-600">Desde</div>
-          <input type="date" value={desde} onChange={e=>setDesde(e.target.value)} className="mt-1 border rounded px-2 py-1" />
+          <input type="date" value={desdeClamped} min={METRICAS_DESDE_MIN} onChange={e=>setDesde(clampDesdeMin(e.target.value))} className="mt-1 border rounded px-2 py-1" />
         </div>
         <div>
           <div className="text-sm text-gray-600">Hasta</div>
           <input type="date" value={hasta} onChange={e=>setHasta(e.target.value)} className="mt-1 border rounded px-2 py-1" />
         </div>
         <div>
-          <div className="text-sm text-gray-600">Tcnico</div>
+          <div className="text-sm text-gray-600">Técnico</div>
           <select className="mt-1 border rounded px-2 py-1 w-full" value={tecnicoId} onChange={e=>setTecnicoId(e.target.value)}>
             <option value="">Todos</option>
             {tecnicos.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
@@ -116,9 +124,8 @@ export default function MetricasClientes() {
         </div>
       </div>
 
-      <div className="text-sm text-gray-500">Esta vista est centrada en exportar. Si quers visual, abrimos otra iteracin con top clientes.</div>
+      <div className="text-sm text-gray-500">Esta vista está centrada en exportar. Si quieres visual, abrimos otra iteración con top clientes.</div>
     </div>
   );
 }
-
 

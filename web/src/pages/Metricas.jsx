@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { getMetricasResumen, getMetricasSeries, getTecnicos, getMarcas, getTiposEquipo, getMetricasCalibracion } from "../lib/api";
+import { METRICAS_DESDE_MIN, clampDesdeMin } from "../lib/constants";
 import ConfigPanel from "../components/metricas/ConfigPanel.jsx";
 import SimpleBars from "../components/metricas/charts/SimpleBars.jsx";
 import SimpleLine from "../components/metricas/charts/SimpleLine.jsx";
@@ -45,9 +46,9 @@ export default function Metricas() {
   const [tipoEquipo, setTipoEquipo] = useState(search.get('tipo_equipo') || "");
   const [desde, setDesde] = useState(() => {
     const s = search.get('from');
-    if (s) return s;
+    if (s) return clampDesdeMin(s);
     const d = new Date(); d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
+    return clampDesdeMin(d.toISOString().slice(0, 10));
   });
   const [hasta, setHasta] = useState(() => search.get('to') || new Date().toISOString().slice(0, 10));
   const [slaExclDer, setSlaExclDer] = useState(() => {
@@ -68,10 +69,12 @@ export default function Metricas() {
     getTiposEquipo().then(setTipos).catch(() => {});
   }, []);
 
+  const desdeClamped = useMemo(() => clampDesdeMin(desde), [desde]);
+
   // Sincronizar filtros en la URL
   useEffect(() => {
     const next = new URLSearchParams(search.toString());
-    next.set('from', desde);
+    next.set('from', desdeClamped);
     next.set('to', hasta);
     if (tecnicoId) next.set('tecnico_id', tecnicoId); else next.delete('tecnico_id');
     if (marcaId) next.set('marca_id', marcaId); else next.delete('marca_id');
@@ -79,7 +82,7 @@ export default function Metricas() {
     if (slaExclDer) next.set('sla_excluir_derivados', '1'); else next.delete('sla_excluir_derivados');
     if (showCharts) next.set('view', 'charts'); else next.delete('view');
     setSearch(next, { replace: true });
-  }, [desde, hasta, tecnicoId, marcaId, tipoEquipo, slaExclDer, showCharts]);
+  }, [desdeClamped, hasta, tecnicoId, marcaId, tipoEquipo, slaExclDer, showCharts]);
 
   // Abrir/cerrar config por query o ruta
   useEffect(() => {
@@ -132,7 +135,7 @@ export default function Metricas() {
   function reloadPresets(){ try { setPresets(JSON.parse(localStorage.getItem('metricas_presets')||'[]')||[]); } catch {} }
   function savePreset(){
     const name = (presetName || '').trim(); if(!name) return;
-    const obj = { name, filters: { from: desde, to: hasta, tecnicoId, marcaId, tipoEquipo, slaExclDer } };
+    const obj = { name, filters: { from: desdeClamped, to: hasta, tecnicoId, marcaId, tipoEquipo, slaExclDer } };
     const list = presets.filter(p=>p.name!==name).concat([obj]);
     localStorage.setItem('metricas_presets', JSON.stringify(list));
     setPresets(list); setPresetSel(name); setPresetName('');
@@ -157,7 +160,7 @@ export default function Metricas() {
     let alive = true;
     setLoading(true);
     setError("");
-    const params = { from: desde, to: hasta };
+    const params = { from: desdeClamped, to: hasta };
     if (tecnicoId) params.tecnico_id = tecnicoId;
     if (marcaId) params.marca_id = marcaId;
     if (tipoEquipo) params.tipo_equipo = tipoEquipo;
@@ -178,7 +181,7 @@ export default function Metricas() {
   useEffect(() => {
     let alive = true;
     setSeries(null);
-    const params = { from: desde, to: hasta };
+    const params = { from: desdeClamped, to: hasta };
     if (tecnicoId) params.tecnico_id = tecnicoId;
     if (marcaId) params.marca_id = marcaId;
     if (tipoEquipo) params.tipo_equipo = tipoEquipo;
@@ -193,7 +196,7 @@ export default function Metricas() {
   useEffect(() => {
     let alive = true;
     setCalib(null);
-    const params = { from: desde, to: hasta };
+    const params = { from: desdeClamped, to: hasta };
     if (tecnicoId) params.tecnico_id = tecnicoId;
     if (marcaId) params.marca_id = marcaId;
     if (tipoEquipo) params.tipo_equipo = tipoEquipo;
@@ -229,7 +232,7 @@ export default function Metricas() {
     (data?.facturacion_por_tecnico || []).forEach(r => rows.push(["facturacion_aprobada", r.tecnico_nombre, r.facturacion]));
     (data?.utilidad_mo_por_tecnico || []).forEach(r => rows.push(["utilidad_mo", r.tecnico_nombre, r.utilidad_mo]));
     (data?.repuestos_por_tecnico || []).forEach(r => rows.push(["repuestos", r.tecnico_nombre, r.ingreso_repuestos]));
-    downloadCSV(`metricas_tablas_${desde}_${hasta}.csv`, rows);
+    downloadCSV(`metricas_tablas_${desdeClamped}_${hasta}.csv`, rows);
   }
 
   function exportSeriesCSV(kind) {
@@ -249,11 +252,11 @@ export default function Metricas() {
         m.externo?.t_deriv_a_devuelto_dias != null ? m.externo.t_deriv_a_devuelto_dias.toFixed(2) : "",
       ]);
     });
-    downloadCSV(`metricas_series_${kind}_${desde}_${hasta}.csv`, rows);
+    downloadCSV(`metricas_series_${kind}_${desdeClamped}_${hasta}.csv`, rows);
   }
 
   async function exportDetalleTecnicoMensual() {
-    const params = { from: desde, to: hasta, group: 'tecnico' };
+    const params = { from: desdeClamped, to: hasta, group: 'tecnico' };
     if (tecnicoId) params.tecnico_id = tecnicoId;
     if (marcaId) params.marca_id = marcaId;
     if (tipoEquipo) params.tipo_equipo = tipoEquipo;
@@ -287,11 +290,11 @@ export default function Metricas() {
     const rows = [header, ...Array.from(map.values())
       .sort((a,b) => a.period.localeCompare(b.period) || a.tecnico.localeCompare(b.tecnico))
       .map(o => [o.period, o.tecnico, o.entregados, o.facturacion, o.mo, o.rep])];
-    downloadCSV(`metricas_detalle_tecnico_mensual_${desde}_${hasta}.csv`, rows);
+    downloadCSV(`metricas_detalle_tecnico_mensual_${desdeClamped}_${hasta}.csv`, rows);
   }
 
   async function exportDetalleMarcaMensual() {
-    const params = { from: desde, to: hasta, group: 'marca' };
+    const params = { from: desdeClamped, to: hasta, group: 'marca' };
     if (tecnicoId) params.tecnico_id = tecnicoId;
     if (marcaId) params.marca_id = marcaId;
     if (tipoEquipo) params.tipo_equipo = tipoEquipo;
@@ -324,12 +327,12 @@ export default function Metricas() {
       const rows = [header, ...Array.from(map.values())
         .sort((a,b) => a.period.localeCompare(b.period) || a.marca.localeCompare(b.marca))
         .map(o => [o.period, o.marca, o.entregados, o.facturacion, o.mo, o.rep])];
-      downloadCSV(`metricas_detalle_marca_mensual_${desde}_${hasta}.csv`, rows);
+      downloadCSV(`metricas_detalle_marca_mensual_${desdeClamped}_${hasta}.csv`, rows);
     });
   }
 
   async function exportDetalleTipoMensual() {
-    const params = { from: desde, to: hasta, group: 'tipo' };
+    const params = { from: desdeClamped, to: hasta, group: 'tipo' };
     if (tecnicoId) params.tecnico_id = tecnicoId;
     if (marcaId) params.marca_id = marcaId;
     if (tipoEquipo) params.tipo_equipo = tipoEquipo;
@@ -362,12 +365,12 @@ export default function Metricas() {
       const rows = [header, ...Array.from(map.values())
         .sort((a,b) => a.period.localeCompare(b.period) || a.tipo.localeCompare(b.tipo))
         .map(o => [o.period, o.tipo, o.entregados, o.facturacion, o.mo, o.rep])];
-      downloadCSV(`metricas_detalle_tipo_mensual_${desde}_${hasta}.csv`, rows);
+      downloadCSV(`metricas_detalle_tipo_mensual_${desdeClamped}_${hasta}.csv`, rows);
     });
   }
 
   async function exportCalibracionCSV() {
-    const params = { from: desde, to: hasta };
+    const params = { from: desdeClamped, to: hasta };
     if (tecnicoId) params.tecnico_id = tecnicoId;
     if (marcaId) params.marca_id = marcaId;
     if (tipoEquipo) params.tipo_equipo = tipoEquipo;
@@ -388,7 +391,7 @@ export default function Metricas() {
     push('approve_to_repair_days', res.approve_to_repair_days);
     push('repair_to_deliver_days', res.repair_to_deliver_days);
     push('ingreso_to_deliver_days', res.ingreso_to_deliver_days);
-    downloadCSV(`metricas_calibracion_${desde}_${hasta}.csv`, rows);
+    downloadCSV(`metricas_calibracion_${desdeClamped}_${hasta}.csv`, rows);
   }
 
   const cerrados7 = useMemo(() => data?.cerrados_por_tecnico_7d || [], [data]);
@@ -410,8 +413,9 @@ export default function Metricas() {
           <div className="text-sm text-gray-600">Desde</div>
           <input
             type="date"
-            value={desde}
-            onChange={(e) => setDesde(e.target.value)}
+            value={desdeClamped}
+            min={METRICAS_DESDE_MIN}
+            onChange={(e) => setDesde(clampDesdeMin(e.target.value))}
             className="mt-1 border rounded px-2 py-1"
           />
         </div>
@@ -425,7 +429,7 @@ export default function Metricas() {
           />
         </div>
         <div>
-          <div className="text-sm text-gray-600">Tcnico</div>
+          <div className="text-sm text-gray-600">Técnico</div>
           <select className="mt-1 border rounded px-2 py-1 w-full" value={tecnicoId} onChange={(e) => setTecnicoId(e.target.value)}>
             <option value="">Todos</option>
             {tecnicos.map(t => (
@@ -472,10 +476,10 @@ export default function Metricas() {
           <button onClick={exportTablasCSV} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar tablas (CSV)</button>
           <button onClick={() => exportSeriesCSV('monthly')} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar series mensuales (CSV)</button>
           <button onClick={() => exportSeriesCSV('yearly')} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar series anuales (CSV)</button>
-          <button onClick={exportDetalleTecnicoMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por tcnico</button>
+          <button onClick={exportDetalleTecnicoMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por técnico</button>
           <button onClick={exportDetalleMarcaMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por marca</button>
           <button onClick={exportDetalleTipoMensual} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar detalle mensual por tipo</button>
-          <button onClick={exportCalibracionCSV} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar calibracin (CSV)</button>
+          <button onClick={exportCalibracionCSV} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Exportar calibración (CSV)</button>
         </div>
       </div>
 
@@ -491,16 +495,16 @@ export default function Metricas() {
               label="MTTR promedio (días)"
               value={data.mttr_dias != null ? Number(data.mttr_dias).toFixed(1) : "-"}
               status={statusFor(data.mttr_dias != null ? Number(data.mttr_dias) : null, targets?.mttr_days, false)}
-              help="Desde iniciar reparacin hasta reparado"
+              help="Desde iniciar reparación hasta reparado"
             />
             <StatCard
-              label="SLA diagnstico < 24h"
+              label="SLA diagnóstico < 24h"
               value={formatPct(data.sla_diag_24h?.cumplimiento || 0)}
               status={statusFor(((data.sla_diag_24h?.cumplimiento || 0)*100), targets?.sla_diag_pct, true)}
               help={`${data.sla_diag_24h?.dentro || 0} de ${data.sla_diag_24h?.total || 0}`}
             />
             <StatCard
-              label="Aprobacin presupuestos"
+              label="Aprobación presupuestos"
               value={formatPct(data.aprob_presupuestos?.tasa || 0)}
               status={statusFor(((data.aprob_presupuestos?.tasa || 0)*100), targets?.aprob_pres_pct, true)}
               help={`${data.aprob_presupuestos?.aprobados || 0} de ${data.aprob_presupuestos?.emitidos || 0}`}
@@ -551,7 +555,7 @@ export default function Metricas() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Tcnico</th>
+                      <th className="text-left p-2">Técnico</th>
                       <th className="text-right p-2">Cerrados</th>
                     </tr>
                   </thead>
@@ -576,7 +580,7 @@ export default function Metricas() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Tcnico</th>
+                      <th className="text-left p-2">Técnico</th>
                       <th className="text-right p-2">En curso</th>
                     </tr>
                   </thead>
@@ -602,7 +606,7 @@ export default function Metricas() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 text-gray-600">
-                    <th className="text-left p-2">Tcnico</th>
+                    <th className="text-left p-2">Técnico</th>
                     <th className="text-right p-2">Cerrados</th>
                   </tr>
                 </thead>
@@ -680,7 +684,7 @@ export default function Metricas() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 text-gray-600">
-                      <th className="text-left p-2">Tcnico</th>
+                      <th className="text-left p-2">Técnico</th>
                       <th className="text-right p-2">$ Repuestos</th>
                     </tr>
 

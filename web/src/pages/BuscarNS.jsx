@@ -78,7 +78,7 @@ export default function BuscarNS() {
                     onClick={() => nav(`/ingresos/${ingresoId}`)}
                     title="Ir a la hoja de servicio"
                   >
-                    <td className="p-2 underline">{formatOSHelper(r, ingresoId)}</td>
+                    <td className="p-2 underline">{formatOSHelper(r, "")}</td>
                     <td className="p-2">{r?.marca || "-"}</td>
                     <td className="p-2">{r?.modelo || "-"}</td>
                     <td className="p-2">{r?.numero_interno || "-"}</td>

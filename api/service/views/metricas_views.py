@@ -19,6 +19,13 @@ from .helpers import (
     require_roles,
 )
 
+# Global cutoff for metrics: only include ingresos with fecha_ingreso >= 2025-06-26 (inclusive)
+METRICAS_INGRESO_CUTOFF_DATE = dt.date(2025, 6, 26)
+
+def _cutoff_ts():
+    tz = timezone.get_current_timezone()
+    return timezone.make_aware(dt.datetime.combine(METRICAS_INGRESO_CUTOFF_DATE, dt.time.min), tz)
+
 
 def _parse_range_params(request):
     tz = timezone.get_current_timezone()
@@ -33,6 +40,13 @@ def _parse_range_params(request):
             since = now - dt.timedelta(days=30)
     else:
         since = now - dt.timedelta(days=30)
+    # Enforce global cutoff (inclusive)
+    try:
+        cutoff = _cutoff_ts()
+        if since < cutoff:
+            since = cutoff
+    except Exception:
+        pass
     if to_s:
         try:
             d = parse_date(to_s)
@@ -65,6 +79,12 @@ def _filters_join_where(req):
     t_id = req.GET.get("tecnico_id")
     m_id = req.GET.get("marca_id")
     tipo = (req.GET.get("tipo_equipo") or "").strip()
+    # Always apply global cutoff by ingreso date
+    try:
+        params.append(_cutoff_ts())
+        wh.append(" i.fecha_ingreso >= %s ")
+    except Exception:
+        pass
     if t_id:
         try:
             params.append(int(t_id))

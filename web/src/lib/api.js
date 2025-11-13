@@ -471,7 +471,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
     return api.get(`/api/equipos/garantia-reparacion/${qs ? `?${qs}` : ""}`);
   };
 
-  // Check garanta de fbrica (por N/S en Excels de trazabilidad)
+  // TODO: Check garanta de fbrica (por N/S en Excels de trazabilidad)
   export const checkGarantiaFabrica = (numero_serie, marca) => {
     const params = new URLSearchParams();
     if (numero_serie) params.set("numero_serie", numero_serie);
