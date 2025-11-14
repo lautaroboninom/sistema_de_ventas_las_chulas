@@ -39,6 +39,7 @@ from ..serializers import (
     IngresoDetailWithAccesoriosSerializer,
     IngresoListItemSerializer,
 )
+from ..warranty import compute_warranty
 
 
 # Helpers locales (sin mover módulos por ahora)
@@ -1888,7 +1889,15 @@ class NuevoIngresoView(APIView):
 
         numero_serie = (equipo.get("numero_serie") or "").strip()
         ns_key = (numero_serie or "").replace(" ", "").replace("-", "").upper()
-        garantia_bool = bool(equipo.get("garantia"))
+        # Cálculo preliminar de garantía de fábrica (Parte 1)
+        try:
+            wcalc = compute_warranty(
+                numero_serie,
+                brand_id=equipo.get("marca_id"),
+                model_id=equipo.get("modelo_id"),
+            )
+        except Exception:
+            wcalc = {"garantia": None, "vence_el": None, "fecha_venta": None}
 
         if ns_key:
             dup = q(
@@ -1991,6 +2000,15 @@ class NuevoIngresoView(APIView):
                 exec_void("UPDATE devices SET customer_id=%s WHERE id=%s", [customer_id, device_id])
             except Exception:
                 pass
+        # Actualizar fecha de vencimiento de garantía en el device según Excel
+        try:
+            vence = wcalc.get("vence_el") if isinstance(wcalc, dict) else None
+            if vence is None:
+                exec_void("UPDATE devices SET garantia_vence = NULL WHERE id=%s", [device_id])
+            else:
+                exec_void("UPDATE devices SET garantia_vence = %s WHERE id=%s", [vence, device_id])
+        except Exception:
+            pass
         if numero_interno:
             exec_void("UPDATE devices SET numero_interno = NULLIF(%s,'') WHERE id=%s", [numero_interno, device_id])
 
@@ -2080,7 +2098,7 @@ class NuevoIngresoView(APIView):
              [device_id, motivo, ubicacion_id, uid, tecnico_id,
               informe_preliminar, accesorios_text, comentarios_text, equipo_variante,
               prop_nombre, prop_contacto, prop_doc,
-              garantia_rep_final, bool(garantia_bool), etiq_ok]
+              garantia_rep_final, wcalc.get("garantia"), etiq_ok]
         )
 
         # Setear empresa_facturar si la columna existe en la base
@@ -2188,6 +2206,49 @@ class GarantiaReparacionCheckView(APIView):
 class GarantiaFabricaCheckView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
+        # Cálculo basado en Excel GENERAL (Parte 1)
+        ns = (request.GET.get("numero_serie") or "").strip()
+        mg = (request.GET.get("numero_interno") or request.GET.get("mg") or "").strip()
+        if mg and not mg.upper().startswith("MG"):
+            mg = "MG " + mg
+
+        if not ns and not mg:
+            return Response({"within_365_days": False, "fecha_venta": None, "found": False})
+
+        device = None
+        if ns:
+            device = q(
+                "SELECT id, numero_serie, marca_id, model_id FROM devices WHERE numero_serie=%s LIMIT 1",
+                [ns],
+                one=True,
+            )
+        if (not device) and mg:
+            device = q(
+                "SELECT id, numero_serie, marca_id, model_id FROM devices WHERE numero_interno=%s LIMIT 1",
+                [mg],
+                one=True,
+            )
+
+        numero_serie = (device or {}).get("numero_serie") or ns
+        brand_id = (device or {}).get("marca_id")
+        model_id = (device or {}).get("model_id")
+        try:
+            calc = compute_warranty(numero_serie, brand_id=brand_id, model_id=model_id)
+        except Exception:
+            calc = {"garantia": None, "fecha_venta": None, "vence_el": None, "meta": {}}
+
+        en_garantia = bool(calc.get("garantia")) if calc.get("garantia") is not None else False
+        fecha_venta = calc.get("fecha_venta")
+        vence = calc.get("vence_el")
+        meta = calc.get("meta") or {}
+
+        return Response({
+            "within_365_days": en_garantia,
+            "fecha_venta": (fecha_venta.isoformat() if fecha_venta else None),
+            "garantia_vence": (vence.isoformat() if vence else None),
+            "found": bool(fecha_venta),
+            "meta": meta,
+        })
         # Fuente de verdad: Ãºltimo ingreso del equipo
         ns = (request.GET.get("numero_serie") or "").strip()
         mg = (request.GET.get("numero_interno") or request.GET.get("mg") or "").strip()
@@ -2446,6 +2507,7 @@ class IngresoDetalleView(APIView):
         asignado_a = row_est["asignado_a"]
 
         sets_no_estado, params_no_estado = [], []
+        needs_warranty_recompute = False
 
         if "ubicacion_id" in d:
             if rol not in ROL_EDIT_UBIC:
@@ -2603,6 +2665,7 @@ class IngresoDetalleView(APIView):
             if rol not in ROL_EDIT_BASICS:
                 raise PermissionDenied("No autorizado para editar N/S")
             ns = (d.get("numero_serie") or "").strip()
+            needs_warranty_recompute = True
             ns_key = (ns or "").replace(" ", "").replace("-", "").upper()
             # Reasociar el ingreso al device que ya tenga ese N/S (normalizado)
             if ns_key:
@@ -2698,6 +2761,7 @@ class IngresoDetalleView(APIView):
         if ("marca_id" in d) or ("modelo_id" in d):
             if rol not in ROL_EDIT_BASICS:
                 raise PermissionDenied("No autorizado para editar marca/modelo")
+            needs_warranty_recompute = True
             marca_id = d.get("marca_id")
             modelo_id = d.get("modelo_id")
             # Traer device actual
@@ -2754,6 +2818,36 @@ class IngresoDetalleView(APIView):
                 raise PermissionDenied("No autorizado")
             sets_no_estado.append("alquiler_fecha=%s")
             params_no_estado.append(d.get("alquiler_fecha") or None)
+
+        # Recalcular garantía si cambió N/S o marca/modelo
+        if needs_warranty_recompute:
+            try:
+                row_dev = q(
+                    """
+                    SELECT d.id, d.numero_serie, d.marca_id, d.model_id
+                      FROM devices d
+                      JOIN ingresos t ON t.device_id = d.id
+                     WHERE t.id=%s
+                    """,
+                    [ingreso_id],
+                    one=True,
+                )
+                if row_dev:
+                    calc = compute_warranty(
+                        (row_dev.get("numero_serie") or "").strip(),
+                        brand_id=row_dev.get("marca_id"),
+                        model_id=row_dev.get("model_id"),
+                    )
+                    if not any(str(s).strip().startswith("garantia_fabrica=") for s in sets_no_estado):
+                        sets_no_estado.append("garantia_fabrica=%s")
+                        params_no_estado.append(calc.get("garantia"))
+                    vence = calc.get("vence_el")
+                    if vence is None:
+                        exec_void("UPDATE devices SET garantia_vence=NULL WHERE id=%s", [row_dev.get("id")])
+                    else:
+                        exec_void("UPDATE devices SET garantia_vence=%s WHERE id=%s", [vence, row_dev.get("id")])
+            except Exception:
+                pass
 
         diag_present = desc_present or trab_present or fecha_present
         promote_from_ingresado = diag_present and estado_actual == "ingresado"

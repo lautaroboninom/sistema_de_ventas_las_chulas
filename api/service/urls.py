@@ -59,6 +59,7 @@ from .views import (
     RemitoSalidaPdfView, RemitoDerivacionPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
     MetricasResumenView, MetricasSeriesView, MetricasCalibracionView, FeriadosView, MetricasConfigView,
     CatalogoMotivosView,
+    WarrantyRulesView, WarrantyRuleDetailView,
 )
 
 
@@ -107,6 +108,9 @@ urlpatterns = [
     # utilidades
     path("equipos/garantia-reparacion/", GarantiaReparacionCheckView.as_view()),
     path("equipos/garantia-fabrica/", GarantiaFabricaCheckView.as_view()),
+    # Garantias (excepciones administrables)
+    path("garantias/politicas/", WarrantyRulesView.as_view()),  # GET, POST
+    path("garantias/politicas/<int:rule_id>/", WarrantyRuleDetailView.as_view()),  # PATCH, DELETE
 
     # ingresos nuevos / derivación
     path("ingresos/nuevo/", NuevoIngresoView.as_view()),

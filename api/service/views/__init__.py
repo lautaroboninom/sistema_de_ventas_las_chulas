@@ -153,6 +153,7 @@ from .reportes_views import (
 
 # Motivos catálogo (propio de views/)
 from .motivos_view import CatalogoMotivosView
+from .warranty_views import WarrantyRulesView, WarrantyRuleDetailView
 
 __all__ = [
     # auth
@@ -268,4 +269,7 @@ __all__ = [
     "RemitoDerivacionPdfView",
     # motivos (catálogo ENUM ingreso.motivo)
     "CatalogoMotivosView",
+    # warranty rules
+    "WarrantyRulesView",
+    "WarrantyRuleDetailView",
 ]

@@ -211,6 +211,24 @@ CREATE TABLE IF NOT EXISTS ingresos (
   resolucion           TEXT NULL
 );
 
+-- Reglas de garantía (excepciones administrables) - Parte 2 editará, Parte 1 solo lectura
+CREATE TABLE IF NOT EXISTS warranty_rules (
+  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  brand_id      INTEGER NULL REFERENCES marcas(id) ON DELETE SET NULL,
+  model_id      INTEGER NULL REFERENCES models(id) ON DELETE SET NULL,
+  serial_prefix TEXT,
+  days          INTEGER NOT NULL,
+  notas         TEXT,
+  activo        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by    INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by    INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+  updated_at    TIMESTAMPTZ NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wr_brand ON warranty_rules(brand_id);
+CREATE INDEX IF NOT EXISTS idx_wr_model ON warranty_rules(model_id);
+CREATE INDEX IF NOT EXISTS idx_wr_activo ON warranty_rules(activo);
+
 -- =============================
 -- Sincronización snapshot devices <- último ingreso
 -- =============================

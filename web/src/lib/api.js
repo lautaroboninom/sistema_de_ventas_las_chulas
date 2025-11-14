@@ -479,6 +479,17 @@ export const postModelo = (brandId, payloadOrNombre) => {
     const qs = params.toString();
     return api.get(`/api/equipos/garantia-fabrica/${qs ? `?${qs}` : ""}`);
   };
+  // Garantías: políticas (excepciones administrables)
+  export const listWarrantyRules = (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/garantias/politicas/${qs ? `?${qs}` : ""}`);
+  };
+  export const createWarrantyRule = (payload) =>
+    api.post(`/api/garantias/politicas/`, payload);
+  export const patchWarrantyRule = (id, payload) =>
+    api.patch(`/api/garantias/politicas/${id}/`, payload);
+  export const deleteWarrantyRule = (id) =>
+    api.delete(`/api/garantias/politicas/${id}/`);
   export const getGeneralPorCliente = (customerId) =>
     api.get(`/api/clientes/${customerId}/general/`);
 

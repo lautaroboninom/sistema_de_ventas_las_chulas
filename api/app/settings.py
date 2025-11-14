@@ -197,6 +197,15 @@ TRAZABILIDAD_ROOT = os.getenv(
     "TRAZABILIDAD_ROOT",
     r"\\SERVERDATA\Datos\MG BIO\TRAZABILIDAD"
 )
+"""
+Ruta absoluta del Excel principal de trazabilidad (GENERAL).
+Se puede sobreescribir con la variable TRAZABILIDAD_GENERAL_FILE.
+Si no se define, se intenta resolver a partir de TRAZABILIDAD_ROOT.
+"""
+TRAZABILIDAD_GENERAL_FILE = os.getenv(
+    "TRAZABILIDAD_GENERAL_FILE",
+    os.path.join(TRAZABILIDAD_ROOT, "@GENERAL.xlsx")
+)
 INGRESO_MEDIA_STORAGE_PREFIX = os.getenv('INGRESO_MEDIA_STORAGE_PREFIX', 'ingresos')
 
 # --- Seguridad / Autenticación (vistas) ---

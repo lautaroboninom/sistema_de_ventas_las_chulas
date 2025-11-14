@@ -67,13 +67,11 @@ export default function DiagnosticoTab({
       await postCerrarReparacion(id, payload);
       await refreshIngreso();
       try {
-        if (String(resolucion) === RESOLUCION.CAMBIO) {
-          const blob = await getBlob(`/api/ingresos/${id}/remito/`);
-          if (blob instanceof Blob) {
-            const url = URL.createObjectURL(blob);
-            window.open(url, "_blank", "noopener");
-            setTimeout(() => URL.revokeObjectURL(url), 60_000);
-          }
+        const blob = await getBlob(`/api/ingresos/${id}/remito/`);
+        if (blob instanceof Blob) {
+          const url = URL.createObjectURL(blob);
+          window.open(url, "_blank", "noopener");
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
         }
       } catch {}
       setErr("");
