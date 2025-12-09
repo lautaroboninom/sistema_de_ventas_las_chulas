@@ -1,11 +1,13 @@
 // web/src/pages/AdminListos.jsx
 import { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
+import api, { getBlob } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateOnly, norm, tipoEquipoOf, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import StatusChip from "../components/StatusChip.jsx";
 import { resolutionLabel } from "../lib/constants";
 import useQueryState from "../hooks/useQueryState";
+import { useAuth } from "../context/AuthContext";
+import { canRelease } from "../lib/authz";
 
 
 // Ajust si tu backend usa otra ruta
@@ -18,7 +20,10 @@ export default function AdminListos() {
   const [err, setErr] = useState("");
   const [q, setQ] = useQueryState("q", "");
   const [busyId, setBusyId] = useState(null);
+  const [remitoBusyId, setRemitoBusyId] = useState(null);
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const release = canRelease(user);
 
   async function load() {
     try {
@@ -26,13 +31,15 @@ export default function AdminListos() {
       setLoading(true);
       const data = await api.get(ENDPOINT);
       const list = Array.isArray(data) ? data : [];
-      // Orden sugerido: primero los ms recientes marcados como "listos"
+      const clientNameOf = (row) => (row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "").trim();
+      const readyTime = (row) =>
+        new Date(
+          row?.fecha_entrega ?? row?.fecha_listo ?? row?.fecha_reparado ?? row?.fecha_estado ?? row?.estado_fecha ?? 0,
+        ).getTime();
       list.sort((a, b) => {
-        const da =
-          new Date(a?.fecha_entrega ?? a?.fecha_listo ?? a?.fecha_reparado ?? a?.fecha_estado ?? a?.estado_fecha ?? 0).getTime();
-        const db =
-          new Date(b?.fecha_entrega ?? b?.fecha_listo ?? b?.fecha_reparado ?? b?.fecha_estado ?? b?.estado_fecha ?? 0).getTime();
-        return db - da;
+        const nameComparison = clientNameOf(a).localeCompare(clientNameOf(b), undefined, { sensitivity: "base" });
+        if (nameComparison !== 0) return nameComparison;
+        return readyTime(b) - readyTime(a);
       });
       setRows(list);
     } catch (e) {
@@ -91,6 +98,26 @@ export default function AdminListos() {
       setErr(e?.message || "No se pudo marcar como entregado");
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function verOrdenSalida(row) {
+    const id = ingresoIdOf(row);
+    if (!id) return;
+    try {
+      setRemitoBusyId(id);
+      const blob = await getBlob(`/api/ingresos/${id}/remito/`);
+      if (!(blob instanceof Blob)) {
+        throw new Error("La respuesta no fue un PDF");
+      }
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      await load();
+    } catch (e) {
+      setErr(e?.message || "No se pudo obtener la orden de salida");
+    } finally {
+      setRemitoBusyId(null);
     }
   }
 
@@ -162,12 +189,26 @@ export default function AdminListos() {
                   </td>
                   <td className="p-2">{nsPreferInternoOf(row)}</td>
                   <td className="p-2 whitespace-nowrap">
-                    {formatDateOnly(row?.fecha_entrega ?? row?.fecha_listo ?? row?.fecha_reparado ?? row?.fecha_estado ?? row?.estado_fecha)}
+                    {formatDateOnly(row?.fecha_listo ?? "-")}
                   </td>
                   <td className="p-2">
                     <div className="flex gap-2 justify-end">
+                      {release && (
+                        <button
+                          className="btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            verOrdenSalida(row);
+                          }}
+                          disabled={remitoBusyId === ingresoIdOf(row)}
+                          aria-busy={remitoBusyId === ingresoIdOf(row) ? "true" : "false"}
+                          title="Ver o reimprimir orden de salida"
+                        >
+                          Ver OS
+                        </button>
+                      )}
                       <button
-                        className="btn"
+                        className="btn-secondary"
                         onClick={(e) => {
                           e.stopPropagation(); // no navegar al clickear
                           entregar(row);

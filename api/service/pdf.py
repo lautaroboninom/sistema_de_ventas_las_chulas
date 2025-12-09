@@ -1,6 +1,7 @@
 from io import BytesIO
 from decimal import Decimal
 from django.db import connection
+from django.core.files.storage import default_storage
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -668,6 +669,8 @@ def render_quote_pdf(ingreso_id: int):
 
     c.setFont("Helvetica", 11)
     c.drawString(ml, y, f"Señor(es): {head['cliente']}")
+    fecha = fecha_larga(head["fecha_emitido"])
+    c.drawRightString(W - ml, y, fecha) 
     y -= 16
 
     # Datos adicionales del cliente
@@ -726,9 +729,86 @@ def render_quote_pdf(ingreso_id: int):
     diag = (head.get("descripcion_problema") or "").strip()
     trab = (head.get("trabajos_realizados") or "").strip()
     diag_trab = (diag + ("\n" if diag and trab else "") + trab) or "-"
-    y = _draw_block(c, ml, y, "Detalle Rep. (Diagnóstico / Trabajos a realizar)", diag_trab, W-2*ml) - 2
+    y = _draw_block(c, ml, y, "Detalle Rep. (Diagnostico / Trabajos a realizar)", diag_trab, W-2*ml) - 2
 
-    y -= 6
+
+    # Imagenes adjuntas (2 por fila) con pie de foto usando el comentario u original_name
+    try:
+        media_rows = _q(
+            """
+            SELECT storage_path, thumbnail_path, comentario, original_name, mime_type
+              FROM ingreso_media
+             WHERE ingreso_id=%s
+               AND LOWER(COALESCE(mime_type,'')) LIKE 'image/%%'
+             ORDER BY created_at ASC, id ASC
+            """,
+            [ingreso_id],
+        ) or []
+    except Exception:
+        media_rows = []
+    media_rows = [m for m in media_rows if (m.get("storage_path") or m.get("thumbnail_path"))]
+    if media_rows:
+        price_reserved = 80 * mm  # espacio para totales y condiciones
+        row_h = 58 * mm
+        img_box_h = 60 * mm
+        gutter = 6 * mm
+        col_w = (W - 2 * ml - gutter) / 2
+        available = y - price_reserved
+        rows_fit = int(available // row_h)
+        max_imgs = max(0, rows_fit * 2)
+        imgs_to_draw = media_rows[:max_imgs]
+        if imgs_to_draw:
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(ml, y, "Imagenes:")
+            y -= 8
+            rows_used = (len(imgs_to_draw) + 1) // 2
+            for idx, img in enumerate(imgs_to_draw):
+                row_idx = idx // 2
+                col_idx = idx % 2
+                y_row_top = y - row_idx * row_h
+                x_col = ml + col_idx * (col_w + gutter)
+                box_bottom = y_row_top - img_box_h
+
+                path_img = (img.get("thumbnail_path") or img.get("storage_path") or "").strip()
+                drew_image = False
+                if path_img:
+                    try:
+                        with default_storage.open(path_img, "rb") as fh:
+                            img_bytes = fh.read()
+                        reader = ImageReader(BytesIO(img_bytes))
+                        iw, ih = reader.getSize()
+                        scale = min(col_w / float(iw or 1), img_box_h / float(ih or 1))
+                        w = max(1.0, iw * scale)
+                        h = max(1.0, ih * scale)
+                        x_img = x_col + (col_w - w) / 2
+                        y_img = box_bottom + (img_box_h - h) / 2
+                        c.drawImage(reader, x_img, y_img, width=w, height=h, preserveAspectRatio=True, mask='auto')
+                        drew_image = True
+                    except Exception:
+                        drew_image = False
+                if not drew_image:
+                    c.setStrokeColor(colors.lightgrey)
+                    c.rect(x_col, box_bottom, col_w, img_box_h, stroke=1, fill=0)
+                    c.setStrokeColor(colors.black)
+                else:
+                    # Borde fino alrededor de la imagen
+                    #c.setLineWidth(0.4)
+                    #c.rect(x_col, box_bottom, col_w, img_box_h, stroke=1, fill=0)
+                    c.setLineWidth(1)  # restaurar
+
+                caption = (img.get("comentario") or "").strip()
+                if caption:
+                    c.setFont("Helvetica", 8)
+                    cap_lines = _wrap_lines(caption, "Helvetica", 8, col_w)
+                    cap_y = box_bottom - 7
+                    for ln in cap_lines[:2]:
+                        c.drawString(x_col, cap_y, ln)
+                        cap_y -= 9
+
+            y -= rows_used * row_h
+            y -= 8
+
+    y -= 12
     c.setLineWidth(0.6); c.line(ml, y, W-ml, y); y -= 10
     c.setFont("Helvetica", 10)
     c.drawRightString(ml + 140*mm, y, "Total Neto :")
@@ -740,17 +820,16 @@ def render_quote_pdf(ingreso_id: int):
     c.setFont("Helvetica-Bold", 11)
     c.drawRightString(ml + 140*mm, y, "Total:")
     c.drawRightString(W - ml, y, f"$ {money_es(Decimal(head['total']))}")
-    y -= 18
+    y -= 50
 
     c.setFont("Helvetica", 10)
     forma_pago = head.get("forma_pago") or "30 F.F."
-    c.drawString(ml, y, f"FormaPago: {forma_pago}"); y -= 12
-    c.drawString(ml, y, "PlazoEntrega: < 5 DÍAS HÁBILES"); y -= 12
-    c.drawString(ml, y, "Garantí­a: 90 DÍAS"); y -= 12
-    c.drawString(ml, y, "Mant. de Oferta: 7 DÍAS"); y -= 18
+    c.drawString(ml, y, "PlazoEntrega: < 5 DÍAS HÁBILES")
+    c.drawRightString(W - ml, y, f"FormaPago: {forma_pago}"); y -= 12
+    c.drawString(ml, y, "Garantía: 90 DÍAS")
+    c.drawRightString(W - ml, y, "Mant. de Oferta: 7 DÍAS"); y -= 18
 
-    fecha = fecha_larga(head["fecha_emitido"])
-    c.drawString(ml, y, fecha); y -= 18
+    y -= 25
     c.drawString(ml, y, "Atte. Serv.Técnico"); y -= 14
     c.setFont("Helvetica-Oblique", 9)
     c.drawString(ml, y, "Ante cualquier duda esperamos su llamado")

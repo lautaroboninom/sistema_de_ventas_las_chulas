@@ -99,12 +99,12 @@ class Command(BaseCommand):
                        COALESCE(b.nombre,'') AS marca,
                        COALESCE(m.nombre,'') AS modelo
                   FROM ingresos t
-                  JOIN devices d ON d.id = t.device_id
+                 JOIN devices d ON d.id = t.device_id
                   LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                   LEFT JOIN marcas b ON b.id = d.marca_id
                   LEFT JOIN models m ON m.id = d.model_id
                  WHERE LOWER(loc.nombre) = LOWER('taller')
-                   AND t.estado NOT IN ('liberado','entregado','alquilado')
+                   AND t.estado NOT IN ('liberado','entregado','alquilado','baja')
                    AND DATE(COALESCE(t.fecha_ingreso, t.fecha_creacion)) <= DATE('2023-12-31')
                 """
             )

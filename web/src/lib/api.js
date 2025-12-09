@@ -252,6 +252,8 @@ export const deleteCatalogVariante = (varianteId) =>
     api.patch(`/api/catalogos/clientes/${id}/`, payload);
   export const deleteCliente = (id) =>
     api.del(`/api/catalogos/clientes/${id}/`);
+  export const postClienteMerge = (sourceId, targetId) =>
+    api.post("/api/catalogos/clientes/merge/", { source_id: sourceId, target_id: targetId });
   export const getRoles = () => api.get("/api/catalogos/roles/");
   export const getMarcas = () => api.get("/api/catalogos/marcas/");
   export const postMarca = (nombre) =>
@@ -449,6 +451,9 @@ export const postModelo = (brandId, payloadOrNombre) => {
   // Entregar (requiere remito; opcional factura y fecha; si resolucion=cambio: serial_confirm requerido)
   export const postEntregarIngreso = (ingresoId, payload) =>
     api.post(`/api/ingresos/${ingresoId}/entregar/`, payload);
+  // Marcar baja
+  export const postBajaIngreso = (ingresoId) =>
+    api.post(`/api/ingresos/${ingresoId}/baja/`, {});
   export const getPendientesGeneral = () => api.get("/api/ingresos/pendientes/");
   export const getPendientesPresupuesto = () =>
     api.get("/api/presupuestos/pendientes/");
@@ -462,7 +467,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/equipos/${qs ? `?${qs}` : ""}`);
   };
-  // Check garanta de reparacin por N/S
+  // Check garantía de reparación por N/S
   export const checkGarantiaReparacion = (numero_serie, numero_interno) => {
     const params = new URLSearchParams();
     if (numero_serie) params.set("numero_serie", numero_serie);
@@ -471,11 +476,13 @@ export const postModelo = (brandId, payloadOrNombre) => {
     return api.get(`/api/equipos/garantia-reparacion/${qs ? `?${qs}` : ""}`);
   };
 
-  // TODO: Check garanta de fbrica (por N/S en Excels de trazabilidad)
-  export const checkGarantiaFabrica = (numero_serie, marca) => {
+  // Check garantía de fábrica (por N/S + opcional marca/modelo para aplicar excepciones)
+  export const checkGarantiaFabrica = (numero_serie, marca, opts = null) => {
     const params = new URLSearchParams();
     if (numero_serie) params.set("numero_serie", numero_serie);
     if (marca) params.set("marca", marca);
+    if (opts && opts.brand_id != null) params.set("brand_id", opts.brand_id);
+    if (opts && opts.model_id != null) params.set("model_id", opts.model_id);
     const qs = params.toString();
     return api.get(`/api/equipos/garantia-fabrica/${qs ? `?${qs}` : ""}`);
   };
@@ -586,6 +593,11 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export async function postCerrarReparacion(id, body) {
     // body = { resolucion: "reparado" | "no_reparado" | "no_se_encontro_falla" | "presupuesto_rechazado" | "cambio", serial_cambio?: string }
     return api.post(`/api/ingresos/${id}/cerrar/`, body);
+  }
+
+  // Marcar controlado sin defecto (equipos propios revisados sin falla)
+  export async function postMarcarControladoSinDefecto(id) {
+    return api.post(`/api/ingresos/${id}/controlado-sin-defecto/`);
   }
 
   export async function postMarcarReparado(id) {

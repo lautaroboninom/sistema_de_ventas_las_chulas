@@ -9,7 +9,8 @@ from .views import (
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     NoAplicaPresupuestoView, QuitarNoAplicaPresupuestoView,
     PendientesPresupuestoView, PresupuestadosView, PresupuestadosExportView,
-    MarcarReparadoView, EntregarIngresoView, GarantiaReparacionCheckView, GarantiaFabricaCheckView,
+    MarcarReparadoView, MarcarControladoSinDefectoView, EntregarIngresoView, GarantiaReparacionCheckView, GarantiaFabricaCheckView,
+    DarBajaIngresoView,
     ListosParaRetiroView,
 
     # listados / generales
@@ -42,7 +43,7 @@ from .views import (
     CatalogoRolesView, CerrarReparacionView,
 
     # clientes / marcas-modelos / proveedores externos
-    ClientesView, ClienteDeleteView,
+    ClientesView, ClienteDeleteView, ClienteMergeView,
     MarcaDeleteView, MarcaDeleteCascadeView, ModelosPorMarcaView, ModeloDeleteView,
     ModelMergeView, MarcaMergeView,
     
@@ -76,7 +77,9 @@ urlpatterns = [
     # ténico / ingresos (acciones)
     path("tecnico/mis-pendientes/", MisPendientesView.as_view()),
     path("ingresos/<int:ingreso_id>/reparado/", MarcarReparadoView.as_view()),
+    path("ingresos/<int:ingreso_id>/controlado-sin-defecto/", MarcarControladoSinDefectoView.as_view()),
     path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
+    path("ingresos/<int:ingreso_id>/baja/", DarBajaIngresoView.as_view()),
 
     # presupuestos
     path("quotes/<int:ingreso_id>/emitir/", EmitirPresupuestoView.as_view()),
@@ -139,6 +142,7 @@ urlpatterns = [
 
     # administración de clientes / marcas / modelos
     path("catalogos/clientes/", ClientesView.as_view()),                         # GET/POST
+    path("catalogos/clientes/merge/", ClienteMergeView.as_view()),               # POST {source_id,target_id}
     path("catalogos/clientes/<int:cid>/", ClienteDeleteView.as_view()),          # DELETE
     path("catalogos/marcas/<int:bid>/", MarcaDeleteView.as_view()),              # DELETE
     path("catalogos/marcas/<int:bid>/eliminar-con-modelos/", MarcaDeleteCascadeView.as_view()),  # DELETE (cascade)

@@ -6,10 +6,7 @@ DEFAULT_LOCATION_NAMES = [
     "Taller",
     "Estantería de Alquiler",
     "Sarmiento",
-    "Depósito SEPID",
-    "Desguace",
-    "Alquilado",
-    "Vendido",
+    "-",
 ]
 
 # Remapeos de alias de ubicaciones a forma canónica

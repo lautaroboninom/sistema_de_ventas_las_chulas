@@ -12,7 +12,7 @@ CREATE EXTENSION IF NOT EXISTS citext;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ticket_state') THEN
     CREATE TYPE ticket_state AS ENUM (
-      'ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','derivado','liberado','alquilado'
+      'ingresado','diagnosticado','presupuestado','reparar','controlado_sin_defecto','reparado','entregado','baja','derivado','liberado','alquilado'
     );
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'motivo_ingreso') THEN
@@ -125,7 +125,7 @@ INSERT INTO locations(nombre) VALUES
   ('Taller'),
   ('Sarmiento'),
   ('Estantería de Alquiler'),
-  ('Desguace')
+  ('-')
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -763,3 +763,4 @@ DO $$ BEGIN
     FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
   END IF;
 END $$;
+

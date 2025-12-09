@@ -37,7 +37,7 @@ class RemitoSalidaPdfView(APIView):
             """
           UPDATE ingresos
              SET estado = 'liberado'
-           WHERE id=%s AND estado <> 'entregado'
+           WHERE id=%s AND estado NOT IN ('entregado','baja')
         """,
             [ingreso_id],
         )

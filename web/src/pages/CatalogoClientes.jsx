@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getClientes, postCliente, deleteCliente, patchCliente } from "../lib/api";
+import { getClientes, postCliente, deleteCliente, patchCliente, postClienteMerge } from "../lib/api";
 
 const Input = (p) => <input {...p} className="border rounded p-2 w-full" />;
 
@@ -11,6 +11,9 @@ export default function CatalogoClientes() {
   const [edit, setEdit] = useState(null);
   const [ef, setEf] = useState({ razon_social: "", cod_empresa: "", telefono: "", telefono_2: "", email: "" });
   const [savingEdit, setSavingEdit] = useState(false);
+  const [mergeFrom, setMergeFrom] = useState("");
+  const [mergeTo, setMergeTo] = useState("");
+  const [merging, setMerging] = useState(false);
 
   const load = async () => {
     setErr("");
@@ -88,6 +91,37 @@ export default function CatalogoClientes() {
     }
   };
 
+  const merge = async (e) => {
+    e.preventDefault();
+    if (!mergeFrom || !mergeTo) {
+      setErr("Elegi origen y destino para unificar.");
+      return;
+    }
+    if (mergeFrom === mergeTo) {
+      setErr("El origen y el destino no pueden ser el mismo cliente.");
+      return;
+    }
+    const src = rows.find((r) => String(r.id) === String(mergeFrom));
+    const dst = rows.find((r) => String(r.id) === String(mergeTo));
+    const srcLabel = src ? `${src.razon_social} (#${src.id})` : mergeFrom;
+    const dstLabel = dst ? `${dst.razon_social} (#${dst.id})` : mergeTo;
+    if (!confirm(`Unificar ${srcLabel} dentro de ${dstLabel}? Se moveran los equipos y se eliminara el duplicado.`)) return;
+    try {
+      setMerging(true);
+      setErr("");
+      setMsg("");
+      await postClienteMerge(mergeFrom, mergeTo);
+      setMsg("Clientes unificados");
+      setMergeFrom("");
+      setMergeTo("");
+      await load();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setMerging(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Clientes</h1>
@@ -117,6 +151,52 @@ export default function CatalogoClientes() {
         </div>
         <div className="md:col-span-4">
           <button className="bg-blue-600 text-white px-4 py-2 rounded">Agregar</button>
+        </div>
+      </form>
+
+      <form onSubmit={merge} className="border rounded p-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="md:col-span-3 font-semibold">Unificar clientes duplicados</div>
+        <div>
+          <label className="text-sm">Mover (origen)</label>
+          <select
+            className="border rounded p-2 w-full"
+            value={mergeFrom}
+            onChange={(e) => setMergeFrom(e.target.value)}
+          >
+            <option value="">-- Elegi cliente a eliminar --</option>
+            {rows.map((c) => (
+              <option key={c.id} value={c.id}>
+                #{c.id} - {c.cod_empresa} - {c.razon_social}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-sm">Conservar (destino)</label>
+          <select
+            className="border rounded p-2 w-full"
+            value={mergeTo}
+            onChange={(e) => setMergeTo(e.target.value)}
+          >
+            <option value="">-- Elegi cliente a conservar --</option>
+            {rows.map((c) => (
+              <option key={c.id} value={c.id}>
+                #{c.id} - {c.cod_empresa} - {c.razon_social}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-end">
+          <button
+            type="submit"
+            className="bg-amber-600 text-white px-4 py-2 rounded disabled:opacity-60"
+            disabled={merging}
+          >
+            {merging ? "Unificando..." : "Unificar y borrar origen"}
+          </button>
+        </div>
+        <div className="md:col-span-3 text-xs text-gray-600">
+          Mueve todos los equipos del origen al destino y elimina el duplicado (util para casos como OXICASTHOMECARE).
         </div>
       </form>
 

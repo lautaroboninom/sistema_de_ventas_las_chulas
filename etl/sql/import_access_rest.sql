@@ -134,7 +134,7 @@ SELECT
   s.id,
   s.id,
   CASE
-    WHEN LOWER(TRIM(s.estado)) IN ('ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','derivado','liberado','alquilado') THEN LOWER(TRIM(s.estado))
+    WHEN LOWER(TRIM(s.estado)) IN ('ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','baja','derivado','liberado','alquilado') THEN LOWER(TRIM(s.estado))
     WHEN TRIM(s.estado) IN ('6','06','006') THEN 'ingresado'
     WHEN LOWER(TRIM(s.estado)) IN ('deposito','depósito') THEN 'ingresado'
     ELSE 'ingresado'
@@ -329,3 +329,4 @@ SET @cur := (SELECT IFNULL(MAX(id),0)+1 FROM ingresos);
 SET @next := GREATEST(@cur, 27868);
 SET @sql := CONCAT('ALTER TABLE ingresos AUTO_INCREMENT=', @next);
 PREPARE s1 FROM @sql; EXECUTE s1; DEALLOCATE PREPARE s1;
+

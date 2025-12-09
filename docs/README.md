@@ -12,7 +12,7 @@ Manual del Sistema de Reparaciones
     - Aprobar/emitir presupuestos: jefatura.
 
 - Estados y flujos
-  - Estados de ticket (`ticket_state`, ver `sql/schema.sql`): ingresado, diagnosticado, presupuestado, reparar, reparado, liberado, entregado, derivado, alquilado.
+  - Estados de ticket (`ticket_state`, ver `sql/schema.sql`): ingresado, diagnosticado, presupuestado, reparar, reparado, liberado, entregado, baja, derivado, alquilado.
   - Estados de presupuesto (`quote_estado`, ver `sql/schema.sql`): pendiente, emitido, presupuestado, aprobado, rechazado, no_aplica.
   - Trigger sync quote→ingreso (`sql/schema.sql`): al aprobar presupuesto, si el ingreso estaba en ingresado/diagnosticado/presupuestado, pasa a reparar.
 
@@ -124,3 +124,4 @@ flowchart TD
   H --> I[POST /ingresos/:id/derivaciones/:deriv/devolver/]
   I --> J[estado='ingresado' + notificar técnico (best-effort)]
 ```
+

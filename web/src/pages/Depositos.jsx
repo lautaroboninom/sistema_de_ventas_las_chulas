@@ -16,19 +16,28 @@ export default function Depositos() {
     getUbicaciones().then(setUbicaciones).catch(e => setErr(e.message||"Error ubicaciones"));
   }, []);
 
+  const ubicacionesFiltradas = useMemo(() => {
+    const banned = new Set(["-", "alquilado", "desguace"]);
+    return (ubicaciones || []).filter(u => !banned.has(String(u?.nombre || "").toLowerCase().trim()));
+  }, [ubicaciones]);
+
   const ubicacionNombre = useMemo(() => {
-    const u = ubicaciones.find(x => String(x.id) === String(ubicacionId));
+    const u = ubicacionesFiltradas.find(x => String(x.id) === String(ubicacionId));
     return u?.nombre || "";
-  }, [ubicaciones, ubicacionId]);
+  }, [ubicacionesFiltradas, ubicacionId]);
 
   useEffect(() => {
     if (!ubicacionId) { setRows([]); return; }
     (async () => {
       setLoading(true); setErr("");
       try {
-        // La API filtra por nombre (param "ubicacion"), no por id
         const params = {};
-        if (ubicacionNombre) params["ubicacion"] = ubicacionNombre;
+        if (ubicacionId === "bajas") {
+          params["estado"] = "baja";
+        } else if (ubicacionNombre) {
+          // La API filtra por nombre (param "ubicacion"), no por id
+          params["ubicacion"] = ubicacionNombre;
+        }
         const data = await getGeneralEquipos(params);
         setRows(data);
       } catch (e) {
@@ -39,12 +48,13 @@ export default function Depositos() {
 
   return (
     <div className="p-4 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-3">Depósitos</h1>
+      <h1 className="text-2xl font-bold mb-3">Depósitos/Bajas</h1>
       <div className="flex items-center gap-2 mb-3">
         <span className="text-sm">Depósito / Ubicación:</span>
         <select className="border rounded p-2" value={ubicacionId} onChange={(e)=>setUbicacionId(e.target.value)}>
           <option value="">Elegí una Ubicación</option>
-          {ubicaciones.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
+          <option value="bajas">Bajas</option>
+          {ubicacionesFiltradas.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
         </select>
       </div>
       {err && <div className="bg-red-100 text-red-700 border border-red-300 p-2 rounded mb-2">{err}</div>}
@@ -83,4 +93,3 @@ export default function Depositos() {
     </div>
   );
 }
-

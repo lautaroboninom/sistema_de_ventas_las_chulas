@@ -14,6 +14,13 @@ export default function PrincipalTab(props) {
     editBasics,
     formBasics,
     setFormBasics,
+    clientes,
+    clientesPerm,
+    clienteRsInput,
+    setClienteRsInput,
+    clienteCodInput,
+    setClienteCodInput,
+    syncClienteFromInputs,
     marcas,
     marcaIdSel,
     setMarcaIdSel,
@@ -117,6 +124,7 @@ export default function PrincipalTab(props) {
   const _selUb = (ubicacionId ? Number(ubicacionId) : null);
   const _curUb = (data?.ubicacion_id ?? null);
   const ubDirty = _selUb !== null && _selUb !== _curUb;
+  const isEntregadoOBaja = ["entregado", "baja"].includes((data?.estado || "").toLowerCase());
   // Labels auxiliares (evitar expresiones JSX complejas)
   const pendingLabel = (() => {
     if (data?.tecnico_solicitado_nombre) return `Solicitud de asignación pendiente: ${data.tecnico_solicitado_nombre}`;
@@ -129,6 +137,19 @@ export default function PrincipalTab(props) {
     const quien = name ? name : (id ? `ID ${id}` : "otro técnico");
     return `Ya hay una solicitud pendiente para ${quien}.`;
   })();
+
+  // Cliente: validaci?n contra cat?logo (igual que en NuevoIngreso)
+  const rsMatch = useMemo(() => {
+    if (!clienteRsInput) return null;
+    return (clientes || []).find((c) => (c?.razon_social || "").toLowerCase() === clienteRsInput.trim().toLowerCase()) || null;
+  }, [clienteRsInput, clientes]);
+  const codMatch = useMemo(() => {
+    if (!clienteCodInput) return null;
+    return (clientes || []).find((c) => String(c?.cod_empresa || "").toLowerCase() === clienteCodInput.trim().toLowerCase()) || null;
+  }, [clienteCodInput, clientes]);
+  const clienteMismatch = useMemo(() => {
+    return !!(rsMatch && codMatch && rsMatch.id !== codMatch.id);
+  }, [rsMatch, codMatch]);
 
   // Catálogo de accesorios (para alquiler)
   const [accesCatalogo, setAccesCatalogo] = useState([]);
@@ -227,7 +248,10 @@ export default function PrincipalTab(props) {
     }
     const h = setTimeout(async () => {
       try {
-        const r = await checkGarantiaFabrica(ns, marcaName);
+        const r = await checkGarantiaFabrica(ns, marcaName, {
+          brand_id: data?.marca_id ?? null,
+          model_id: data?.model_id ?? null,
+        });
         const enGarantia = !!r.within_365_days;
         setFormBasics((s) => ({ ...(s || {}), garantia: enGarantia }));
       } catch {
@@ -235,7 +259,7 @@ export default function PrincipalTab(props) {
       }
     }, 400);
     return () => clearTimeout(h);
-  }, [editBasics, formBasics?.numero_serie, formBasics?.marca, data?.marca]);
+  }, [editBasics, formBasics?.numero_serie, formBasics?.marca, data?.marca, data?.marca_id, data?.model_id]);
 
   return (
     <>
@@ -246,22 +270,67 @@ export default function PrincipalTab(props) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
             <Row label="Razón  social">
               {editBasics ? (
-                <input
-                  className="border rounded p-1 w-64"
-                  value={formBasics?.razon_social ?? ""}
-                  onChange={(e) => setFormBasics((s) => ({ ...s, razon_social: e.target.value }))}
-                />
+                <>
+                  <input
+                    className="border rounded p-1 w-64"
+                    list={clientesPerm ? "service_clientes_rs" : undefined}
+                    value={clienteRsInput}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setClienteRsInput(v);
+                      const c = syncClienteFromInputs(v, clienteCodInput);
+                      if (c && String(clienteCodInput || "").toLowerCase() !== String(c.cod_empresa || "").toLowerCase()) {
+                        setClienteCodInput(c.cod_empresa || "");
+                      }
+                    }}
+                    placeholder="Eleg? de la lista"
+                  />
+                  {clientesPerm && (
+                    <datalist id="service_clientes_rs">
+                      {(clientes || []).map((c) => (
+                        <option key={c.id} value={c.razon_social} />
+                      ))}
+                    </datalist>
+                  )}
+                  {clienteRsInput && !rsMatch && (
+                    <div className="text-xs text-amber-700 mt-1">Selecciona una razón social v?lida de la lista.</div>
+                  )}
+                </>
               ) : (
                 data.razon_social
               )}
             </Row>
             <Row label="Código empresa">
               {editBasics ? (
-                <input
-                  className="border rounded p-1 w-40"
-                  value={formBasics?.cod_empresa ?? ""}
-                  onChange={(e) => setFormBasics((s) => ({ ...s, cod_empresa: e.target.value }))}
-                />
+                <>
+                  <input
+                    className="border rounded p-1 w-40"
+                    list={clientesPerm ? "service_clientes_cod" : undefined}
+                    value={clienteCodInput}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setClienteCodInput(v);
+                      const c = syncClienteFromInputs(clienteRsInput, v);
+                      if (c && clienteRsInput.trim().toLowerCase() !== (c.razon_social || "").toLowerCase()) {
+                        setClienteRsInput(c.razon_social || "");
+                      }
+                    }}
+                    placeholder="Eleg? de la lista"
+                  />
+                  {clientesPerm && (
+                    <datalist id="service_clientes_cod">
+                      {(clientes || []).map((c) => (
+                        <option key={c.id} value={c.cod_empresa} />
+                      ))}
+                    </datalist>
+                  )}
+                  {clienteCodInput && !codMatch && (
+                    <div className="text-xs text-amber-700 mt-1">Selecciona un código v?lido de la lista.</div>
+                  )}
+                  {clienteMismatch && (
+                    <div className="text-xs text-amber-700 mt-1">La razón social y el código no coinciden.</div>
+                  )}
+                </>
               ) : (
                 data.cod_empresa || "-"
               )}
@@ -561,7 +630,7 @@ export default function PrincipalTab(props) {
                       </div>
                     )}
                     <div>No tenés permiso para reasignar técnicos.</div>
-                    {isTech && (data?.estado || "") !== "entregado" && Number(userId || 0) > 0 && (
+                    {isTech && !isEntregadoOBaja && Number(userId || 0) > 0 && (
                       <div className="mt-2">
                         {data?.asignado_a === userId ? (
                           <div className="text-xs text-gray-600">Ya estás asignado a este ingreso.</div>
@@ -901,7 +970,7 @@ export default function PrincipalTab(props) {
                       {it.accesorio_nombre}
                       {it.referencia ? ` (ref: ${it.referencia})` : ""}
                     </span>
-                    {data?.estado !== "entregado" && (
+                    {!isEntregadoOBaja && (
                       <button
                         className="text-red-600 text-xs"
                         onClick={() => removeAccesorioAlquiler(it.id)}
@@ -917,7 +986,7 @@ export default function PrincipalTab(props) {
             ) : (
               <div className="text-sm text-gray-500">Sin accesorios de alquiler.</div>
             )}
-            {data?.estado !== "entregado" && (
+            {!isEntregadoOBaja && (
               <div className="mt-2 flex flex-wrap items-end gap-2">
                 <input
                   className="border rounded p-2 min-w-[240px]"

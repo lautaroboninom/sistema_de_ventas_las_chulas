@@ -30,20 +30,24 @@ export const resolutionLabel = (value) =>
 
 // Estados operativos (flujo de trabajo)
 export const ESTADO = {
-  DIAGNOSTICADO: "diagnosticado",
-  REPARAR: "reparar",
-  REPARADO: "reparado",
-  LIBERADO: "liberado",
-  ENTREGADO: "entregado",
-  ALQUILADO: "alquilado",
+  DIAGNOSTICADO: "Diagnosticado",
+  REPARAR: "Reparar",
+  CONTROLADO_SIN_DEFECTO: "Controlado Sin Defecto",
+  REPARADO: "Reparado",
+  LIBERADO: "Liberado",
+  ENTREGADO: "Entregado",
+  BAJA: "Baja",
+  ALQUILADO: "Alquilado",
 };
 
 export const ESTADO_LABELS = {
   [ESTADO.DIAGNOSTICADO]: "Diagnosticado",
   [ESTADO.REPARAR]: "Reparar",
+  [ESTADO.CONTROLADO_SIN_DEFECTO]: "Controlado sin defecto",
   [ESTADO.REPARADO]: "Reparado",
   [ESTADO.LIBERADO]: "Liberado",
   [ESTADO.ENTREGADO]: "Entregado",
+  [ESTADO.BAJA]: "Baja",
   [ESTADO.ALQUILADO]: "Alquilado",
 };
 

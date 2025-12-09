@@ -1,5 +1,5 @@
 // web/src/pages/ServiceSheet.jsx (container)
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   getIngreso, getUbicaciones, patchIngreso,
@@ -7,6 +7,8 @@ import {
   getAccesoriosCatalogo,
   getIngresoHistorial,
   getGeneralEquipos,
+  postBajaIngreso,
+  getClientes,
 } from "../lib/api";
 import { getMarcas, getModelosByBrand, getVariantesPorMarca, checkGarantiaFabrica, patchModeloTipoEquipo } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -99,6 +101,12 @@ export default function ServiceSheet() {
   const [ubicaciones, setUbicaciones] = useState([]);
   const [ubicacionId, setUbicacionId] = useState("");
 
+  // clientes (autocompletar)
+  const [clientes, setClientes] = useState([]);
+  const [clientesPerm, setClientesPerm] = useState(true);
+  const [clienteRsInput, setClienteRsInput] = useState("");
+  const [clienteCodInput, setClienteCodInput] = useState("");
+
   // tcnicos
   const [tecnicos, setTecnicos] = useState([]);
   const [tecnicoId, setTecnicoId] = useState(null);
@@ -148,6 +156,46 @@ export default function ServiceSheet() {
   const [editBasics, setEditBasics] = useState(false);
   const [formBasics, setFormBasics] = useState(null);
   const [savingBasics, setSavingBasics] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsMenuRef = useRef(null);
+  const [savingBaja, setSavingBaja] = useState(false);
+
+  // Helpers de clientes (validación de selección)
+  const findClienteByRS = useCallback(
+    (v) => (clientes || []).find((c) => (c?.razon_social || "").toLowerCase() === String(v || "").trim().toLowerCase()),
+    [clientes]
+  );
+  const findClienteByCod = useCallback(
+    (v) => (clientes || []).find((c) => String(c?.cod_empresa || "").toLowerCase() === String(v || "").trim().toLowerCase()),
+    [clientes]
+  );
+  const resolveCliente = useCallback(
+    (rsVal, codVal) => {
+      const byRs = rsVal ? findClienteByRS(rsVal) : null;
+      const byCod = codVal ? findClienteByCod(codVal) : null;
+      if (byRs && !codVal) return byRs;
+      if (byCod && !rsVal) return byCod;
+      if (byRs && byCod && byRs.id === byCod.id) return byRs;
+      return null;
+    },
+    [findClienteByCod, findClienteByRS]
+  );
+  const syncClienteFromInputs = useCallback(
+    (rsVal, codVal) => {
+      const c = resolveCliente(rsVal, codVal);
+      setFormBasics((f0) => {
+        const f = { ...(f0 || {}) };
+        f.razon_social = rsVal || "";
+        f.cod_empresa = codVal || "";
+        if (c) {
+          f.telefono = c.telefono || f.telefono || "";
+        }
+        return f;
+      });
+      return c;
+    },
+    [resolveCliente]
+  );
 
   function money(n) {
     if (n == null) return "-";
@@ -249,6 +297,18 @@ export default function ServiceSheet() {
     return () => window.removeEventListener("keydown", handler);
   }, [relatedOpen]);
 
+  // Cerrar menú de acciones al hacer click fuera
+  useEffect(() => {
+    const handleClickOutside = (ev) => {
+      if (!actionsOpen) return;
+      if (actionsMenuRef.current && !actionsMenuRef.current.contains(ev.target)) {
+        setActionsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [actionsOpen]);
+
   // Activar edición bsica
   function startEditBasics() {
     setFormBasics({
@@ -268,6 +328,21 @@ export default function ServiceSheet() {
       garantia: !!data?.garantia,
     });
     setEditBasics(true);
+    setClienteRsInput(data?.razon_social || "");
+    setClienteCodInput(data?.cod_empresa || "");
+    (async () => {
+      try {
+        if (!clientes.length) {
+          const list = await getClientes();
+          setClientesPerm(true);
+          setClientes(Array.isArray(list) ? list : []);
+        }
+      } catch (e) {
+        setClientesPerm(false);
+      } finally {
+        syncClienteFromInputs(data?.razon_social || "", data?.cod_empresa || "");
+      }
+    })();
     (async () => {
       try {
         if (!marcas.length) { try { setMarcas(await getMarcas()); } catch {} }
@@ -296,11 +371,38 @@ export default function ServiceSheet() {
 
   async function saveEditBasics() {
     if (!formBasics) { setEditBasics(false); return; }
+    let clienteSel = resolveCliente(clienteRsInput, clienteCodInput);
+    if (!clienteSel) {
+      try {
+        const list = await getClientes();
+        setClientesPerm(true);
+        setClientes(Array.isArray(list) ? list : []);
+        const arr = Array.isArray(list) ? list : [];
+        const byRs = clienteRsInput
+          ? arr.find((c) => (c?.razon_social || "").toLowerCase() === clienteRsInput.trim().toLowerCase())
+          : null;
+        const byCod = clienteCodInput
+          ? arr.find((c) => String(c?.cod_empresa || "").toLowerCase() === clienteCodInput.trim().toLowerCase())
+          : null;
+        if (byRs && !clienteCodInput) clienteSel = byRs;
+        else if (byCod && !clienteRsInput) clienteSel = byCod;
+        else if (byRs && byCod && byRs.id === byCod.id) clienteSel = byRs;
+      } catch (e) {
+        setClientesPerm(false);
+      }
+    }
+    if (!clienteSel) {
+      setErr("Debes seleccionar un cliente válido de la lista (razón social y código).");
+      return;
+    }
     const diff = {};
     const cmp = (a, b) => (a ?? "") !== (b ?? "");
-    if (cmp(formBasics.razon_social, data?.razon_social)) diff.razon_social = formBasics.razon_social;
-    if (cmp(formBasics.cod_empresa, data?.cod_empresa)) diff.cod_empresa = formBasics.cod_empresa;
-    if (cmp(formBasics.telefono, data?.telefono)) diff.telefono = formBasics.telefono;
+    if (cmp(clienteSel.razon_social, data?.razon_social)) diff.razon_social = clienteSel.razon_social;
+    if (cmp(clienteSel.cod_empresa, data?.cod_empresa)) diff.cod_empresa = clienteSel.cod_empresa;
+    const currentCid = data?.customer_id ?? data?.cliente_id ?? data?.customerId ?? data?.customerId ?? null;
+    if (clienteSel.id && Number(clienteSel.id) !== Number(currentCid)) diff.customer_id = Number(clienteSel.id);
+    const telefonoNuevo = (formBasics.telefono || "").trim();
+    if (cmp(telefonoNuevo, data?.telefono)) diff.telefono = telefonoNuevo;
     if (cmp(formBasics.propietario_nombre, data?.propietario_nombre)) diff.propietario_nombre = formBasics.propietario_nombre;
     if (cmp(formBasics.propietario_contacto, data?.propietario_contacto)) diff.propietario_contacto = formBasics.propietario_contacto;
     if (cmp(formBasics.propietario_doc, data?.propietario_doc)) diff.propietario_doc = formBasics.propietario_doc;
@@ -358,6 +460,24 @@ export default function ServiceSheet() {
     }
   }
 
+  async function marcarBaja() {
+    if (savingBaja) return;
+    const ok = window.confirm("Dar BAJA al equipo? Esta accion marcara el ingreso como baja.");
+    if (!ok) return;
+    try {
+      setSavingBaja(true);
+      await postBajaIngreso(id);
+      setActionsOpen(false);
+      await refreshIngreso({ strong: 1 });
+      setTab("principal");
+      setErr("");
+    } catch (e) {
+      setErr(e?.message || "No se pudo marcar la baja");
+    } finally {
+      setSavingBaja(false);
+    }
+  }
+
   // cargar catlogos base
   useEffect(() => { (async () => { try { setAccesCatalogo(await getAccesoriosCatalogo()); } catch {} })(); }, []);
   useEffect(() => { (async () => { try { setMarcas(await getMarcas()); } catch {} })(); }, []);
@@ -385,6 +505,9 @@ export default function ServiceSheet() {
     }, 400);
     return () => clearTimeout(h);
   }, [editBasics, formBasics?.numero_serie, marcaIdSel, marcas, data?.marca]);
+
+  const estadoLower = (data?.estado || "").toLowerCase();
+  const isEntregadoOBaja = estadoLower === "entregado" || estadoLower === "baja";
 
   // carga general
   useEffect(() => {
@@ -432,7 +555,7 @@ export default function ServiceSheet() {
     const userId = Number(user?.id || 0);
     const canEditDiagLocal = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (isTech && userId && data?.asignado_a === userId);
     if (!canEditDiagLocal) return;
-    if (data?.estado === "entregado") return;
+    if (isEntregadoOBaja) return;
 
     const curDesc = data?.descripcion_problema ?? "";
     const curTrab = data?.trabajos_realizados ?? "";
@@ -469,38 +592,71 @@ export default function ServiceSheet() {
   const isTech = user?.rol === ROLES.TECNICO;
   const canEditDiag = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (isTech && userId && data?.asignado_a === userId);
   const canMarkReparado = canEditDiag;
+  const canDarBaja = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR, ROLES.ADMIN, ROLES.RECEPCION]);
+  const hasMenuActions = Boolean(canSeeHistory || numeroSerie || canDarBaja);
 
   return (
     <div className="max-w-none p-4">
       <button type="button" onClick={() => navigate(-1)} className="mb-3 inline-flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800">
         Volver
       </button>
-      <div className="grid grid-cols-2 items-center mb-2">
+      <div className="flex items-start justify-between gap-3 mb-2">
         <h1 className="text-2xl font-bold">
           Hoja de servicio - OS: {formatOSHelper(data, id)} - NS: {data?.numero_interno || data?.numero_serie}
         </h1>
-
-        {numeroSerie && (
-          <button
-            type="button"
-            onClick={() => setRelatedOpen(true)}
-            className="justify-self-end text-xs px-2 py-1 rounded border border-blue-600 text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400"
-          >
-            Ver ingresos del equipo
-          </button>
+        {hasMenuActions && (
+          <div className="relative" ref={actionsMenuRef}>
+            <button
+              type="button"
+              onClick={() => setActionsOpen((v) => !v)}
+              className="p-2 rounded border text-gray-600 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              aria-haspopup="menu"
+              aria-expanded={actionsOpen ? "true" : "false"}
+              aria-label="Acciones"
+            >
+              <span aria-hidden className="text-xl leading-none">⋮</span>
+            </button>
+            {actionsOpen && (
+              <div className="absolute right-0 mt-2 w-56 rounded border bg-white shadow-lg z-20">
+                <div className="py-1">
+                  {numeroSerie && (
+                    <button
+                      type="button"
+                      onClick={() => { setRelatedOpen(true); setActionsOpen(false); }}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Ingresos del equipos
+                    </button>
+                  )}
+                  {canSeeHistory && (
+                    <button
+                      type="button"
+                      onClick={() => { setTab("historial"); setActionsOpen(false); }}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      Historial de cambios
+                    </button>
+                  )}
+                  {canDarBaja && (
+                    <button
+                      type="button"
+                      onClick={marcarBaja}
+                      disabled={savingBaja}
+                      className="w-full text-left px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {savingBaja ? "Marcando baja..." : "Dar BAJA al equipo"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
       <div className="text-sm text-gray-700 mb-3">{(data?.tipo_equipo_nombre || data?.tipo_equipo || "-").toString()} - {(data?.marca || "-").toString()} - {(data?.modelo || "-").toString()} {(data?.equipo_variante || "").toString()}</div>
       
 
       {err && <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-4">{err}</div>}
-      {canSeeHistory && (
-        <div className="-mt-8 -mb-3 text-right">
-          <button className={`px-3 py-2 rounded-t ${tab === 'historial' ? 'bg-white border border-b-0' : 'text-gray-600 hover:text-black'}`} onClick={() => setTab('historial')} type="button">
-            Historial
-          </button>
-        </div>
-      )}
       <Tabs
         value={tab}
         onChange={setTab}
@@ -525,6 +681,13 @@ export default function ServiceSheet() {
           editBasics={editBasics}
           formBasics={formBasics}
           setFormBasics={setFormBasics}
+          clientes={clientes}
+          clientesPerm={clientesPerm}
+          clienteRsInput={clienteRsInput}
+          setClienteRsInput={setClienteRsInput}
+          clienteCodInput={clienteCodInput}
+          setClienteCodInput={setClienteCodInput}
+          syncClienteFromInputs={syncClienteFromInputs}
           marcas={marcas}
           marcaIdSel={marcaIdSel}
           setMarcaIdSel={setMarcaIdSel}
@@ -563,7 +726,7 @@ export default function ServiceSheet() {
         <DiagnosticoTab
           id={id}
           data={data}
-          canEditAcc={hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO, ROLES.RECEPCION]) && data?.estado !== "entregado"}
+          canEditAcc={hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO, ROLES.RECEPCION]) && !isEntregadoOBaja}
           accesCatalogo={accesCatalogo}
           nuevoAcc={nuevoAcc}
           setNuevoAcc={setNuevoAcc}

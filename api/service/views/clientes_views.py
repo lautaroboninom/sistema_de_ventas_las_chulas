@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import permissions
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -92,8 +93,94 @@ class ClienteDeleteView(APIView):
             return Response({"detail": "No se pudo eliminar por restricciones de integridad."}, status=409)
 
 
+class ClienteMergeView(APIView):
+    """Mover referencias de un cliente duplicado a otro y eliminar el source."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        d = request.data or {}
+        try:
+            source_id = int(d.get("source_id"))
+            target_id = int(d.get("target_id"))
+        except Exception:
+            return Response({"detail": "source_id y target_id requeridos"}, status=400)
+        if source_id == target_id:
+            return Response({"detail": "source y target no pueden ser iguales"}, status=400)
+
+        src = q(
+            "SELECT id, razon_social, cod_empresa, telefono, telefono_2, email FROM customers WHERE id=%s",
+            [source_id],
+            one=True,
+        )
+        dst = q(
+            "SELECT id, razon_social, cod_empresa, telefono, telefono_2, email FROM customers WHERE id=%s",
+            [target_id],
+            one=True,
+        )
+        if not src or not dst:
+            return Response({"detail": "cliente source/target inexistente"}, status=404)
+
+        # Completar campos faltantes del destino con los del source (sin tocar razon_social)
+        def _merge_field(dst_val, src_val):
+            dst_clean = (dst_val or "").strip()
+            src_clean = (src_val or "").strip()
+            return dst_clean or src_clean or None
+
+        updated_target = {
+            "cod_empresa": _merge_field(dst.get("cod_empresa"), src.get("cod_empresa")),
+            "telefono": _merge_field(dst.get("telefono"), src.get("telefono")),
+            "telefono_2": _merge_field(dst.get("telefono_2"), src.get("telefono_2")),
+            "email": _merge_field(dst.get("email"), src.get("email")),
+        }
+
+        moved_devices = q(
+            "SELECT COUNT(*) AS cnt FROM devices WHERE customer_id=%s",
+            [source_id],
+            one=True,
+        ) or {"cnt": 0}
+
+        with transaction.atomic():
+            exec_void(
+                """
+                UPDATE customers
+                   SET cod_empresa = %(cod)s,
+                       telefono    = %(tel)s,
+                       telefono_2  = %(tel2)s,
+                       email       = %(email)s
+                 WHERE id = %(id)s
+                """,
+                {
+                    "cod": updated_target["cod_empresa"],
+                    "tel": updated_target["telefono"],
+                    "tel2": updated_target["telefono_2"],
+                    "email": updated_target["email"],
+                    "id": target_id,
+                },
+            )
+            exec_void(
+                "UPDATE devices SET customer_id=%(target)s WHERE customer_id=%(source)s",
+                {"target": target_id, "source": source_id},
+            )
+            exec_void(
+                "DELETE FROM customers WHERE id=%(id)s",
+                {"id": source_id},
+            )
+
+        return Response(
+            {
+                "ok": True,
+                "source_id": source_id,
+                "target_id": target_id,
+                "moved_devices": int(moved_devices.get("cnt") or 0),
+            }
+        )
+
+
 __all__ = [
     'CustomersListView',
     'ClientesView',
     'ClienteDeleteView',
+    'ClienteMergeView',
 ]

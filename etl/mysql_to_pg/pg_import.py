@@ -130,7 +130,7 @@ def adapt_row(table: str, cols: list[str], rowdict: dict):
                 return mapa.get(key, 'otros')
             if col == 'estado':
                 mapa = {k: k for k in (
-                    'ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','derivado','liberado','alquilado'
+                    'ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','baja','derivado','liberado','alquilado'
                 )}
                 return mapa.get(key, 'ingresado')
             if col == 'disposicion':
@@ -154,7 +154,7 @@ def adapt_row(table: str, cols: list[str], rowdict: dict):
         if table == 'ingreso_events':
             if col in ('a_estado','de_estado'):
                 mapa = {k: k for k in (
-                    'ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','derivado','liberado','alquilado'
+                    'ingresado','diagnosticado','presupuestado','reparar','reparado','entregado','baja','derivado','liberado','alquilado'
                 )}
                 return mapa.get(key, None)
         return val

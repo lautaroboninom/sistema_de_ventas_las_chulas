@@ -93,6 +93,7 @@ export default function NuevoIngreso() {
   const [out, setOut] = useState(null);
   const [err, setErr] = useState("");
   const [notice, setNotice] = useState("");
+  const [dupPrompt, setDupPrompt] = useState({ open: false, ingresoId: null, fechaIngreso: null, os: "" });
 
   const [clientesPerm, setClientesPerm] = useState(true);
   const [garRepLoading, setGarRepLoading] = useState(false);
@@ -127,6 +128,38 @@ export default function NuevoIngreso() {
       return f;
     });
   }
+
+  const formatFechaIngreso = (val) => {
+    if (!val) return "-";
+    const d = new Date(val);
+    if (Number.isNaN(d.getTime())) return String(val);
+    return d.toLocaleString();
+  };
+
+  const resetFormFields = () => {
+    setMarcaTxt("");
+    setMarcaId(null);
+    setModelos([]);
+    setClienteRsInput("");
+    setClienteCodInput("");
+    setSelectedCliente(null);
+    setForm({
+      etiq_garantia_ok: false,
+      cliente: { id: null, razon_social: "", cod_empresa: "", telefono: "" },
+      equipo: { marca_id: "", modelo_id: "", numero_serie: "", numero_interno: "", garantia: false },
+      motivo: "",
+      informe_preliminar: "",
+      comentarios: "",
+      garantia_reparacion: false,
+      remito_ingreso: "",
+      fecha_ingreso: "",
+    });
+    setAccItems([]);
+    setPropietario({ nombre: "", contacto: "", doc: "" });
+    setTecnicoId(null);
+    setEmpresaFact("SEPID");
+    setVarianteTxt("");
+  };
 
   // Garantía de reparación (por N/S o MG) - debounce 400ms
   useEffect(() => {
@@ -166,7 +199,10 @@ export default function NuevoIngreso() {
     }
     const h = setTimeout(async () => {
       try {
-        const r = await checkGarantiaFabrica(ns, marcaSel);
+        const r = await checkGarantiaFabrica(ns, marcaSel, {
+          brand_id: marcaId || form.equipo.marca_id || null,
+          model_id: form.equipo.modelo_id || null,
+        });
         const enGarantia = !!r?.within_365_days;
         setForm((f) => ({ ...f, equipo: { ...f.equipo, garantia: enGarantia } }));
       } catch {
@@ -174,7 +210,7 @@ export default function NuevoIngreso() {
       }
     }, 400);
     return () => clearTimeout(h);
-  }, [form.equipo.numero_serie, marcaId, form.equipo.marca_id, marcas]);
+  }, [form.equipo.numero_serie, marcaId, form.equipo.marca_id, form.equipo.modelo_id, marcas]);
 
   const tipoEquipoSel = useMemo(() => {
     const m = (modelos || []).find((x) => x.id === Number(form.equipo.modelo_id));
@@ -390,27 +426,28 @@ export default function NuevoIngreso() {
     setErr("");
     setOut(null);
     setNotice("");
+    setDupPrompt({ open: false, ingresoId: null, fechaIngreso: null, os: "" });
 
     if (!form.equipo.marca_id) {
       setLoading(false);
-      setErr("Seleccioná una marca válida de la lista.");
+      setErr("Seleccion? una marca v?lida de la lista.");
       return;
     }
     if (!form.equipo.modelo_id) {
       setLoading(false);
-      setErr("Seleccioná un modelo.");
+      setErr("Seleccion? un modelo.");
       return;
     }
     if (!form.motivo) {
       setLoading(false);
-      setErr("Seleccioná un motivo.");
+      setErr("Seleccion? un motivo.");
       return;
     }
 
     const c = resolveCliente(clienteRsInput, clienteCodInput);
     if (!c?.id) {
       setLoading(false);
-      setErr("Debés seleccionar un cliente válido de la lista.");
+      setErr("Deb?s seleccionar un cliente v?lido de la lista.");
       return;
     }
 
@@ -442,40 +479,24 @@ export default function NuevoIngreso() {
           doc: propietario.doc || "",
         },
         empresa_facturar: (empresaFact || "SEPID").toUpperCase(),
-        // Checkbox representa "fajas abiertas" => etiq_garantia_ok debe ser la negación
+        // Checkbox representa "fajas abiertas" => etiq_garantia_ok debe ser la negaci?n
         etiq_garantia_ok: !form.etiq_garantia_ok,
       };
 
       const r = await postNuevoIngreso(payload);
-      setOut(r);
       if (r?.existing === true) {
-        setNotice("El ingreso ya existía; abriendo hoja");
+        setDupPrompt({
+          open: true,
+          ingresoId: r.ingreso_id || null,
+          fechaIngreso: r.fecha_ingreso || null,
+          os: r.os || "",
+        });
+        return;
       }
+      setOut(r);
       if (r?.ingreso_id) navigate(`/ingresos/${r.ingreso_id}`);
 
-      // Reset básico
-      setMarcaTxt("");
-      setMarcaId(null);
-      setModelos([]);
-      setClienteRsInput("");
-      setClienteCodInput("");
-      setSelectedCliente(null);
-      setForm({
-        etiq_garantia_ok: false,
-        cliente: { id: null, razon_social: "", cod_empresa: "", telefono: "" },
-        equipo: { marca_id: "", modelo_id: "", numero_serie: "", numero_interno: "", garantia: false },
-        motivo: "",
-        informe_preliminar: "",
-        comentarios: "",
-        garantia_reparacion: false,
-        remito_ingreso: "",
-        fecha_ingreso: "",
-      });
-      setAccItems([]);
-      setPropietario({ nombre: "", contacto: "", doc: "" });
-      setTecnicoId(null);
-      setEmpresaFact("SEPID");
-      setVarianteTxt("");
+      resetFormFields();
     } catch (e2) {
       setErr(e2?.message || "Error creando ingreso");
     } finally {
@@ -487,10 +508,45 @@ export default function NuevoIngreso() {
   const codMatch = clienteCodInput ? findClienteByCod(clienteCodInput) : null;
   const clienteMismatch = rsMatch && codMatch && rsMatch.id !== codMatch.id;
   const canSubmitCliente = !!resolveCliente(clienteRsInput, clienteCodInput)?.id;
+  const closeDupPrompt = () => setDupPrompt({ open: false, ingresoId: null, fechaIngreso: null, os: "" });
+  const confirmDupPrompt = () => {
+    if (dupPrompt.ingresoId) navigate(`/ingresos/${dupPrompt.ingresoId}`);
+    closeDupPrompt();
+  };
 
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-4">
       <h1 className="text-2xl font-bold">Nuevo Ingreso (Orden de Servicio)</h1>
+
+      {dupPrompt.open && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded shadow-lg p-5 w-full max-w-md">
+            <div className="text-lg font-semibold mb-2">Ingreso duplicado</div>
+            <p className="text-sm text-gray-700 mb-1">
+              Equipo ya ingresado el <b>{formatFechaIngreso(dupPrompt.fechaIngreso)}</b>: redirigir a su Hoja de servicio?
+            </p>
+            {dupPrompt.os && (
+              <div className="text-xs text-gray-500 mb-4">OS {dupPrompt.os}</div>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                className="px-3 py-2 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+                onClick={closeDupPrompt}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                onClick={confirmDupPrompt}
+              >
+                Aceptar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {notice && (
         <div className="bg-blue-100 border border-blue-300 text-blue-700 p-2 rounded">{notice}</div>

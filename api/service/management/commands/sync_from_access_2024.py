@@ -99,6 +99,15 @@ class Command(BaseCommand):
 
         # Query our ingresos 2024 pending
         with connection.cursor() as cur:
+            # Asegurar ubicación placeholder "-"
+            cur.execute("INSERT INTO locations(nombre) VALUES ('-') ON CONFLICT DO NOTHING")
+            dash_id = None
+            try:
+                cur.execute("SELECT id FROM locations WHERE nombre='-' LIMIT 1")
+                r_dash = cur.fetchone()
+                dash_id = int(r_dash[0]) if r_dash else None
+            except Exception:
+                dash_id = None
             cur.execute(
                 """
                 SELECT t.id, t.estado, t.fecha_ingreso, t.fecha_entrega,
@@ -106,7 +115,7 @@ class Command(BaseCommand):
                   FROM ingresos t
                   JOIN devices d ON d.id = t.device_id
                  WHERE DATE(t.fecha_ingreso) >= DATE '2024-01-01' AND DATE(t.fecha_ingreso) <= DATE '2024-12-31'
-                   AND t.estado NOT IN ('entregado','alquilado')
+                   AND t.estado NOT IN ('entregado','alquilado','baja')
                 """
             )
             rows = cur.fetchall() or []
@@ -142,13 +151,17 @@ class Command(BaseCommand):
                     for ingreso_id, set_ent, f_ent_dt, set_alq, new_ns in updates:
                         if set_ent:
                             cur.execute(
-                                "UPDATE ingresos SET estado='entregado', fecha_entrega=COALESCE(fecha_entrega, %s) WHERE id=%s",
-                                [f_ent_dt.date().isoformat() if (f_ent_dt and hasattr(f_ent_dt, 'date')) else None, ingreso_id],
+                                "UPDATE ingresos SET estado='entregado', fecha_entrega=COALESCE(fecha_entrega, %s), ubicacion_id = COALESCE(%s, ubicacion_id) WHERE id=%s",
+                                [
+                                    f_ent_dt.date().isoformat() if (f_ent_dt and hasattr(f_ent_dt, 'date')) else None,
+                                    dash_id,
+                                    ingreso_id,
+                                ],
                             )
                         elif set_alq:
                             cur.execute(
-                                "UPDATE ingresos SET estado='alquilado', alquilado=true WHERE id=%s",
-                                [ingreso_id],
+                                "UPDATE ingresos SET estado='alquilado', alquilado=true, ubicacion_id = COALESCE(%s, ubicacion_id) WHERE id=%s",
+                                [dash_id, ingreso_id],
                             )
                         if new_ns:
                             cur.execute(

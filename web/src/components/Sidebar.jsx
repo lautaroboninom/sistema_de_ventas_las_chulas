@@ -93,7 +93,7 @@ export default function Sidebar() {
 
           <LinkItem to="/listos">Liberados</LinkItem>
           <LinkItem to="/alquiler/stock">Stock de Alquiler</LinkItem>
-          <LinkItem to="/depositos">Depósitos</LinkItem>
+          <LinkItem to="/depositos">Depósitos/Bajas</LinkItem>
         </div>
 
         <div className="pt-2">

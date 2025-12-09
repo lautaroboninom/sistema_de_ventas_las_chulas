@@ -61,6 +61,9 @@ function variantOf(value) {
   // Derivados
   if (s.includes("deriv")) return "blue";
 
+  // Controlado sin defecto (equipos propios revisados sin falla)
+  if (s.includes("controlado")) return "blue";
+
   // Reparados
   if (s.includes("reparad")) return "gray";
 
@@ -69,6 +72,9 @@ function variantOf(value) {
 
   // Liberados
   if (s.includes("liberad")) return "indigo";
+
+  // Baja (equipo desguazado/obsoleto)
+  if (s.includes("baja")) return "gray";
 
   // Cambio (resolución)
   if (s.includes("cambio")) return "purple";
@@ -109,4 +115,5 @@ export default function StatusChip({ value, title }) {
     </span>
   );
 }
+
 

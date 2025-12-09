@@ -46,8 +46,10 @@ from .ingresos_views import (
     GeneralEquiposView,
     GeneralPorClienteView,
     GeneralPorClienteExportView,
+    MarcarControladoSinDefectoView,
     MarcarReparadoView,
     EntregarIngresoView,
+    DarBajaIngresoView,
     GarantiaReparacionCheckView,
     GarantiaFabricaCheckView,
     NuevoIngresoView,
@@ -144,6 +146,7 @@ from .clientes_views import (
     CustomersListView,
     ClientesView,
     ClienteDeleteView,
+    ClienteMergeView,
 )
 
 from .reportes_views import (
@@ -183,8 +186,10 @@ __all__ = [
     "GeneralEquiposView",
     "GeneralPorClienteView",
     "GeneralPorClienteExportView",
+    "MarcarControladoSinDefectoView",
     "MarcarReparadoView",
     "EntregarIngresoView",
+    "DarBajaIngresoView",
     "GarantiaReparacionCheckView",
     "GarantiaFabricaCheckView",
     "NuevoIngresoView",
@@ -264,6 +269,7 @@ __all__ = [
     "CustomersListView",
     "ClientesView",
     "ClienteDeleteView",
+    "ClienteMergeView",
     # reportes
     "RemitoSalidaPdfView",
     "RemitoDerivacionPdfView",

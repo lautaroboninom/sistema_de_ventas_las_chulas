@@ -1,4 +1,4 @@
-﻿from django.db import connection, transaction
+from django.db import connection, transaction
 import time
 import json
 import logging
@@ -120,6 +120,18 @@ def _send_mail_with_fallback(subject, body, recipients):
         return False, debug
 
 
+def _dash_location_id():
+    try:
+        ensure_default_locations()
+    except Exception:
+        pass
+    try:
+        row = q("SELECT id FROM locations WHERE nombre='-' LIMIT 1", [], one=True)
+        return row and row.get("id")
+    except Exception:
+        return None
+
+
 class MisPendientesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
@@ -154,7 +166,7 @@ class MisPendientesView(APIView):
                 ) ed ON ed.ingreso_id = t.id AND ed.rn = 1
                 WHERE t.asignado_a = %s
                   AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado','liberado','alquilado')
+                  AND t.estado NOT IN ('entregado','liberado','alquilado','baja')
                 ORDER BY
                    (CASE WHEN ed.estado = 'devuelto' THEN 1 ELSE 0 END) DESC,
                    (t.motivo = 'urgente control') DESC,
@@ -201,7 +213,7 @@ class PendientesPresupuestoView(APIView):
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE COALESCE(t.presupuesto_estado, 'pendiente') = 'pendiente'
                   AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('ingresado','entregado','liberado','alquilado')
+                  AND t.estado NOT IN ('ingresado','entregado','liberado','alquilado','baja')
                 ORDER BY COALESCE(t.fecha_servicio, t.fecha_ingreso) ASC;
                 """,
                 ["taller"],
@@ -260,7 +272,7 @@ class PresupuestadosView(APIView):
                         OR t.presupuesto_estado = 'presupuestado'
                       )
                   AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado','liberado', 'alquilado')
+                  AND t.estado NOT IN ('entregado','liberado','alquilado','baja')
                 ORDER BY COALESCE(q.fecha_emitido, t.fecha_ingreso) ASC;
                 """,
                 ["taller"],
@@ -629,18 +641,58 @@ class EntregarIngresoView(APIView):
         _set_audit_user(request)
         with transaction.atomic():
             with connection.cursor() as cur:
+                dash_id = _dash_location_id()
                 cur.execute(
                     """
                     UPDATE ingresos
                        SET estado='entregado',
                            remito_salida=%s,
                            factura_numero=%s,
-                           fecha_entrega=COALESCE(%s, now())
+                           fecha_entrega=COALESCE(%s, now()),
+                           ubicacion_id = COALESCE(%s, ubicacion_id)
                      WHERE id=%s
                     """,
-                    [remito, factura, fecha_entrega, ingreso_id],
+                    [remito, factura, fecha_entrega, dash_id, ingreso_id],
                 )
         return Response({"ok": True})
+
+
+class DarBajaIngresoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def post(self, request, ingreso_id: int):
+        require_roles(request, ["jefe", "jefe_veedor", "admin", "recepcion"])
+        _set_audit_user(request)
+        with transaction.atomic():
+            with connection.cursor() as cur:
+                dash_id = _dash_location_id()
+                cur.execute("SELECT estado FROM ingresos WHERE id=%s", [ingreso_id])
+                row = cur.fetchone()
+                if not row:
+                    return Response({"detail": "Ingreso no encontrado"}, status=404)
+                estado_actual = (row[0] or "").lower()
+                if estado_actual == "baja":
+                    return Response({"ok": True, "estado": "baja"})
+                cur.execute(
+                    """
+                    UPDATE ingresos
+                       SET estado='baja',
+                           ubicacion_id = COALESCE(%s, ubicacion_id)
+                     WHERE id=%s
+                    """,
+                    [dash_id, ingreso_id],
+                )
+        try:
+            exec_void(
+                """
+                INSERT INTO ingreso_events (ticket_id, a_estado, comentario)
+                VALUES (%s, 'baja', 'Marcado como baja desde la hoja de servicio')
+                """,
+                [ingreso_id],
+            )
+        except Exception:
+            # No bloquear si la tabla o inserción falla
+            pass
+        return Response({"ok": True, "estado": "baja"})
 
 
 class ListosParaRetiroView(APIView):
@@ -665,9 +717,7 @@ class ListosParaRetiroView(APIView):
                   COALESCE(b.nombre,'') AS marca,
                   COALESCE(m.nombre,'') AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                  t.fecha_ingreso,
-                  ev.ts AS fecha_listo,
-                  t.fecha_entrega
+                  ev.ts AS fecha_listo
                 FROM ingresos t
                 JOIN devices   d ON d.id = t.device_id
                 JOIN customers c ON c.id = d.customer_id
@@ -682,7 +732,9 @@ class ListosParaRetiroView(APIView):
                 ) ev ON ev.ingreso_id = t.id
                 WHERE LOWER(loc.nombre) = LOWER(%s)
                   AND t.estado = 'liberado'
-                ORDER BY COALESCE(ev.ts, t.fecha_ingreso, NOW()) DESC, t.id DESC
+                ORDER BY
+                  LOWER(COALESCE(c.razon_social, '')) ASC,
+                  t.id DESC
                 """,
                 ["taller"],
             )
@@ -720,7 +772,7 @@ class GeneralPorClienteView(APIView):
                 LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                 WHERE c.id = %s
                   AND LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('entregado', 'alquilado')
+                  AND t.estado NOT IN ('entregado','alquilado','baja')
                 ORDER BY t.fecha_ingreso DESC;
                 """,
                 [customer_id, "taller"],
@@ -776,7 +828,7 @@ class GeneralPorClienteExportView(APIView):
                    WHERE c.id = %s
                      AND t.id = ANY(%s)
                      AND LOWER(loc.nombre) = LOWER(%s)
-                     AND t.estado NOT IN ('entregado','alquilado')
+                     AND t.estado NOT IN ('entregado','alquilado','baja')
                    ORDER BY t.fecha_ingreso DESC, t.id DESC
                     """,
                     [customer_id, ids, "taller"],
@@ -803,7 +855,7 @@ class GeneralPorClienteExportView(APIView):
                     LEFT JOIN locations loc ON loc.id = t.ubicacion_id
                    WHERE c.id = %s
                      AND LOWER(loc.nombre) = LOWER(%s)
-                     AND t.estado NOT IN ('entregado','alquilado')
+                     AND t.estado NOT IN ('entregado','alquilado','baja')
                    ORDER BY t.fecha_ingreso DESC, t.id DESC
                     """,
                     [customer_id, "taller"],
@@ -913,10 +965,10 @@ class AprobadosParaRepararView(APIView):
                 WHERE LOWER(loc.nombre) = LOWER(%s)
                   AND (
                         (t.presupuesto_estado = 'aprobado'
-                        AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado'))
+                        AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado','baja'))
                         OR t.estado = 'reparar'
                       )
-                  AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado')
+                  AND t.estado NOT IN ('reparado','entregado','derivado','liberado','alquilado','baja')
                 ORDER BY COALESCE(q.fecha_aprobado, t.fecha_ingreso) ASC;
             """,
                 ["taller"],
@@ -993,7 +1045,7 @@ class AprobadosView(APIView):
                   ORDER BY ingreso_id, fecha_aprobado DESC
                 ) qa ON qa.ingreso_id = t.id
                 WHERE t.presupuesto_estado = 'aprobado'
-                  AND t.estado NOT IN ('liberado','entregado', 'alquilado')
+                  AND t.estado NOT IN ('liberado','entregado','alquilado','baja')
                   AND LOWER(loc.nombre) = LOWER(%s)
                 ORDER BY
                     COALESCE(qa.fecha_aprobado, t.fecha_ingreso) NULLS LAST,
@@ -1551,7 +1603,7 @@ class PendientesGeneralView(APIView):
                   FROM equipos_derivados e
                 ) ed ON ed.ingreso_id = t.id AND ed.rn = 1
                 WHERE LOWER(loc.nombre) = LOWER(%s)
-                  AND t.estado NOT IN ('liberado','entregado', 'alquilado')
+                  AND t.estado NOT IN ('liberado','entregado','alquilado','baja')
             """
             params = ["taller"]
             if tecnico_raw.isdigit():
@@ -1902,11 +1954,13 @@ class NuevoIngresoView(APIView):
         if ns_key:
             dup = q(
                 """
-                SELECT t.id
+                SELECT t.id,
+                       COALESCE(t.fecha_ingreso, t.fecha_creacion) AS fecha_ingreso,
+                       t.fecha_creacion
                   FROM ingresos t
                   JOIN devices d ON d.id = t.device_id
                  WHERE REPLACE(REPLACE(UPPER(d.numero_serie),' ',''),'-','') = %s
-                   AND t.estado NOT IN ('entregado','alquilado')
+                   AND t.estado NOT IN ('entregado','alquilado','baja')
                  ORDER BY t.id DESC
                  LIMIT 1
                 """,
@@ -1915,7 +1969,18 @@ class NuevoIngresoView(APIView):
             )
             if dup:
                 existing_id = dup["id"]
-                return Response({"ok": True, "ingreso_id": existing_id, "os": os_label(existing_id), "existing": True})
+                fecha_ingreso_val = dup.get("fecha_ingreso") or dup.get("fecha_creacion")
+                try:
+                    fecha_ingreso_iso = fecha_ingreso_val.isoformat()
+                except Exception:
+                    fecha_ingreso_iso = fecha_ingreso_val
+                return Response({
+                    "ok": True,
+                    "ingreso_id": existing_id,
+                    "os": os_label(existing_id),
+                    "existing": True,
+                    "fecha_ingreso": fecha_ingreso_iso,
+                })
 
         # Auto-chequeo de garantÃ­Â­a de fÃ¡brica por N/S si el usuario no la marcÃ³
         # no auto-calculo de garantia de fabrica por ahora (se toma del payload)
@@ -1973,12 +2038,12 @@ class NuevoIngresoView(APIView):
                         row_dev = q(
                             """
                             SELECT id
-                              FROM devices
-                             WHERE numero_interno ~* '^(MG|NM|NV|CE)\\s*\\d{1,4}$'
+                             FROM devices
+                            WHERE numero_interno ~* '^(MG|NM|NV|CE)\\s*\\d{1,4}$'
                                AND UPPER(REGEXP_REPLACE(numero_interno,
-                                   '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0'))) =
+                                   '^(MG|NM|NV|CE)\\s*(\\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0'))) =
                                    UPPER(REGEXP_REPLACE(%s,
-                                   '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0')))
+                                   '^(MG|NM|NV|CE)\\s*(\\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0')))
                              LIMIT 1
                             """,
                             [numero_interno],
@@ -2215,6 +2280,18 @@ class GarantiaFabricaCheckView(APIView):
         if not ns and not mg:
             return Response({"within_365_days": False, "fecha_venta": None, "found": False})
 
+        # Permitir que el front envíe brand_id/model_id explícitos
+        brand_id_explicit = request.GET.get("brand_id")
+        model_id_explicit = request.GET.get("model_id")
+        try:
+            brand_id_explicit = int(brand_id_explicit) if brand_id_explicit not in (None, "", "null") else None
+        except Exception:
+            brand_id_explicit = None
+        try:
+            model_id_explicit = int(model_id_explicit) if model_id_explicit not in (None, "", "null") else None
+        except Exception:
+            model_id_explicit = None
+
         device = None
         if ns:
             device = q(
@@ -2230,8 +2307,9 @@ class GarantiaFabricaCheckView(APIView):
             )
 
         numero_serie = (device or {}).get("numero_serie") or ns
-        brand_id = (device or {}).get("marca_id")
-        model_id = (device or {}).get("model_id")
+        # Prioridad: IDs explícitos enviados por el front; si no, los del device (si existe)
+        brand_id = brand_id_explicit if brand_id_explicit is not None else (device or {}).get("marca_id")
+        model_id = model_id_explicit if model_id_explicit is not None else (device or {}).get("model_id")
         try:
             calc = compute_warranty(numero_serie, brand_id=brand_id, model_id=model_id)
         except Exception:
@@ -2631,6 +2709,22 @@ class IngresoDetalleView(APIView):
                 )
             except Exception:
                 pass
+        if "customer_id" in d or "cliente_id" in d:
+            if rol not in ROL_EDIT_BASICS:
+                raise PermissionDenied("No autorizado para editar cliente")
+            try:
+                new_cid = int(d.get("customer_id") or d.get("cliente_id"))
+            except Exception:
+                return Response({"detail": "customer_id inv�lido"}, status=400)
+            if new_cid <= 0:
+                return Response({"detail": "customer_id inv�lido"}, status=400)
+            c_row = q("SELECT id FROM customers WHERE id=%s", [new_cid], one=True)
+            if not c_row:
+                return Response({"detail": "Cliente inexistente"}, status=404)
+            exec_void(
+                "UPDATE devices SET customer_id=%s WHERE id = (SELECT device_id FROM ingresos WHERE id=%s)",
+                [new_cid, ingreso_id],
+            )
         if any(k in d for k in ("razon_social", "cod_empresa", "telefono")):
             if rol not in ROL_EDIT_BASICS:
                 raise PermissionDenied("No autorizado para editar datos del cliente")
@@ -2801,6 +2895,10 @@ class IngresoDetalleView(APIView):
             try:
                 if bool(d.get("alquilado")):
                     sets_no_estado.append("estado='alquilado'")
+                    dash_id = _dash_location_id()
+                    if dash_id and not any(str(s).strip().startswith("ubicacion_id=") for s in sets_no_estado):
+                        sets_no_estado.append("ubicacion_id=%s")
+                        params_no_estado.append(dash_id)
             except Exception:
                 pass
         if "alquiler_a" in d:
@@ -2878,6 +2976,85 @@ class IngresoDetalleView(APIView):
         return Response({"ok": True})
 
 
+# Nuevo: marcar controlado sin defecto (equipos propios revisados sin falla)
+class MarcarControladoSinDefectoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def post(self, request, ingreso_id: int):
+        require_roles(request, ["tecnico", "jefe", "jefe_veedor"])
+        # Solo el técnico asignado puede marcar (salvo jefes)
+        try:
+            if _rol(request) == "tecnico":
+                row = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
+                uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
+                if not row or int(row.get("asignado_a") or 0) != int(uid or 0):
+                    raise PermissionDenied("Solo el tecnico asignado puede marcar como controlado")
+        except PermissionDenied:
+            raise
+        except Exception:
+            if _rol(request) == "tecnico":
+                raise PermissionDenied("Solo el tecnico asignado puede marcar como controlado")
+
+        _set_audit_user(request)
+        # Forzar estado y presupuesto_estado
+        exec_void(
+            "UPDATE ingresos SET estado='controlado_sin_defecto', presupuesto_estado='no_aplica' WHERE id=%s",
+            [ingreso_id],
+        )
+
+        auto_moved = False
+        auto_moved_to = None
+        new_ubic_id = None
+        try:
+            info = q(
+                """
+                SELECT COALESCE(d.numero_serie,'') AS numero_serie,
+                       COALESCE(d.numero_interno,'') AS numero_interno,
+                       t.ubicacion_id,
+                       COALESCE(loc.nombre,'') AS ubicacion_nombre
+                  FROM ingresos t
+                  LEFT JOIN devices d ON d.id = t.device_id
+                  LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                 WHERE t.id=%s
+                """,
+                [ingreso_id],
+                one=True,
+            ) or {}
+            ns = (info.get("numero_serie") or "").strip()
+            ni = (info.get("numero_interno") or "").strip()
+            import re
+            pat = re.compile(r"\bMG \d{4}\b", re.IGNORECASE)
+            is_mg = bool(pat.search(ns) or pat.search(ni)) or (ns.upper().startswith("MG ") or ni.upper().startswith("MG "))
+            if is_mg:
+                try:
+                    ensure_default_locations()
+                except Exception:
+                    pass
+                target_name = "Estantería de Alquiler"
+                loc_row = q(
+                    "SELECT id, nombre FROM locations WHERE LOWER(nombre)=LOWER(%s) LIMIT 1",
+                    [target_name],
+                    one=True,
+                )
+                if loc_row:
+                    target_id = loc_row.get("id")
+                    cur_id = info.get("ubicacion_id")
+                    if target_id and int(cur_id or 0) != int(target_id):
+                        exec_void("UPDATE ingresos SET ubicacion_id=%s WHERE id=%s", [target_id, ingreso_id])
+                        auto_moved = True
+                        auto_moved_to = loc_row.get("nombre") or target_name
+                        new_ubic_id = target_id
+        except Exception:
+            pass
+
+        resp = {"ok": True, "estado": "controlado_sin_defecto", "presupuesto_estado": "no_aplica"}
+        if auto_moved:
+            resp["auto_moved"] = True
+            resp["auto_moved_to"] = auto_moved_to
+            resp["ubicacion_id"] = new_ubic_id
+            resp["ubicacion_nombre"] = auto_moved_to
+        return Response(resp)
+
+
 __all__ = [
     'MisPendientesView',
     'PendientesPresupuestoView',
@@ -2887,6 +3064,7 @@ __all__ = [
     'LiberadosView',
     'GeneralEquiposView',
     'GeneralPorClienteView',
+    'MarcarControladoSinDefectoView',
     'MarcarReparadoView',
     'EntregarIngresoView',
     'IngresoAsignarTecnicoView',

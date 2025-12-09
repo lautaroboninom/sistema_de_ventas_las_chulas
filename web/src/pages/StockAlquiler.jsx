@@ -8,9 +8,9 @@ import { useAuth } from "../context/AuthContext";
 import useQueryState from "../hooks/useQueryState";
 
 // Catlogo (DB):
-const TARGET_ID = 2;
-const TARGET_NAME = "Estanteria de Alquiler";
-const ESTADOS_EXCLUIR = new Set(['entregado', 'alquilado']);
+const TARGET_ID = 5;
+const TARGET_NAME = "Estantería de Alquiler";
+const ESTADOS_EXCLUIR = new Set(['entregado', 'alquilado', 'baja']);
 const isStockAlquiler = (r) => {
   const id = Number(r?.ubicacion_id ?? NaN);
   const name = r?.ubicacion_nombre;
@@ -43,9 +43,9 @@ export default function StockAlquiler() {
       setErr("");
       setLoading(true);
       try {
-        let data = await getGeneralEquipos({ ubicacion_id: TARGET_ID, solo_taller: false, excluir_estados: 'entregado,alquilado' });
+        let data = await getGeneralEquipos({ ubicacion_id: TARGET_ID, solo_taller: false, excluir_estados: 'entregado,alquilado,baja' });
         if (!Array.isArray(data) || data.length === 0) {
-          data = await getGeneralEquipos({ solo_taller: false, excluir_estados: 'entregado,alquilado' });
+          data = await getGeneralEquipos({ solo_taller: false, excluir_estados: 'entregado,alquilado,baja' });
         }
         if (!active) return;
         const safe = Array.isArray(data) ? data : [];

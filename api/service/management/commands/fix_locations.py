@@ -5,7 +5,7 @@ import os
 
 class Command(BaseCommand):
     help = (
-        "Ajusta ubicaciones de ingresos: alquilados → 'Alquilado'; 'Sarmiento' → 'Taller' (no alquilados)."
+        "Ajusta ubicaciones de ingresos: alquilados → '-' ; 'Sarmiento' → 'Taller' (no alquilados)."
     )
 
     def add_arguments(self, parser):
@@ -31,7 +31,7 @@ class Command(BaseCommand):
             with connection.cursor() as cur:
                 # IDs canónicos necesarios
                 taller_id = self._ensure_location(cur, "Taller")
-                alquilado_loc_id = self._ensure_location(cur, "Alquilado")
+                dash_loc_id = self._ensure_location(cur, "-")
 
                 # Conteos previos
                 cur.execute(
@@ -42,7 +42,7 @@ class Command(BaseCommand):
                      WHERE COALESCE(t.alquilado,false)=true
                        AND (l.id IS DISTINCT FROM %s)
                     """,
-                    [alquilado_loc_id],
+                    [dash_loc_id],
                 )
                 to_alquilado = int(cur.fetchone()[0] or 0)
 
@@ -60,7 +60,7 @@ class Command(BaseCommand):
 
                 # Aplicación
                 if not dry:
-                    # 1) Alquilados → 'Alquilado'
+                    # 1) Alquilados → '-'
                     cur.execute(
                         """
                         UPDATE ingresos SET ubicacion_id = %s
@@ -72,7 +72,7 @@ class Command(BaseCommand):
                               AND (l.id IS DISTINCT FROM %s)
                          )
                         """,
-                        [alquilado_loc_id, alquilado_loc_id],
+                        [dash_loc_id, dash_loc_id],
                     )
 
                     # 2) 'Sarmiento' (no alquilados) → 'Taller'

@@ -1,7 +1,7 @@
 import Row from "../../../components/Row";
 import IngresoPhotos from "../../../components/IngresoPhotos";
-import { RESOLUCION_OPTIONS, RESOLUCION } from "../../../lib/constants";
-import { getBlob, postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso } from "../../../lib/api";
+import { RESOLUCION_OPTIONS, RESOLUCION, ESTADO } from "../../../lib/constants";
+import { getBlob, postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso, postMarcarControladoSinDefecto } from "../../../lib/api";
 import { useEffect, useState } from "react";
 
 export default function DiagnosticoTab({
@@ -44,6 +44,17 @@ export default function DiagnosticoTab({
   const [savingAll, setSavingAll] = useState(false);
   const [savingResol, setSavingResol] = useState(false);
   const [serialCambio, setSerialCambio] = useState("");
+  const isEntregadoOBaja = ["entregado", "baja"].includes((data?.estado || "").toLowerCase());
+  const estadoLower = (data?.estado || "").toLowerCase();
+  const estadosBloqueadosDiag = new Set([
+    ESTADO.REPARADO,
+    ESTADO.LIBERADO,
+    ESTADO.ENTREGADO,
+    ESTADO.BAJA,
+    ESTADO.ALQUILADO,
+    ESTADO.CONTROLADO_SIN_DEFECTO,
+  ].map((s) => String(s || "").toLowerCase()));
+  const isEstadoBloqueadoDiag = estadosBloqueadosDiag.has(estadoLower);
 
   useEffect(() => {
     try {
@@ -79,6 +90,25 @@ export default function DiagnosticoTab({
       setErr(e?.message || "No se pudo guardar la resoluciÃ³n");
     } finally {
       setSavingResol(false);
+    }
+  }
+
+
+  async function marcarControladoSinDefecto() {
+    try {
+      setSavingAll(true);
+      const resp = await postMarcarControladoSinDefecto(id);
+      await refreshIngreso();
+      const movedMsg = resp && resp.auto_moved
+        ? `Marcado como controlado sin defecto. Movido a ${resp.ubicacion_nombre || resp.auto_moved_to || "Estanteria de Alquiler"}`
+        : "Marcado como controlado sin defecto";
+      setToastMsg(movedMsg);
+      setTimeout(() => setToastMsg(""), 3000);
+      setErr("");
+    } catch (e) {
+      setErr(e?.message || "No se pudo marcar como controlado sin defecto");
+    } finally {
+      setSavingAll(false);
     }
   }
 
@@ -211,17 +241,15 @@ export default function DiagnosticoTab({
         <div>
           <label className="block text-sm text-gray-600 mb-1">Fecha de servicio</label>
           <input
-            type="datetime-local"
+            type="date"
             className="border rounded p-2"
-            value={fechaServStr}
+            value={fechaServStr ? fechaServStr.slice(0, 10) : ""}
             onChange={(e) => {
-              const el = e.currentTarget;
-              const v = el.value;
-              setFechaServStr(v);
-              if (v) setTimeout(() => el.blur(), 0);
+              const v = e.currentTarget.value;
+              setFechaServStr(v ? `${v}T00:00` : "");
             }}
-            max={maxLocalNow}
-            placeholder="YYYY-MM-DD HH:mm"
+            max={maxLocalNow ? maxLocalNow.slice(0, 10) : undefined}
+            placeholder="YYYY-MM-DD"
             disabled={typeof canEditDiag === 'boolean' ? !canEditDiag : false}
           />
         </div>
@@ -235,7 +263,7 @@ export default function DiagnosticoTab({
                   className="border rounded p-2 w-full"
                   value={resolucion}
                   onChange={(e) => setResolucion(e.target.value)}
-                  disabled={data?.estado === "entregado"}
+                  disabled={isEntregadoOBaja}
                 >
                   <option value="">-- Seleccionar --</option>
                   {RESOLUCION_OPTIONS.map((opt) => (
@@ -269,32 +297,39 @@ export default function DiagnosticoTab({
             </>
           )}
 
-          {(typeof canMarkReparado === 'boolean' ? canMarkReparado : actAsTech) && !["reparado", "liberado", "entregado"].includes(data?.estado) && (
-            <button
-              className="bg-emerald-600 text-white px-3 py-2 rounded"
-              onClick={async () => {
-                try {
-                  const resp = await postMarcarReparado(id);
-                  await refreshIngreso();
-                  // Toast original de reparado
-                  if (typeof setShowReparadoToast === 'function') {
-                    setShowReparadoToast(true);
-                    setTimeout(() => setShowReparadoToast(false), 2000);
+          {(typeof canMarkReparado === 'boolean' ? canMarkReparado : actAsTech) && !isEstadoBloqueadoDiag && (
+            <>
+              <button
+                className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
+                onClick={marcarControladoSinDefecto}
+                type="button"
+              >
+                {savingAll ? "Guardando..." : "Controlado sin defecto"}
+              </button>
+              <button
+                className="bg-emerald-600 text-white px-3 py-2 rounded"
+                onClick={async () => {
+                  try {
+                    const resp = await postMarcarReparado(id);
+                    await refreshIngreso();
+                    if (typeof setShowReparadoToast === 'function') {
+                      setShowReparadoToast(true);
+                      setTimeout(() => setShowReparadoToast(false), 2000);
+                    }
+                    if (resp && resp.auto_moved) {
+                      const movedMsg = `Marcado como reparado. Movido a ${resp.ubicacion_nombre || resp.auto_moved_to || 'Estanteria de Alquiler'}`;
+                      setToastMsg(movedMsg);
+                      setTimeout(() => setToastMsg('') , 3000);
+                    }
+                  } catch (e) {
+                    setErr(e?.message || 'No se pudo marcar como reparado');
                   }
-                  // Mostrar aviso extra solo si hubo movimiento automático (MG)
-                  if (resp && resp.auto_moved) {
-                    const movedMsg = `Marcado como reparado. Movido a ${resp.ubicacion_nombre || resp.auto_moved_to || 'Estantería de Alquiler'}`;
-                    setToastMsg(movedMsg);
-                    setTimeout(() => setToastMsg("") , 3000);
-                  }
-                } catch (e) {
-                  setErr(e?.message || "No se pudo marcar como reparado");
-                }
-              }}
-              type="button"
-            >
-              Marcar reparado
-            </button>
+                }}
+                type="button"
+              >
+                Marcar reparado
+              </button>
+            </>
           )}
         </div>
       </div>
