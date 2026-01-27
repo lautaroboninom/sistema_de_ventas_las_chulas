@@ -1,6 +1,7 @@
 from django.db import connection
 from django.conf import settings
 from .ip_utils import get_client_ip
+from .views.helpers import _set_audit_user
 import json
 
 
@@ -10,6 +11,19 @@ class RLSMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        return self.get_response(request)
+
+
+class AuditUserMiddleware:
+    """Reset audit user per request to avoid leaking session-level settings."""
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        try:
+            _set_audit_user(request)
+        except Exception:
+            pass
         return self.get_response(request)
 
 

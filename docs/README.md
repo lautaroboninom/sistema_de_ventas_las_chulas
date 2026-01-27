@@ -57,6 +57,14 @@ Manual del Sistema de Reparaciones
   - Transición: `ingresos.estado` vuelve a `ingresado`; notifica al técnico asignado por email (best-effort).
   - Historial: se etiqueta el último evento de vuelta a ‘ingresado’.
 
+### Alertas de presupuestos pendientes (Jefe)
+- Command: `python manage.py send_presupuesto_alerts`.
+- Regla: primer aviso a los 7 dias desde `quotes.fecha_emitido`, luego cada 3 dias mientras siga "presupuestado".
+- Destinatarios: usuarios activos con rol `jefe` (excluye `jefe_veedor`).
+- Configuracion: `PRESUPUESTO_ALERT_ENABLED`, `PRESUPUESTO_ALERT_FIRST_DAYS`, `PRESUPUESTO_ALERT_REPEAT_DAYS`, `PRESUPUESTO_ALERT_LOCATION`.
+- Requiere tabla: `python manage.py apply_presupuesto_alerts_schema`.
+- Scheduling: ejecutar diario via cron/Task Scheduler (ej. 03:00).
+
 - PDFs y reportes
   - Presupuesto PDF: `api/service/pdf.py` + endpoints en `api/service/views/quotes_views.py`.
   - Remito de salida: `api/service/views/reportes_views.py` (autocompleta resolución si estado=‘reparado’ y libera).

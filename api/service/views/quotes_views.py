@@ -1,5 +1,6 @@
 import os
 from django.conf import settings
+from django.core.mail import send_mail
 from django.db import connection, transaction
 from django.http import HttpResponse
 
@@ -18,9 +19,99 @@ from .helpers import (
     exec_returning,
     money,
     require_roles,
+    require_roles_strict,
     _set_audit_user,
     _frontend_url,
+    _email_append_footer_text,
 )
+from ..repuestos import get_repuestos_config, calc_costo_ars, calc_precio_venta
+
+
+def _can_view_costs(user) -> bool:
+    rol = (getattr(user, "rol", "") or "").strip().lower()
+    return rol in ("jefe", "jefe_veedor")
+
+
+def _mask_costs(payload: dict, allow_costs: bool) -> dict:
+    if allow_costs:
+        return payload
+    for it in payload.get("items") or []:
+        it["costo_u_neto"] = None
+        it["costo_total_neto"] = None
+    return payload
+
+
+def _get_stock_alert_recipients():
+    rows = q(
+        """
+        SELECT DISTINCT LOWER(email) AS email
+        FROM users
+        WHERE activo
+          AND LOWER(rol) IN ('jefe', 'jefe_veedor')
+          AND COALESCE(email, '') <> ''
+        """,
+        [],
+    ) or []
+    return [r.get("email") for r in rows if r.get("email")]
+
+
+def _send_stock_min_alerts(items: list[dict]):
+    if not items:
+        return
+    recipients = _get_stock_alert_recipients()
+    if not recipients:
+        return
+    subject = f"Alerta stock minimo - {len(items)} repuesto(s)"
+    lines = ["Se alcanzo el stock minimo en:", ""]
+    for it in items:
+        lines.append(f"- {it.get('codigo') or '-'} | {it.get('nombre') or '-'}")
+        lines.append(f"  Stock: {it.get('stock_on_hand')} | Min: {it.get('stock_min')}")
+        if it.get("ubicacion_deposito"):
+            lines.append(f"  Ubicacion: {it.get('ubicacion_deposito')}")
+        lines.append("")
+    body = _email_append_footer_text("\n".join(lines).rstrip() + "\n")
+    send_mail(subject, body, getattr(settings, "DEFAULT_FROM_EMAIL", None), recipients, fail_silently=True)
+
+
+def _resolve_repuesto_data(repuesto_id, repuesto_codigo):
+    rep_id = None
+    rep_codigo = None
+    rep_nombre = None
+    rep_costo = None
+    rep_precio = None
+
+    row = None
+    if repuesto_id:
+        row = q(
+            "SELECT id, codigo, nombre, costo_usd, multiplicador, precio_venta FROM catalogo_repuestos WHERE id=%s AND activo",
+            [repuesto_id],
+            one=True,
+        )
+    if not row and repuesto_codigo:
+        row = q(
+            "SELECT id, codigo, nombre, costo_usd, multiplicador, precio_venta FROM catalogo_repuestos WHERE UPPER(codigo)=UPPER(%s) AND activo",
+            [repuesto_codigo],
+            one=True,
+        )
+
+    if row:
+        rep_id = row.get("id")
+        rep_codigo = row.get("codigo")
+        rep_nombre = row.get("nombre")
+        cfg = get_repuestos_config()
+        rep_costo = calc_costo_ars(row.get("costo_usd"), cfg.get("dolar_ars"))
+        rep_precio = calc_precio_venta(
+            row.get("costo_usd"),
+            cfg.get("dolar_ars"),
+            cfg.get("multiplicador_general"),
+            row.get("multiplicador"),
+        )
+        if rep_precio is None:
+            rep_precio = row.get("precio_venta")
+    else:
+        rep_codigo = (repuesto_codigo or "").strip().upper() or None
+
+    return rep_id, rep_codigo, rep_nombre, rep_costo, rep_precio
 
 
 def _ensure_quote(ingreso_id: int):
@@ -95,8 +186,10 @@ def _load_quote_payload(ingreso_id: int):
     items = q(
         """
         SELECT
-          qi.id, qi.tipo, qi.repuesto_id, qi.descripcion, qi.qty, qi.precio_u,
-          ROUND(qi.qty * qi.precio_u, 2) AS subtotal
+          qi.id, qi.tipo, qi.repuesto_id, qi.repuesto_codigo, qi.descripcion, qi.qty, qi.precio_u,
+          ROUND(qi.qty * qi.precio_u, 2) AS subtotal,
+          qi.costo_u_neto,
+          ROUND(qi.qty * COALESCE(qi.costo_u_neto,0), 2) AS costo_total_neto
         FROM quote_items qi
         JOIN quotes q ON q.id = qi.quote_id
         WHERE q.ingreso_id=%s
@@ -155,6 +248,7 @@ class QuoteDetailView(APIView):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico", "recepcion"])
         _ensure_quote(ingreso_id)
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
 
@@ -168,28 +262,53 @@ class QuoteItemsView(APIView):
         if tipo not in ("repuesto", "mano_obra", "servicio"):
             raise ValidationError("tipo inválido")
         desc = (d.get("descripcion") or "").strip()
-        if not desc:
-            raise ValidationError("descripcion requerida")
 
         try:
             qty = money(d.get("qty"))
-            precio = money(d.get("precio_u"))
         except (TypeError, ValueError):
             raise ValidationError("qty y precio_u deben ser numéricos")
         #if qty < 0 or precio < 0:
             #raise ValidationError("qty y precio_u no pueden ser negativos")
-        repuesto_id = d.get("repuesto_id")
+        repuesto_id = None
+        if d.get("repuesto_id") not in (None, ""):
+            try:
+                repuesto_id = int(d.get("repuesto_id"))
+            except (TypeError, ValueError):
+                repuesto_id = None
+        repuesto_codigo = (d.get("repuesto_codigo") or "").strip()
+
+        rep_id = rep_codigo = rep_nombre = rep_costo = rep_precio = None
+        if tipo == "repuesto":
+            rep_id, rep_codigo, rep_nombre, rep_costo, rep_precio = _resolve_repuesto_data(repuesto_id, repuesto_codigo)
+            if rep_nombre:
+                desc = rep_nombre
+        else:
+            repuesto_id = None
+            repuesto_codigo = ""
+
+        precio_raw = d.get("precio_u")
+        try:
+            if precio_raw is None or (isinstance(precio_raw, str) and precio_raw.strip() == ""):
+                precio = money(rep_precio) if rep_precio is not None else money(precio_raw)
+            else:
+                precio = money(precio_raw)
+        except (TypeError, ValueError):
+            raise ValidationError("qty y precio_u deben ser numéricos")
+
+        if not desc:
+            raise ValidationError("descripcion requerida")
 
         qid = _ensure_quote(ingreso_id)
         _set_audit_user(request)
         exec_void(
             """
-            INSERT INTO quote_items(quote_id, tipo, descripcion, qty, precio_u, repuesto_id)
-            VALUES (%s,%s,%s,%s,%s,%s)
+            INSERT INTO quote_items(quote_id, tipo, descripcion, qty, precio_u, repuesto_id, repuesto_codigo, costo_u_neto)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
             """,
-            [qid, tipo, desc, qty, precio, repuesto_id],
+            [qid, tipo, desc, qty, precio, rep_id, rep_codigo, rep_costo],
         )
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data, status=201)
 
 
@@ -200,13 +319,47 @@ class QuoteItemDetailView(APIView):
         require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
         d = request.data or {}
         sets, params = [], []
+        desc_from_rep = None
         if "tipo" in d:
             t = (d.get("tipo") or "").strip()
             if t not in ("repuesto", "mano_obra", "servicio"):
                 raise ValidationError("tipo inválido")
             sets.append("tipo=%s"); params.append(t)
-        if "descripcion" in d:
+            if t != "repuesto":
+                sets.append("repuesto_id=%s"); params.append(None)
+                sets.append("repuesto_codigo=%s"); params.append(None)
+                sets.append("costo_u_neto=%s"); params.append(None)
+        if "repuesto_id" in d or "repuesto_codigo" in d:
+            repuesto_id = None
+            if d.get("repuesto_id") not in (None, ""):
+                try:
+                    repuesto_id = int(d.get("repuesto_id"))
+                except (TypeError, ValueError):
+                    repuesto_id = None
+            repuesto_codigo = (d.get("repuesto_codigo") or "").strip() if "repuesto_codigo" in d else None
+
+            rep_id, rep_code, rep_nombre, rep_costo, rep_precio = _resolve_repuesto_data(repuesto_id, repuesto_codigo)
+            if rep_nombre:
+                sets.append("repuesto_id=%s"); params.append(rep_id)
+                sets.append("repuesto_codigo=%s"); params.append(rep_code)
+                sets.append("costo_u_neto=%s"); params.append(rep_costo)
+                if "precio_u" not in d and rep_precio is not None:
+                    sets.append("precio_u=%s"); params.append(rep_precio)
+                desc_from_rep = rep_nombre
+            else:
+                if repuesto_id is None and (repuesto_codigo is None or repuesto_codigo == ""):
+                    sets.append("repuesto_id=%s"); params.append(None)
+                    sets.append("repuesto_codigo=%s"); params.append(None)
+                    sets.append("costo_u_neto=%s"); params.append(None)
+                else:
+                    sets.append("repuesto_id=%s"); params.append(None)
+                    if repuesto_codigo is not None:
+                        sets.append("repuesto_codigo=%s"); params.append(repuesto_codigo.strip().upper() or None)
+                    sets.append("costo_u_neto=%s"); params.append(None)
+        if "descripcion" in d and desc_from_rep is None:
             sets.append("descripcion=%s"); params.append((d.get("descripcion") or "").strip())
+        if desc_from_rep is not None:
+            sets.append("descripcion=%s"); params.append(desc_from_rep)
         if "qty" in d:
             try:
                 qv = float(d.get("qty"))
@@ -223,8 +376,6 @@ class QuoteItemDetailView(APIView):
             if pv < 0:
                 raise ValidationError("precio_u no puede ser negativo")
             sets.append("precio_u=%s"); params.append(pv)
-        if "repuesto_id" in d:
-            sets.append("repuesto_id=%s"); params.append(d.get("repuesto_id"))
 
         if sets:
             _set_audit_user(request)
@@ -239,6 +390,7 @@ class QuoteItemDetailView(APIView):
                 params,
             )
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
     def delete(self, request, ingreso_id: int, item_id: int):
@@ -253,6 +405,7 @@ class QuoteItemDetailView(APIView):
             [ingreso_id, item_id],
         )
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
 
@@ -289,6 +442,7 @@ class QuoteResumenView(APIView):
                 [qid, mo],
             )
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
 
@@ -296,7 +450,7 @@ class EmitirPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        require_roles_strict(request, ["jefe", "admin"])
         autorizado_por = (request.data.get("autorizado_por") or "Cliente").strip()
         forma_pago = (request.data.get("forma_pago") or "A definir").strip()
         qid = _ensure_quote(ingreso_id)
@@ -327,6 +481,7 @@ class EmitirPresupuestoView(APIView):
         pdf_url = f"/api/quotes/{ingreso_id}/pdf/"
         exec_void("UPDATE quotes SET pdf_url=%s WHERE id=%s", [pdf_url, qid])
         data = _load_quote_payload(ingreso_id); data["pdf_url"] = pdf_url
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
 
@@ -347,31 +502,92 @@ class AprobarPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        require_roles_strict(request, ["jefe", "admin"])
         qid = _ensure_quote(ingreso_id)
-        _set_audit_user(request)
-        exec_void(
-            """
-            UPDATE quotes
-               SET estado='aprobado',
-                   fecha_aprobado=now()
-             WHERE id=%s
-            """,
-            [qid],
-        )
-        exec_void(
-            """
-            UPDATE ingresos
-               SET presupuesto_estado='aprobado',
-                   estado = CASE
-                              WHEN estado IN ('ingresado','diagnosticado','presupuestado')
-                              THEN 'reparar'
-                              ELSE estado
-                            END
-             WHERE id=%s
-            """,
-            [ingreso_id],
-        )
+        was_approved = False
+        alert_items = []
+        with transaction.atomic():
+            row = q("SELECT estado FROM quotes WHERE id=%s FOR UPDATE", [qid], one=True) or {}
+            was_approved = (row.get("estado") or "").strip() == "aprobado"
+            _set_audit_user(request)
+            exec_void(
+                """
+                UPDATE quotes
+                   SET estado='aprobado',
+                       fecha_aprobado=now()
+                 WHERE id=%s
+                """,
+                [qid],
+            )
+            exec_void(
+                """
+                UPDATE ingresos
+                   SET presupuesto_estado='aprobado',
+                       estado = CASE
+                                  WHEN estado IN ('ingresado','diagnosticado','presupuestado')
+                                  THEN 'reparar'
+                                  ELSE estado
+                                END
+                 WHERE id=%s
+                """,
+                [ingreso_id],
+            )
+
+            if not was_approved:
+                items = q(
+                    """
+                    SELECT repuesto_id, SUM(qty) AS qty
+                    FROM quote_items
+                    WHERE quote_id=%s
+                      AND tipo='repuesto'
+                      AND repuesto_id IS NOT NULL
+                    GROUP BY repuesto_id
+                    """,
+                    [qid],
+                ) or []
+                for it in items:
+                    rep_id = it.get("repuesto_id")
+                    if not rep_id:
+                        continue
+                    qty = money(it.get("qty") or 0)
+                    if qty == 0:
+                        continue
+                    rep_row = q(
+                        """
+                        SELECT id, codigo, nombre, stock_on_hand, stock_min, ubicacion_deposito
+                        FROM catalogo_repuestos
+                        WHERE id=%s
+                        FOR UPDATE
+                        """,
+                        [rep_id],
+                        one=True,
+                    )
+                    if not rep_row:
+                        continue
+                    stock_prev = money(rep_row.get("stock_on_hand") or 0)
+                    stock_min = money(rep_row.get("stock_min") or 0)
+                    delta = money(-qty)
+                    stock_new = money(stock_prev + delta)
+                    exec_void(
+                        "UPDATE catalogo_repuestos SET stock_on_hand=%s, updated_at=NOW() WHERE id=%s",
+                        [stock_new, rep_id],
+                    )
+                    exec_void(
+                        """
+                        INSERT INTO repuestos_movimientos
+                          (repuesto_id, tipo, qty, stock_prev, stock_new, ref_tipo, ref_id, created_by)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                        """,
+                        [rep_id, "egreso_aprobado", delta, stock_prev, stock_new, "quote", qid, request.user.id],
+                    )
+                    if stock_prev > stock_min and stock_new <= stock_min:
+                        alert_items.append({
+                            "codigo": rep_row.get("codigo"),
+                            "nombre": rep_row.get("nombre"),
+                            "stock_on_hand": stock_new,
+                            "stock_min": stock_min,
+                            "ubicacion_deposito": rep_row.get("ubicacion_deposito"),
+                        })
 
         try:
             row = q(
@@ -421,6 +637,12 @@ class AprobarPresupuestoView(APIView):
         except Exception:
             pass
 
+        if alert_items:
+            try:
+                _send_stock_min_alerts(alert_items)
+            except Exception:
+                pass
+
         try:
             fname, pdf = render_quote_pdf(ingreso_id)
             save_dir = getattr(settings, "QUOTES_SAVE_DIR", None)
@@ -434,6 +656,7 @@ class AprobarPresupuestoView(APIView):
             pass
 
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
 
@@ -441,7 +664,7 @@ class AnularPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin"])
+        require_roles_strict(request, ["jefe", "admin"])
         row = q("SELECT presupuesto_estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row:
             raise ValidationError("Ingreso no encontrado")
@@ -462,6 +685,7 @@ class AnularPresupuestoView(APIView):
         )
         exec_void("UPDATE ingresos SET presupuesto_estado='pendiente' WHERE id=%s", [ingreso_id])
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
 
@@ -469,7 +693,7 @@ class NoAplicaPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        require_roles_strict(request, ["jefe", "admin"])
         row = q("SELECT presupuesto_estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row:
             raise ValidationError("Ingreso no encontrado")
@@ -492,6 +716,7 @@ class NoAplicaPresupuestoView(APIView):
         )
         exec_void("UPDATE ingresos SET presupuesto_estado='no_aplica' WHERE id=%s", [ingreso_id])
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
 
@@ -499,7 +724,7 @@ class QuitarNoAplicaPresupuestoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, ingreso_id: int):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        require_roles_strict(request, ["jefe", "admin"])
         row = q("SELECT presupuesto_estado FROM ingresos WHERE id=%s", [ingreso_id], one=True)
         if not row:
             raise ValidationError("Ingreso no encontrado")
@@ -522,6 +747,7 @@ class QuitarNoAplicaPresupuestoView(APIView):
         )
         exec_void("UPDATE ingresos SET presupuesto_estado='pendiente' WHERE id=%s", [ingreso_id])
         data = _load_quote_payload(ingreso_id)
+        data = _mask_costs(data, _can_view_costs(request.user))
         return Response(QuoteDetailSerializer(data).data)
 
 

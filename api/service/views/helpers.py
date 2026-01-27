@@ -39,6 +39,7 @@ from .helpers_impl import (
 
     # Roles/auth helpers
     require_roles,
+    require_roles_strict,
     require_jefe,
     _rol,
     _is,
@@ -81,7 +82,7 @@ __all__ = [
     # motivo
     '_get_motivo_enum_values','_get_motivo_enum_values_raw','_map_motivo_to_db_label','_fetchall_dicts',
     # roles
-    'require_roles','require_jefe','_rol','_is','_in',
+    'require_roles','require_roles_strict','require_jefe','_rol','_is','_in',
     # misc
     'ensure_default_locations','money','_frontend_url','os_label',
     '_load_email_footer_text','_email_append_footer_text','_email_append_footer_html',

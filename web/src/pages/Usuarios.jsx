@@ -22,8 +22,9 @@ const Btn = ({variant="solid", className="", ...props}) => {
 
 export default function Usuarios() {
   const { user: yo } = useAuth();
-  const soyJefe = yo?.rol === "jefe" || yo?.rol === "jefe_veedor";
+  const soyJefe = yo?.rol === "jefe";
   const soyAdmin = yo?.rol === "admin";
+  const canEditUsers = soyJefe || soyAdmin;
 
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState("");
@@ -31,16 +32,19 @@ export default function Usuarios() {
   const [nuevo, setNuevo] = useState({ nombre:"", email:"", rol:"tecnico" });
   const [roles, setRoles] = useState([]); // [{value,label}]
   useEffect(() => {
+    if (!canEditUsers) {
+      setRoles([]);
+      return;
+    }
+    let alive = true;
     (async () => {
       try {
-        const [us, rs] = await Promise.all([getUsuarios(), getRoles()]);
-        setRows(us);
-        setRoles(Array.isArray(rs) ? rs : []);
-      } catch (e) {
-        setErr(normalizeErr(e));
-      }
+        const rs = await getRoles();
+        if (alive) setRoles(Array.isArray(rs) ? rs : []);
+      } catch (e) {}
     })();
-  }, []);
+    return () => { alive = false; };
+  }, [canEditUsers]);
   const roleLabel = (val) => roles.find(r => r.value === val)?.label || val;
   const load = async () => {
     setErr(""); setMsg("");
@@ -99,7 +103,7 @@ export default function Usuarios() {
     catch(e){ setErr(normalizeErr(e)); }
   };
 
-  const puedeEditar = useMemo(() => soyJefe || soyAdmin, [soyJefe, soyAdmin]);
+  const puedeEditar = useMemo(() => canEditUsers, [canEditUsers]);
 
   return (
     <div className="space-y-6">

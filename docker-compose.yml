@@ -36,6 +36,10 @@ services:
       - type: bind
         source: ${QUOTES_HOST_DIR:-./quotes}
         target: /quotes
+      - type: bind
+        source: ${REPUESTOS_COSTOS_HOST_DIR:-./repuestos}
+        target: /repuestos
+        read_only: true
     command: >
       bash -lc "
       python manage.py migrate --noinput &&

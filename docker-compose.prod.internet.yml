@@ -72,6 +72,10 @@ services:
       - type: bind
         source: ${QUOTES_HOST_DIR:-./quotes}
         target: /quotes
+      - type: bind
+        source: ${REPUESTOS_COSTOS_HOST_DIR:-./repuestos}
+        target: /repuestos
+        read_only: true
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.api-secure.rule=Host(`reparaciones.sepid.com.ar`) && PathPrefix(`/api`)"

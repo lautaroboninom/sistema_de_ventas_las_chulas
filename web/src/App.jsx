@@ -11,6 +11,7 @@ export default function App() {
   const nav = useNavigate();
   const rol = user?.rol;
   const isJefe = rol === "jefe";
+  const isJefeVeedor = rol === "jefe_veedor";
   const isAdmin = rol === "admin";
  return (
     <div className="min-h-screen flex flex-col">
@@ -23,13 +24,18 @@ export default function App() {
             <Link to="/clientes" className="hover:underline">
               General por cliente
             </Link>
-            <Link to="/equipos" className="hover:underline">
-              General equipos
+            <Link to="/ingresos/historico" className="hover:underline">
+              Histórico ingresos
             </Link>
+            {(isJefe || isAdmin || isJefeVeedor) && (
+              <Link to="/equipos" className="hover:underline">
+                Equipos
+              </Link>
+            )}
           </nav>
 
           <div className="ml-auto flex items-center gap-3">
-            {(isJefe || isAdmin) && (
+            {(isJefe || isAdmin || isJefeVeedor) && (
               <Link
                 to="/ingresos/nuevo"
                 className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
@@ -63,4 +69,3 @@ export default function App() {
     </div>
   );
 }
-

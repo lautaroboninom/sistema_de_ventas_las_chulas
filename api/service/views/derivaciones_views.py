@@ -220,7 +220,7 @@ class EquiposDerivadosView(APIView):
                    COALESCE(b.nombre,'') AS marca,
                    COALESCE(m.nombre,'') AS modelo,
                    COALESCE(m.tipo_equipo,'') AS tipo_equipo,
-                   NULLIF(t.equipo_variante,'') AS equipo_variante,
+                   COALESCE(NULLIF(t.equipo_variante,''), NULLIF(d.variante,''), NULLIF(m.variante,'')) AS equipo_variante,
                     COALESCE(d.numero_interno,'') AS numero_interno
             FROM equipos_derivados ed
             JOIN ingresos t   ON t.id = ed.ingreso_id

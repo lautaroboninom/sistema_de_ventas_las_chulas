@@ -49,11 +49,15 @@ def handler(exc, context):
         detail_text = _as_text(getattr(exc, "detail", "No autorizado"))
     else:
         # Mantener otras respuestas pero normalizar shape si tiene 'detail'
-        data = getattr(response, "data", {}) or {}
-        detail = data.get("detail")
-        if detail is not None and not isinstance(detail, (dict, list)):
-            detail_text = _as_text(detail)
-            code = data.get("code") or str(getattr(getattr(exc, "default_code", "error"), "value", "error"))
+        data = getattr(response, "data", None)
+        if isinstance(data, dict):
+            detail = data.get("detail")
+            if detail is not None and not isinstance(detail, (dict, list)):
+                detail_text = _as_text(detail)
+                code = data.get("code") or str(getattr(getattr(exc, "default_code", "error"), "value", "error"))
+            else:
+                # dejar tal cual
+                return response
         else:
             # dejar tal cual
             return response
@@ -69,4 +73,3 @@ def handler(exc, context):
             pass
 
     return new_resp
-

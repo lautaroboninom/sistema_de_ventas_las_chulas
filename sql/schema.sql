@@ -322,7 +322,9 @@ CREATE TABLE IF NOT EXISTS quote_items (
   descripcion TEXT NOT NULL,
   qty         NUMERIC(10,2) NOT NULL DEFAULT 1,
   precio_u    NUMERIC(12,2) NOT NULL,
-  repuesto_id INTEGER NULL
+  repuesto_id INTEGER NULL,
+  repuesto_codigo TEXT NULL,
+  costo_u_neto NUMERIC(12,2) NULL
 );
 
 CREATE TABLE IF NOT EXISTS ingreso_events (
@@ -363,6 +365,17 @@ CREATE TABLE IF NOT EXISTS ingreso_assignment_requests (
   canceled_at TIMESTAMPTZ NULL
 );
 CREATE INDEX IF NOT EXISTS ix_iars_ingreso_created ON ingreso_assignment_requests(ingreso_id, created_at DESC);
+
+-- Alertas por presupuestos pendientes (uno por ingreso; guarda ultimo envio)
+CREATE TABLE IF NOT EXISTS ingreso_presupuesto_alerts (
+  id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  ingreso_id   INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
+  last_sent_at TIMESTAMPTZ NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ingreso_presupuesto_alerts_ingreso ON ingreso_presupuesto_alerts(ingreso_id);
+CREATE INDEX IF NOT EXISTS ix_ingreso_presupuesto_alerts_last_sent ON ingreso_presupuesto_alerts(last_sent_at);
 
 CREATE TABLE IF NOT EXISTS proveedores_externos (
   id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -536,6 +549,54 @@ CREATE TABLE IF NOT EXISTS catalogo_accesorios (
   CONSTRAINT uq_catalogo_accesorios_nombre UNIQUE (nombre)
 );
 
+-- Repuestos (catalogo para costos y codigos)
+CREATE TABLE IF NOT EXISTS catalogo_repuestos (
+  id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  codigo       TEXT NOT NULL,
+  nombre       TEXT NOT NULL,
+  costo_neto   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  costo_usd    NUMERIC(12,2) NULL,
+  precio_venta NUMERIC(12,2) NULL,
+  multiplicador NUMERIC(10,4) NULL,
+  stock_on_hand NUMERIC(12,2) NOT NULL DEFAULT 0,
+  stock_min   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  activo       BOOLEAN NOT NULL DEFAULT TRUE,
+  source_mtime TIMESTAMPTZ NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_catalogo_repuestos_codigo UNIQUE (codigo)
+);
+
+CREATE TABLE IF NOT EXISTS repuestos_config (
+  id                    INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  dolar_ars             NUMERIC(12,4) NOT NULL DEFAULT 0,
+  multiplicador_general NUMERIC(10,4) NOT NULL DEFAULT 1,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_by            INTEGER NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS repuestos_config_history (
+  id                    INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  dolar_ars             NUMERIC(12,4) NOT NULL,
+  multiplicador_general NUMERIC(10,4) NOT NULL,
+  changed_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  changed_by            INTEGER NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS repuestos_movimientos (
+  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  repuesto_id INTEGER NOT NULL REFERENCES catalogo_repuestos(id) ON DELETE CASCADE,
+  tipo       TEXT NOT NULL,
+  qty        NUMERIC(12,2) NOT NULL,
+  stock_prev NUMERIC(12,2) NULL,
+  stock_new  NUMERIC(12,2) NULL,
+  ref_tipo   TEXT NULL,
+  ref_id     INTEGER NULL,
+  nota       TEXT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by INTEGER NULL REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS ingreso_accesorios (
   id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   ingreso_id    INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
@@ -656,12 +717,18 @@ CREATE INDEX IF NOT EXISTS ix_quotes_emitido ON quotes(fecha_emitido);
 CREATE INDEX IF NOT EXISTS ix_quotes_aprobado ON quotes(fecha_aprobado);
 
 CREATE INDEX IF NOT EXISTS idx_items_quote ON quote_items(quote_id);
+CREATE INDEX IF NOT EXISTS idx_quote_items_repuesto_codigo ON quote_items(repuesto_codigo);
 CREATE INDEX IF NOT EXISTS ix_events_ingreso_estado_ts ON ingreso_events(ingreso_id, a_estado, ts);
 
 CREATE INDEX IF NOT EXISTS idx_ingreso_acc_ingreso ON ingreso_accesorios(ingreso_id);
 CREATE INDEX IF NOT EXISTS idx_ingreso_acc_accesorio ON ingreso_accesorios(accesorio_id);
 
 CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_ingreso ON ingreso_alquiler_accesorios(ingreso_id);
+
+CREATE INDEX IF NOT EXISTS idx_catalogo_repuestos_codigo_ci ON catalogo_repuestos ((LOWER(codigo)));
+CREATE INDEX IF NOT EXISTS idx_catalogo_repuestos_nombre_ci ON catalogo_repuestos ((LOWER(nombre)));
+CREATE INDEX IF NOT EXISTS idx_repuestos_movimientos_repuesto_id ON repuestos_movimientos(repuesto_id);
+CREATE INDEX IF NOT EXISTS idx_repuestos_movimientos_created_at ON repuestos_movimientos(created_at);
 CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_accesorio ON ingreso_alquiler_accesorios(accesorio_id);
 
 CREATE INDEX IF NOT EXISTS idx_mte_marca ON marca_tipos_equipo(marca_id);
@@ -688,6 +755,11 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_ingreso_media_set_updated_at') THEN
     CREATE TRIGGER trg_ingreso_media_set_updated_at
     BEFORE UPDATE ON ingreso_media
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_ingreso_presupuesto_alerts_set_updated_at') THEN
+    CREATE TRIGGER trg_ingreso_presupuesto_alerts_set_updated_at
+    BEFORE UPDATE ON ingreso_presupuesto_alerts
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_cte_updated_at') THEN

@@ -74,6 +74,13 @@ EMAIL_LEGAL_FOOTER = os.getenv(
 
 # Notificaciones: solicitudes de asignación de técnico
 ASSIGNMENT_REQUEST_RECIPIENTS = _csv("ASSIGNMENT_REQUEST_RECIPIENTS", "")
+# Notificaciones: bajas de equipos (otros sistemas)
+BAJA_NOTIFY_RECIPIENTS = _csv("BAJA_NOTIFY_RECIPIENTS", "eduardo@sepid.com.ar")
+# Notificaciones: presupuestos pendientes (solo rol jefe)
+PRESUPUESTO_ALERT_ENABLED = os.getenv("PRESUPUESTO_ALERT_ENABLED", "1").lower() in ("1", "true", "yes")
+PRESUPUESTO_ALERT_FIRST_DAYS = int(os.getenv("PRESUPUESTO_ALERT_FIRST_DAYS", "7"))
+PRESUPUESTO_ALERT_REPEAT_DAYS = int(os.getenv("PRESUPUESTO_ALERT_REPEAT_DAYS", "3"))
+PRESUPUESTO_ALERT_LOCATION = os.getenv("PRESUPUESTO_ALERT_LOCATION", "taller")
 
 # Zona horaria
 TIME_ZONE = os.getenv("TZ", "America/Argentina/Buenos_Aires")
@@ -94,6 +101,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "service.middleware.AuditUserMiddleware",         # set app.user_id/app.user_role por request
     "service.middleware.RLSMiddleware",               # RLS por-request
     "service.middleware.ActivityLogMiddleware",       # auditoría (con exclusiones por prefijo)
 ]
@@ -206,7 +214,32 @@ TRAZABILIDAD_GENERAL_FILE = os.getenv(
     "TRAZABILIDAD_GENERAL_FILE",
     os.path.join(TRAZABILIDAD_ROOT, "@GENERAL.xlsx")
 )
+
+# Catalogo de repuestos (costos)
+REPUESTOS_COSTOS_ROOT = os.getenv(
+    "REPUESTOS_COSTOS_ROOT",
+    r"\\SERVERDATA\Datos\Servicio Tecnico"
+)
+
+REPUESTOS_COSTOS_FILE = os.getenv(
+    "REPUESTOS_COSTOS_FILE",
+    os.path.join(REPUESTOS_COSTOS_ROOT, "repuestos_unificados.xlsx")
+)
+
+# Catalogo de repuestos (listado unificado: codigo/descripcion/proveedor)
+REPUESTOS_UNIFICADOS_FILE = os.getenv(
+    "REPUESTOS_UNIFICADOS_FILE",
+    os.path.join(REPUESTOS_COSTOS_ROOT, "repuestos_unificados.xlsx")
+)
+
 INGRESO_MEDIA_STORAGE_PREFIX = os.getenv('INGRESO_MEDIA_STORAGE_PREFIX', 'ingresos')
+
+# Catalogo de repuestos (listado unificado: codigo/descripcion/proveedor)
+REPUESTOS_UNIFICADOS_FILE = os.getenv(
+    "REPUESTOS_UNIFICADOS_FILE",
+    os.path.join(REPUESTOS_COSTOS_ROOT, "repuestos_unificados.xlsx")
+)
+
 
 # --- Seguridad / Autenticación (vistas) ---
 # TTL de tokens de restablecimiento (minutos)

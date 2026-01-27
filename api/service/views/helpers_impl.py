@@ -197,8 +197,13 @@ def exec_void(sql, params=None):
 
 def _set_audit_user(request):
     if connection.vendor == "postgresql":
-        uid = str(getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", ""))
-        role = getattr(request, "user_role", "")
+        uid = getattr(request, "user_id", None)
+        if uid is None:
+            uid = getattr(getattr(request, "user_obj", None), "id", None)
+        uid = "" if uid is None else str(uid)
+        role = getattr(request, "user_role", None)
+        if role is None:
+            role = getattr(getattr(request, "user_obj", None), "rol", "")
         with connection.cursor() as cur:
             cur.execute("SET app.user_id = %s;", [uid])
             cur.execute("SET app.user_role = %s;", [role])
@@ -410,6 +415,13 @@ def require_roles(request, roles):
     if "jefe" in expanded:
         expanded.add("jefe_veedor")
     if r not in expanded:
+        from rest_framework.exceptions import PermissionDenied
+        raise PermissionDenied("No autorizado")
+
+
+def require_roles_strict(request, roles):
+    r = _rol(request)
+    if r not in set(roles):
         from rest_framework.exceptions import PermissionDenied
         raise PermissionDenied("No autorizado")
 
@@ -692,7 +704,7 @@ __all__ = [
     # motivo
     '_get_motivo_enum_values','_get_motivo_enum_values_raw','_map_motivo_to_db_label','_fetchall_dicts',
     # roles
-    'require_roles','require_jefe','_rol','_is','_in',
+    'require_roles','require_roles_strict','require_jefe','_rol','_is','_in',
     # misc
     'ensure_default_locations','money','_frontend_url',
     # email footer helpers

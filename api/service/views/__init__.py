@@ -25,6 +25,8 @@ from .auth_views import (
 from .metricas_views import (
     MetricasResumenView,
     MetricasSeriesView,
+    MetricasFinanzasView,
+    MetricasFinanzasLiberadosView,
     MetricasCalibracionView,
     FeriadosView,
     MetricasConfigView,
@@ -47,6 +49,7 @@ from .ingresos_views import (
     GeneralPorClienteView,
     GeneralPorClienteExportView,
     MarcarControladoSinDefectoView,
+    MarcarParaRepararView,
     MarcarReparadoView,
     EntregarIngresoView,
     DarBajaIngresoView,
@@ -89,6 +92,18 @@ from .accesorios_views import (
     BuscarAccesorioPorReferenciaView,
     IngresoAlquilerAccesoriosView,
     IngresoAlquilerAccesorioDetailView,
+)
+
+from .repuestos_views import (
+    RepuestosSubrubrosView,
+    CatalogoRepuestosView,
+    RepuestosView,
+    RepuestoDetailView,
+    RepuestosConfigView,
+    RepuestosMovimientosView,
+    RepuestosCambiosView,
+    RepuestosStockPermisosView,
+    RepuestosStockPermisoDetailView,
 )
 
 from .catalogo_hierarquia_views import (
@@ -138,6 +153,12 @@ from .derivaciones_views import (
     EquiposDerivadosView,
 )
 
+from .devices_views import (
+    DeviceIdentificadoresView,
+    DevicesListView,
+    DevicesMergeView,
+)
+
 from .proveedores_views import (
     ProveedoresExternosView,
 )
@@ -152,6 +173,10 @@ from .clientes_views import (
 from .reportes_views import (
     RemitoSalidaPdfView,
     RemitoDerivacionPdfView,
+)
+
+from .scan_views import (
+    ScanLookupView,
 )
 
 # Motivos catálogo (propio de views/)
@@ -169,6 +194,8 @@ __all__ = [
     # metricas
     "MetricasResumenView",
     "MetricasSeriesView",
+    "MetricasFinanzasView",
+    "MetricasFinanzasLiberadosView",
     "MetricasCalibracionView",
     "FeriadosView",
     "MetricasConfigView",
@@ -187,6 +214,7 @@ __all__ = [
     "GeneralPorClienteView",
     "GeneralPorClienteExportView",
     "MarcarControladoSinDefectoView",
+    "MarcarParaRepararView",
     "MarcarReparadoView",
     "EntregarIngresoView",
     "DarBajaIngresoView",
@@ -218,6 +246,15 @@ __all__ = [
     "IngresoMediaThumbnailView",
     # accesorios
     "CatalogoAccesoriosView",
+    "RepuestosSubrubrosView",
+    "CatalogoRepuestosView",
+    "RepuestosView",
+    "RepuestoDetailView",
+    "RepuestosConfigView",
+    "RepuestosMovimientosView",
+    "RepuestosCambiosView",
+    "RepuestosStockPermisosView",
+    "RepuestosStockPermisoDetailView",
     "IngresoAccesoriosView",
     "IngresoAccesorioDetailView",
     "BuscarAccesorioPorReferenciaView",
@@ -263,6 +300,10 @@ __all__ = [
     "DerivacionesPorIngresoView",
     "DevolverDerivacionView",
     "EquiposDerivadosView",
+    # devices
+    "DeviceIdentificadoresView",
+    "DevicesListView",
+    "DevicesMergeView",
     # proveedores
     "ProveedoresExternosView",
     # clientes
@@ -273,6 +314,8 @@ __all__ = [
     # reportes
     "RemitoSalidaPdfView",
     "RemitoDerivacionPdfView",
+    # scan lookup
+    "ScanLookupView",
     # motivos (catálogo ENUM ingreso.motivo)
     "CatalogoMotivosView",
     # warranty rules

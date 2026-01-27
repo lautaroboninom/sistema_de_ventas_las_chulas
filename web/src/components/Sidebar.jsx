@@ -58,8 +58,10 @@ export default function Sidebar() {
   const admin = isAdmin(user);
   const recep = isRecepcion(user);
   const techLike = canActAsTech(user);
-  const showSistema = jefe || admin || jefeVeedor;
-  const showUsuarios = jefe;
+  const showSistemaLinks = jefe || admin || jefeVeedor;
+  const showRepuestos = jefe || admin || jefeVeedor || techLike;
+  const showSistema = showSistemaLinks || showRepuestos;
+  const showUsuarios = jefe || jefeVeedor;
 
   return (
     <aside className="w-50 shrink-0 border-r bg-white hidden md:block text-sm">
@@ -100,14 +102,17 @@ export default function Sidebar() {
           {showSistema && (
             <>
               <div className="text-xs uppercase text-gray-400 px-1 mb-1">Sistema</div>
-              {jefe && <LinkItem to="/metricas">Métricas</LinkItem>}
+              {(jefe || jefeVeedor) && <LinkItem to="/metricas">Metricas</LinkItem>}
               {showUsuarios && <LinkItem to="/usuarios">Usuarios</LinkItem>}
-              <LinkItem to="/catalogo/clientes">Clientes</LinkItem>
-              <LinkItem to="/catalogo/tipos-equipo">Tipos de equipo</LinkItem>
-              <LinkItem to="/catalogo/accesorios">Accesorios</LinkItem>
-              <LinkItem to="/catalogo/marcas">Marcas &amp; Modelos</LinkItem>
-              <LinkItem to="/catalogo/proveedores">Proveedores externos</LinkItem>
-              <LinkItem to="/garantias">Garantías</LinkItem>
+              {showSistemaLinks && <LinkItem to="/catalogo/clientes">Clientes</LinkItem>}
+              {showSistemaLinks && <LinkItem to="/catalogo/tipos-equipo">Tipos de equipo</LinkItem>}
+              {showSistemaLinks && <LinkItem to="/catalogo/accesorios">Accesorios</LinkItem>}
+              {showSistemaLinks && <LinkItem to="/catalogo/repuestos">Repuestos</LinkItem>}
+              {showSistemaLinks && <LinkItem to="/catalogo/marcas">Marcas &amp; Modelos</LinkItem>}
+              {showSistemaLinks && <LinkItem to="/catalogo/proveedores">Proveedores externos</LinkItem>}
+              {showSistemaLinks && <LinkItem to="/garantias">Garantias</LinkItem>}
+              {showSistemaLinks && <LinkItem to="/equipos">Equipos</LinkItem>}
+              {!showSistemaLinks && showRepuestos && <LinkItem to="/catalogo/repuestos">Repuestos</LinkItem>}
             </>
           )}
         </div>

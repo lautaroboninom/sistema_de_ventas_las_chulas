@@ -1,6 +1,6 @@
 // web/src/components/StatusChip.jsx
 // Chip de estado con variantes de color discretas y accesibles
-import { ESTADO_LABELS } from "../lib/constants";
+import { estadoLabel } from "../lib/constants";
 
 const VARIANTS = {
   purple: {
@@ -83,16 +83,7 @@ function variantOf(value) {
 }
 
 function labelOf(value) {
-  // Si coincide con etiquetas oficiales, salas; sino capitaliza bsica
-  const raw = String(value ?? "");
-  const lower = raw.toLowerCase();
-  // Buscar en labels conocidos
-  const known = Object.entries(ESTADO_LABELS || {}).find(([, lbl]) =>
-    String(lbl || "").toLowerCase() === lower
-  );
-  if (known) return known[1];
-  if (!raw.trim()) return "-";
-  return raw.charAt(0).toUpperCase() + raw.slice(1);
+  return estadoLabel(value) || "-";
 }
 
 export default function StatusChip({ value, title }) {
@@ -115,5 +106,4 @@ export default function StatusChip({ value, title }) {
     </span>
   );
 }
-
 

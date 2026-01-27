@@ -1,13 +1,15 @@
 import Row from "../../../components/Row";
 import { useMemo, useState, useEffect } from "react";
 import { formatDateTime as formatDateTimeHelper, resolveFechaIngreso } from "../../../lib/ui-helpers";
-import { resolutionLabel } from "../../../lib/constants";
+import { resolutionLabel, estadoLabel } from "../../../lib/constants";
+import { isJefe } from "../../../lib/authz";
 import { getBlob, postEntregarIngreso, patchIngreso, checkGarantiaFabrica, patchIngresoTecnico, postSolicitarAsignacion, getAccesoriosCatalogo, postAccesorioAlquilerIngreso, deleteAccesorioAlquilerIngreso } from "../../../lib/api";
 
 export default function PrincipalTab(props) {
   const {
     id,
     data,
+    user,
     release,
     numeroSerie,
     // basics edit
@@ -61,6 +63,8 @@ export default function PrincipalTab(props) {
     setRelatedOpen,
     toDatetimeLocalStr,
   } = props;
+
+  const canUncheckAlquilado = isJefe(user);
 
   // Derivados del catlogo (para filtros de equipo)
   const tiposDisponibles = useMemo(() => {
@@ -554,7 +558,7 @@ export default function PrincipalTab(props) {
           <h2 className="font-semibold mb-2">Estado</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
             <Row label="Motivo">{data.motivo}</Row>
-            <Row label="Estado">{data.estado}</Row>
+            <Row label="Estado">{estadoLabel(data.estado) || "-"}</Row>
             <Row label="Presupuesto">
               {(() => {
                 const v = data.presupuesto_estado;
@@ -926,9 +930,10 @@ export default function PrincipalTab(props) {
           <input
             type="checkbox"
             checked={!!data.alquilado}
-            disabled={!!data.alquilado}
+            disabled={!!data.alquilado && !canUncheckAlquilado}
             onChange={async (e) => {
               const checked = e.target.checked;
+              if (!checked && data?.alquilado && !canUncheckAlquilado) return;
               try {
                 if (checked) {
                   const target = (ubicaciones || []).find((u) => (u?.nombre || "").trim().toLowerCase() === "alquilado");
@@ -1023,7 +1028,6 @@ export default function PrincipalTab(props) {
     </>
   );
 }
-
 
 
 

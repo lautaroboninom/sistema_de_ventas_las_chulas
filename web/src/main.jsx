@@ -21,17 +21,19 @@ import CatalogoMarcas from "./pages/CatalogoMarcas";
 import CatalogoProveedores from "./pages/CatalogoProveedores";
 import TiposEquipo from "./pages/TiposEquipo.jsx";
 import Accesorios from "./pages/Accesorios.jsx";
+import Repuestos from "./pages/Repuestos.jsx";
 import ProtectedRoute from "./components/ProtectedRoute";
 import PendientesGeneral from "./pages/PendientesGeneral.jsx";
 import Aprobados from "./pages/Aprobados.jsx";
 import Reparados from "./pages/Reparados.jsx";
-import GeneralEquipos from "./pages/GeneralEquipos.jsx";
+import HistoricoIngresos from "./pages/HistoricoIngresos.jsx";
 import ServiceSheet from "./pages/ServiceSheet";
 import PendientesPorTecnico from "./pages/PendientesPorTecnico.jsx";
 import DerivarIngreso from "./pages/DerivarIngreso.jsx";
 import StockAlquiler from "./pages/StockAlquiler.jsx";
 import BusquedaNSCard from "./components/BusquedaNSCard.jsx";
 import BusquedaAccRefCard from "./components/BusquedaAccRefCard.jsx";
+import QrScanCard from "./components/QrScanCard.jsx";
 import BuscarNS from "./pages/BuscarNS.jsx";
 import BuscarAccesorio from "./pages/BuscarAccesorio.jsx";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -40,8 +42,10 @@ import Depositos from "./pages/Depositos.jsx";
 import Derivados from "./pages/Derivados.jsx";
 import Metricas from "./pages/Metricas.jsx";
 import MetricasClientes from "./pages/MetricasClientes.jsx";
+import MetricasFinanzas from "./pages/MetricasFinanzas.jsx";
 // import ConfigMetricas from "./pages/ConfigMetricas.jsx"; // unificado dentro de Métricas
 import Garantias from "./pages/Garantias.jsx";
+import Equipos from "./pages/Equipos.jsx";
 
 function NotFound() {
   return (
@@ -72,6 +76,7 @@ const router = createBrowserRouter([
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <BusquedaNSCard />
                 <BusquedaAccRefCard />
+                <QrScanCard />
               </div>
             </div>
           </ProtectedRoute>
@@ -82,7 +87,7 @@ const router = createBrowserRouter([
       {
         path: "buscar-ns",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","admin","recepcion"]}>
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
             <BuscarNS />
           </ProtectedRoute>
         ),
@@ -90,7 +95,7 @@ const router = createBrowserRouter([
       {
         path: "buscar-accesorio",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","admin","recepcion"]}>
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
             <BuscarAccesorio />
           </ProtectedRoute>
         ),
@@ -170,7 +175,7 @@ const router = createBrowserRouter([
       {
         path: "alquiler/stock",
         element: (
-          <ProtectedRoute roles={["jefe","admin","recepcion","tecnico"]}>
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin","recepcion","tecnico"]}>
             <StockAlquiler />
           </ProtectedRoute>
         ),
@@ -194,10 +199,26 @@ const router = createBrowserRouter([
         ),
       },
       {
-        path: "equipos",
+        path: "ingresos/historico",
         element: (
           <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
-            <GeneralEquipos />
+            <HistoricoIngresos />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "ingresos",
+        element: (
+          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+            <HistoricoIngresos />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "equipos",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+            <Equipos />
           </ProtectedRoute>
         ),
       },
@@ -216,7 +237,7 @@ const router = createBrowserRouter([
       {
         path: "metricas",
         element: (
-          <ProtectedRoute roles={["jefe"]}>
+          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
             <Metricas />
           </ProtectedRoute>
         ),
@@ -224,15 +245,23 @@ const router = createBrowserRouter([
       {
         path: "metricas/clientes",
         element: (
-          <ProtectedRoute roles={["jefe"]}>
+          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
             <MetricasClientes />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "metricas/finanzas",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+            <MetricasFinanzas />
           </ProtectedRoute>
         ),
       },
       {
         path: "metricas/config",
         element: (
-          <ProtectedRoute roles={["jefe"]}>
+          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
             <Metricas />
           </ProtectedRoute>
         ),
@@ -282,6 +311,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
             <Accesorios />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: "catalogo/repuestos",
+        element: (
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin","tecnico"]}>
+            <Repuestos />
           </ProtectedRoute>
         ),
       },
@@ -349,4 +386,3 @@ if (import.meta.env.PROD && import.meta.env.VITE_SW === '1' && 'serviceWorker' i
     });
   });
 }
-

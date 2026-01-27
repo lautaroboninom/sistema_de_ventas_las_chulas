@@ -87,7 +87,11 @@ import { MOTIVO_OPTIONS } from "./constants";
     if (!res.ok) {
       const msg =
         typeof data === "string" ? data : data.detail || JSON.stringify(data);
-      throw new Error(`${res.status} ${res.statusText}: ${msg}`);
+      const err = new Error(`${res.status} ${res.statusText}: ${msg}`);
+      err.status = res.status;
+      err.data = data;
+      err.response = res;
+      throw err;
     }
     return data;
   }
@@ -315,6 +319,57 @@ export const postModelo = (brandId, payloadOrNombre) => {
     }
   };
   export const getAccesoriosCatalogo = () => api.get("/api/catalogos/accesorios/");
+  export const getRepuestosCatalogo = (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.limit) qs.set("limit", params.limit);
+    const qstr = qs.toString();
+    return api.get(`/api/catalogos/repuestos/${qstr ? `?${qstr}` : ""}`);
+  };
+  export const getRepuestos = (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.limit) qs.set("limit", params.limit);
+    if (params.offset) qs.set("offset", params.offset);
+    if (params.order) qs.set("order", params.order);
+    if (params.dir) qs.set("dir", params.dir);
+    const qstr = qs.toString();
+    return api.get(`/api/repuestos/${qstr ? `?${qstr}` : ""}`);
+  };
+  export const getRepuestosSubrubros = () =>
+    api.get("/api/repuestos/subrubros/");
+  export const getRepuestosConfig = () => api.get("/api/repuestos/config/");
+  export const patchRepuestosConfig = (payload) =>
+    api.patch("/api/repuestos/config/", payload);
+  export const getRepuestoDetalle = (repuestoId) =>
+    api.get(`/api/repuestos/${repuestoId}/`);
+  export const postRepuesto = (payload) =>
+    api.post("/api/repuestos/", payload);
+  export const patchRepuesto = (repuestoId, payload) =>
+    api.patch(`/api/repuestos/${repuestoId}/`, payload);
+  export const getRepuestosMovimientos = (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.repuesto_id) qs.set("repuesto_id", params.repuesto_id);
+    if (params.limit) qs.set("limit", params.limit);
+    const qstr = qs.toString();
+    return api.get(`/api/repuestos/movimientos/${qstr ? `?${qstr}` : ""}`);
+  };
+  export const getRepuestosCambios = (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set("q", params.q);
+    if (params.limit) qs.set("limit", params.limit);
+    if (params.offset) qs.set("offset", params.offset);
+    const qstr = qs.toString();
+    return api.get(`/api/repuestos/cambios/${qstr ? `?${qstr}` : ""}`);
+  };
+  export const getRepuestosStockPermisos = () =>
+    api.get("/api/repuestos/stock-permisos/");
+  export const postRepuestosStockPermiso = (payload) =>
+    api.post("/api/repuestos/stock-permisos/", payload);
+  export const patchRepuestosStockPermiso = (permId, payload) =>
+    api.patch(`/api/repuestos/stock-permisos/${permId}/`, payload);
+  export const deleteRepuesto = (repuestoId) =>
+    api.del(`/api/repuestos/${repuestoId}/`);
 
   export const getProveedoresExternos = () =>
     api.get("/api/catalogos/proveedores-externos/");
@@ -448,6 +503,9 @@ export const postModelo = (brandId, payloadOrNombre) => {
   // Bsqueda por referencia de accesorio
   export const buscarAccesorioPorRef = (ref) =>
     api.get(`/api/accesorios/buscar/?ref=${encodeURIComponent(ref||"")}`);
+  // Lectura de QR / codigo de barras
+  export const lookupScan = (code) =>
+    api.get(`/api/scan/lookup/?code=${encodeURIComponent(code||"")}`);
   // Entregar (requiere remito; opcional factura y fecha; si resolucion=cambio: serial_confirm requerido)
   export const postEntregarIngreso = (ingresoId, payload) =>
     api.post(`/api/ingresos/${ingresoId}/entregar/`, payload);
@@ -463,10 +521,22 @@ export const postModelo = (brandId, payloadOrNombre) => {
     api.get("/api/ingresos/aprobados-reparados/");
   export const getLiberados = () => api.get("/api/ingresos/liberados/");
   export const getTecnicos = () => api.get("/api/catalogos/tecnicos/");
-  export const getGeneralEquipos = (params = {}) => {
+  export const getHistoricoIngresos = (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/ingresos/${qs ? `?${qs}` : ""}`);
+  };
+  // Compatibilidad: antes se llamaba así
+  export const getGeneralEquipos = getHistoricoIngresos;
+
+  // Devices (tabla de equipos)
+  export const getDevices = (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/equipos/${qs ? `?${qs}` : ""}`);
   };
+  export const patchDeviceIdentificadores = (deviceId, payload) =>
+    api.patch(`/api/devices/${deviceId}/identificadores/`, payload);
+  export const postDevicesMerge = (payload) =>
+    api.post("/api/devices/merge/", payload);
   // Check garantía de reparación por N/S
   export const checkGarantiaReparacion = (numero_serie, numero_interno) => {
     const params = new URLSearchParams();
@@ -600,6 +670,10 @@ export const postModelo = (brandId, payloadOrNombre) => {
     return api.post(`/api/ingresos/${id}/controlado-sin-defecto/`);
   }
 
+  export async function postMarcarParaReparar(id) {
+    return api.post(`/api/ingresos/${id}/reparar/`);
+  }
+
   export async function postMarcarReparado(id) {
     return api.post(`/api/ingresos/${id}/reparado/`);
   }
@@ -617,6 +691,14 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const getMetricasSeries = (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return api.get(`/api/metricas/series/${qs ? `?${qs}` : ""}`);
+  };
+  export const getMetricasFinanzas = (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/metricas/finanzas/${qs ? `?${qs}` : ""}`);
+  };
+  export const getMetricasFinanzasLiberados = (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return api.get(`/api/metricas/finanzas/liberados/${qs ? `?${qs}` : ""}`);
   };
   export const getMetricasCalibracion = (params = {}) => {
     const qs = new URLSearchParams(params).toString();

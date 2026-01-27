@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getBlob } from "../../../lib/api";
 import {
   getQuote,
@@ -11,14 +11,23 @@ import {
   postQuoteAnular,
   postQuoteNoAplica,
   postQuoteQuitarNoAplica,
+  getRepuestosCatalogo,
 } from "../../../lib/api";
 
-export default function PresupuestoTab({ id, data, canManagePresupuesto, money, refreshIngreso, setErr }) {
+export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeCosts, money, refreshIngreso, setErr }) {
   const isAprobado = data.presupuesto_estado === "aprobado";
 
   const [qErr, setQErr] = useState("");
   const [qLoading, setQLoading] = useState(false);
   const [quote, setQuote] = useState(null);
+  const [repOptions, setRepOptions] = useState([]);
+  const [repQuery, setRepQuery] = useState("");
+  const [repListOpen, setRepListOpen] = useState(false);
+  const [repActiveKey, setRepActiveKey] = useState(null);
+  const [repHighlight, setRepHighlight] = useState(0);
+  const repListRef = useRef(null);
+  const repAnchorRef = useRef(null);
+  const repItemRefs = useRef([]);
 
   const [autorizadoPor, setAutorizadoPor] = useState("Cliente");
   const [formaPago, setFormaPago] = useState("30 F.F.");
@@ -26,7 +35,7 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
   const [aprobando, setAprobando] = useState(false);
   const [anulando, setAnulando] = useState(false);
 
-  const [nuevoRep, setNuevoRep] = useState({ repuesto_id: "", descripcion: "", qty: "1", precio_u: "" });
+  const [nuevoRep, setNuevoRep] = useState({ repuesto_id: "", repuesto_codigo: "", descripcion: "", qty: "1", precio_u: "" });
   const [manoObraStr, setManoObraStr] = useState("");
 
   async function loadQuote() {
@@ -47,6 +56,16 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
 
   useEffect(() => { loadQuote(); }, [id]);
 
+  useEffect(() => {
+    let alive = true;
+    const handle = setTimeout(() => {
+      getRepuestosCatalogo({ q: repQuery, limit: 50 })
+        .then((rows) => { if (alive) setRepOptions(rows || []); })
+        .catch(() => {});
+    }, 200);
+    return () => { alive = false; clearTimeout(handle); };
+  }, [repQuery]);
+
   async function abrirPdf() {
     try {
       setQErr("");
@@ -59,6 +78,162 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
       setQErr(e?.message || "No se pudo abrir el PDF del presupuesto");
     }
   }
+
+  function normalizeRepuestoCodigo(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const sep = " - ";
+    if (raw.includes(sep)) return raw.split(sep)[0].trim();
+    return raw;
+  }
+
+  function findRepuestoByCode(code) {
+    if (!code) return null;
+    const target = String(code).trim().toUpperCase();
+    return repOptions.find((r) => String(r.codigo || "").trim().toUpperCase() === target) || null;
+  }
+
+  function openRepList(key, raw, anchorEl) {
+    setRepActiveKey(key);
+    setRepListOpen(true);
+    setRepHighlight(0);
+    if (anchorEl) repAnchorRef.current = anchorEl;
+    if (typeof raw === "string") setRepQuery(raw);
+  }
+
+  function closeRepList() {
+    setRepListOpen(false);
+    setRepActiveKey(null);
+    repAnchorRef.current = null;
+  }
+
+  function selectRepuestoForItem(it, rep) {
+    const patch = { repuesto_codigo: rep?.codigo || "" };
+    if (rep?.id) patch.repuesto_id = rep.id;
+    if (rep?.precio_venta != null) patch.precio_u = Number(rep.precio_venta);
+    updateItem(it, patch);
+    setRepQuery(rep?.codigo || "");
+    closeRepList();
+  }
+
+  function selectRepuestoForNew(rep) {
+    setNuevoRep((s) => ({
+      ...s,
+      repuesto_codigo: rep?.codigo || "",
+      repuesto_id: rep?.id ? String(rep.id) : "",
+      descripcion: rep?.nombre ? rep.nombre : s.descripcion,
+      precio_u: rep?.precio_venta != null ? String(rep.precio_venta) : s.precio_u,
+    }));
+    setRepQuery(rep?.codigo || "");
+    closeRepList();
+  }
+
+  function handleRepKeyDown(e, key, pick, raw) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!repListOpen || repActiveKey !== key) {
+        openRepList(key, typeof raw === "string" ? raw : "", e.currentTarget);
+        return;
+      }
+      if (!repOptions.length) return;
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      const next = (repHighlight + delta + repOptions.length) % repOptions.length;
+      setRepHighlight(next);
+      return;
+    }
+    if (e.key === "Enter") {
+      if (repListOpen && repActiveKey === key && repOptions.length) {
+        e.preventDefault();
+        const idx = Math.max(0, Math.min(repHighlight, repOptions.length - 1));
+        pick(repOptions[idx]);
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      if (repListOpen) {
+        e.preventDefault();
+        closeRepList();
+      }
+    }
+  }
+
+  function RepuestosList({ onPick }) {
+    return (
+      <div ref={repListRef} className="absolute z-30 mt-1 w-full min-w-[18rem] max-h-56 overflow-auto rounded border bg-white shadow">
+        {(repOptions || []).length ? (
+          repOptions.map((r, idx) => (
+            <button
+              key={r.id || r.codigo}
+              type="button"
+              className={`w-full text-left px-2 py-1 hover:bg-gray-100 ${idx === repHighlight ? "bg-gray-100" : ""}`}
+              ref={(el) => { repItemRefs.current[idx] = el; }}
+              tabIndex={-1}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onPick(r);
+              }}
+              onMouseEnter={() => setRepHighlight(idx)}
+            >
+              <div className="text-xs text-gray-500">{r.codigo}</div>
+              <div className="text-sm">{r.nombre}</div>
+              {r.precio_venta != null ? (
+                <div className="text-xs text-gray-400">Precio sugerido: {money(r.precio_venta)}</div>
+              ) : null}
+            </button>
+          ))
+        ) : (
+          <div className="px-2 py-1 text-xs text-gray-400">Sin resultados</div>
+        )}
+      </div>
+    );
+  }
+
+  useEffect(() => {
+    if (!repListOpen) return;
+    if (!repOptions.length) {
+      setRepHighlight(0);
+      return;
+    }
+    if (repHighlight < 0 || repHighlight >= repOptions.length) {
+      setRepHighlight(0);
+    }
+  }, [repListOpen, repOptions, repHighlight]);
+
+  useEffect(() => {
+    if (!repListOpen || !repOptions.length) return;
+    const el = repItemRefs.current[repHighlight];
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
+  }, [repListOpen, repHighlight, repOptions.length]);
+
+  useEffect(() => {
+    if (!repListOpen) return;
+    const handlePointerDown = (ev) => {
+      const listEl = repListRef.current;
+      const anchorEl = repAnchorRef.current;
+      const target = ev.target;
+      if (listEl && listEl.contains(target)) return;
+      if (anchorEl && anchorEl.contains(target)) return;
+      closeRepList();
+    };
+    const handleFocusIn = (ev) => {
+      const listEl = repListRef.current;
+      const anchorEl = repAnchorRef.current;
+      const target = ev.target;
+      if (listEl && listEl.contains(target)) return;
+      if (anchorEl && anchorEl.contains(target)) return;
+      closeRepList();
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    document.addEventListener("focusin", handleFocusIn);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      document.removeEventListener("focusin", handleFocusIn);
+    };
+  }, [repListOpen]);
 
   async function emitirPresupuesto() {
     try {
@@ -148,17 +323,20 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
 
   async function addRepuesto() {
     const qty = Number(nuevoRep.qty || 0);
-    const pu  = Number(nuevoRep.precio_u || 0);
+    const puRaw = nuevoRep.precio_u;
+    const pu = (puRaw == null || puRaw === "") ? null : Number(puRaw);
     if (!nuevoRep.descripcion.trim()) { setQErr("Descripción requerida"); return; }
     //if (qty <= 0) { setQErr("Cantidad > 0"); return; }
-    if (pu < 0) { setQErr("Precio inválido"); return; }
+    if (pu != null && pu < 0) { setQErr("Precio inválido"); return; }
+    const repCodigo = normalizeRepuestoCodigo(nuevoRep.repuesto_codigo || "");
     await postQuoteItem(id, {
       tipo: "repuesto",
       repuesto_id: nuevoRep.repuesto_id ? Number(nuevoRep.repuesto_id) : null,
+      repuesto_codigo: repCodigo || null,
       descripcion: nuevoRep.descripcion.trim(),
       qty, precio_u: pu,
     });
-    setNuevoRep({ repuesto_id: "", descripcion: "", qty: "1", precio_u: "" });
+    setNuevoRep({ repuesto_id: "", repuesto_codigo: "", descripcion: "", qty: "1", precio_u: "" });
     await loadQuote();
   }
 
@@ -262,11 +440,12 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
           <table className="min-w-full text-sm mb-3">
             <thead>
               <tr className="text-left">
-                <th className="p-2 w-28">IdRepuesto</th>
+                <th className="p-2 w-32">Codigo</th>
                 <th className="p-2">Descripción</th>
                 <th className="p-2 w-24">Cantidad</th>
+                {canSeeCosts ? <th className="p-2 w-36">Costo unit.</th> : null}
                 <th className="p-2 w-36">Precio unit.</th>
-                <th className="p-2 w-36 text-right">Subtotal</th>
+                <th className="p-2 w-36 text-right">Precio total</th>
                 <th className="p-2 w-20"></th>
               </tr>
             </thead>
@@ -276,20 +455,47 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
                 .map((it) => (
                   <tr key={it.id} className="border-t">
                     <td className="p-2">
-                      <input
-                        className="border rounded p-1 w-24"
-                        value={it.repuesto_id || ""}
-                        onChange={(e) => updateItem(it, { repuesto_id: e.target.value })}
-                        disabled={isAprobado}
-                      />
+                      <div className="relative">
+                        <input
+                          className="border rounded p-1 w-28"
+                          value={it.repuesto_codigo || ""}
+                          onFocus={(e) => openRepList(`code-${it.id}`, it.repuesto_codigo || "", e.currentTarget)}
+                          onKeyDown={(e) => handleRepKeyDown(e, `code-${it.id}`, (rep) => selectRepuestoForItem(it, rep), e.currentTarget.value)}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const code = normalizeRepuestoCodigo(raw);
+                            openRepList(`code-${it.id}`, raw, e.currentTarget);
+                            const found = findRepuestoByCode(code);
+                            const patch = { repuesto_codigo: code };
+                            if (found?.id) patch.repuesto_id = found.id;
+                            if (found?.precio_venta != null) patch.precio_u = Number(found.precio_venta);
+                            updateItem(it, patch);
+                          }}
+                          disabled={isAprobado}
+                        />
+                        {repListOpen && repActiveKey === `code-${it.id}` ? (
+                          <RepuestosList onPick={(rep) => selectRepuestoForItem(it, rep)} />
+                        ) : null}
+                      </div>
                     </td>
                     <td className="p-2">
-                      <input
-                        className="border rounded p-1 w-full"
-                        value={it.descripcion || ""}
-                        onChange={(e) => updateItem(it, { descripcion: e.target.value })}
-                        disabled={isAprobado}
-                      />
+                      <div className="relative">
+                        <input
+                          className="border rounded p-1 w-full"
+                          value={it.descripcion || ""}
+                          onFocus={(e) => openRepList(`desc-${it.id}`, it.descripcion || "", e.currentTarget)}
+                          onKeyDown={(e) => handleRepKeyDown(e, `desc-${it.id}`, (rep) => selectRepuestoForItem(it, rep), e.currentTarget.value)}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            openRepList(`desc-${it.id}`, raw, e.currentTarget);
+                            updateItem(it, { descripcion: raw });
+                          }}
+                          disabled={isAprobado}
+                        />
+                        {repListOpen && repActiveKey === `desc-${it.id}` ? (
+                          <RepuestosList onPick={(rep) => selectRepuestoForItem(it, rep)} />
+                        ) : null}
+                      </div>
                     </td>
                     <td className="p-2">
                       <input
@@ -301,6 +507,11 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
                         disabled={isAprobado}
                       />
                     </td>
+                    {canSeeCosts ? (
+                      <td className="p-2">
+                        {it.costo_u_neto != null ? money(it.costo_u_neto) : "-"}
+                      </td>
+                    ) : null}
                     <td className="p-2">
                       <input
                         type="number"
@@ -322,18 +533,61 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
 
               <tr className="border-t bg-gray-50">
                 <td className="p-2">
-                  <input className="border rounded p-1 w-24" placeholder="(opcional)" value={nuevoRep.repuesto_id} onChange={(e) => setNuevoRep((s) => ({ ...s, repuesto_id: e.target.value }))} disabled={isAprobado} />
+                  <div className="relative">
+                    <input
+                      className="border rounded p-1 w-28"
+                      placeholder="Codigo"
+                      value={nuevoRep.repuesto_codigo}
+                      onFocus={(e) => openRepList("code-new", nuevoRep.repuesto_codigo || "", e.currentTarget)}
+                      onKeyDown={(e) => handleRepKeyDown(e, "code-new", selectRepuestoForNew, e.currentTarget.value)}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const code = normalizeRepuestoCodigo(raw);
+                        openRepList("code-new", raw, e.currentTarget);
+                        const found = findRepuestoByCode(code);
+                        setNuevoRep((s) => ({
+                          ...s,
+                          repuesto_codigo: code,
+                          repuesto_id: found?.id ? String(found.id) : "",
+                          descripcion: found?.nombre ? found.nombre : s.descripcion,
+                          precio_u: found?.precio_venta != null ? String(found.precio_venta) : s.precio_u,
+                        }));
+                      }}
+                      disabled={isAprobado}
+                    />
+                    {repListOpen && repActiveKey === "code-new" ? (
+                      <RepuestosList onPick={selectRepuestoForNew} />
+                    ) : null}
+                  </div>
                 </td>
                 <td className="p-2">
-                  <input className="border rounded p-1 w-full" placeholder="Descripción del repuesto" value={nuevoRep.descripcion} onChange={(e) => setNuevoRep((s) => ({ ...s, descripcion: e.target.value }))} disabled={isAprobado} />
+                  <div className="relative">
+                    <input
+                      className="border rounded p-1 w-full"
+                      placeholder="Descripción del repuesto"
+                      value={nuevoRep.descripcion}
+                      onFocus={(e) => openRepList("desc-new", nuevoRep.descripcion || "", e.currentTarget)}
+                      onKeyDown={(e) => handleRepKeyDown(e, "desc-new", selectRepuestoForNew, e.currentTarget.value)}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        openRepList("desc-new", raw, e.currentTarget);
+                        setNuevoRep((s) => ({ ...s, descripcion: raw }));
+                      }}
+                      disabled={isAprobado}
+                    />
+                    {repListOpen && repActiveKey === "desc-new" ? (
+                      <RepuestosList onPick={selectRepuestoForNew} />
+                    ) : null}
+                  </div>
                 </td>
                 <td className="p-2">
                   <input type="number" step="0.01" min="0" className="border rounded p-1 w-24 text-right" value={nuevoRep.qty} onChange={(e) => setNuevoRep((s) => ({ ...s, qty: e.target.value }))} disabled={isAprobado} />
                 </td>
+                {canSeeCosts ? <td className="p-2">-</td> : null}
                 <td className="p-2">
                   <input type="number" step="0.01" className="border rounded p-1 w-32 text-right" placeholder="0.00" value={nuevoRep.precio_u} onChange={(e) => setNuevoRep((s) => ({ ...s, precio_u: e.target.value }))} disabled={isAprobado} />
                 </td>
-                <td className="p-2"></td>
+                <td className="p-2 text-right"></td>
                 <td className="p-2">
                   <button className="bg-blue-600 text-white px-2 py-1 rounded" onClick={addRepuesto} type="button" disabled={isAprobado}>
                     agregar
@@ -342,7 +596,6 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
               </tr>
             </tbody>
           </table>
-
           <div className="flex items-end gap-3 mb-4">
             <div>
               <label className="block text-sm text-gray-600 mb-1">Mano de obra</label>
@@ -380,7 +633,3 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, money, 
     </div>
   );
 }
-
-
-
-

@@ -9,9 +9,10 @@ from .views import (
     EmitirPresupuestoView, AprobarPresupuestoView, QuotePdfView,
     NoAplicaPresupuestoView, QuitarNoAplicaPresupuestoView,
     PendientesPresupuestoView, PresupuestadosView, PresupuestadosExportView,
-    MarcarReparadoView, MarcarControladoSinDefectoView, EntregarIngresoView, GarantiaReparacionCheckView, GarantiaFabricaCheckView,
+    MarcarReparadoView, MarcarParaRepararView, MarcarControladoSinDefectoView, EntregarIngresoView, GarantiaReparacionCheckView, GarantiaFabricaCheckView,
     DarBajaIngresoView,
     ListosParaRetiroView,
+    ScanLookupView,
 
     # listados / generales
     CustomersListView, PendientesGeneralView,
@@ -27,6 +28,10 @@ from .views import (
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
     IngresoAlquilerAccesoriosView, IngresoAlquilerAccesorioDetailView,
+    CatalogoRepuestosView, RepuestosView, RepuestoDetailView, RepuestosConfigView, RepuestosMovimientosView,
+    RepuestosSubrubrosView,
+    RepuestosCambiosView,
+    RepuestosStockPermisosView, RepuestosStockPermisoDetailView,
     CatalogoMarcasView, CatalogoModelosView,
     ModeloVarianteView,
     # catálogos jerárquico marca/tipo/modelo/variante
@@ -58,10 +63,12 @@ from .views import (
 
     QuoteDetailView, QuoteItemsView, QuoteItemDetailView, QuoteResumenView, AnularPresupuestoView,
     RemitoSalidaPdfView, RemitoDerivacionPdfView, TiposEquipoView, ModeloTipoEquipoView, IngresoHistorialView,
-    MetricasResumenView, MetricasSeriesView, MetricasCalibracionView, FeriadosView, MetricasConfigView,
+    MetricasResumenView, MetricasSeriesView, MetricasFinanzasView, MetricasFinanzasLiberadosView, MetricasCalibracionView, FeriadosView, MetricasConfigView,
     CatalogoMotivosView,
-    WarrantyRulesView, WarrantyRuleDetailView,
+    WarrantyRulesView, WarrantyRuleDetailView, DevicesMergeView,
 )
+
+from .views.devices_views import DeviceIdentificadoresView, DevicesListView
 
 
 urlpatterns = [
@@ -76,6 +83,7 @@ urlpatterns = [
 
     # ténico / ingresos (acciones)
     path("tecnico/mis-pendientes/", MisPendientesView.as_view()),
+    path("ingresos/<int:ingreso_id>/reparar/", MarcarParaRepararView.as_view()),
     path("ingresos/<int:ingreso_id>/reparado/", MarcarReparadoView.as_view()),
     path("ingresos/<int:ingreso_id>/controlado-sin-defecto/", MarcarControladoSinDefectoView.as_view()),
     path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
@@ -97,6 +105,7 @@ urlpatterns = [
     path("ingresos/aprobados-reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/liberados/", LiberadosView.as_view()),
     path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
+    path("scan/lookup/", ScanLookupView.as_view()),
 
     # ALIAS de compatibilidad con el front (si exist�an)
     path("ingresos/aprobados/", AprobadosView.as_view()),
@@ -104,8 +113,12 @@ urlpatterns = [
     path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
 
     # -------- Tabs superiores --------
-    path("equipos/", GeneralEquiposView.as_view()),
+    # Histórico de ingresos (antes /equipos/)
     path("ingresos/", GeneralEquiposView.as_view()),
+    path("ingresos/historico/", GeneralEquiposView.as_view()),
+    # Equipos (tabla devices)
+    path("equipos/", DevicesListView.as_view()),
+    path("devices/merge/", DevicesMergeView.as_view()),
     path("clientes/<int:customer_id>/general/", GeneralPorClienteView.as_view()),
     path("clientes/<int:customer_id>/general/export/", GeneralPorClienteExportView.as_view()),
     # utilidades
@@ -127,6 +140,15 @@ urlpatterns = [
     path("catalogos/ubicaciones/", CatalogoUbicacionesView.as_view()),
     path("catalogos/motivos/", CatalogoMotivosView.as_view()),
     path("catalogos/accesorios/", CatalogoAccesoriosView.as_view()),
+    path("catalogos/repuestos/", CatalogoRepuestosView.as_view()),
+    path("repuestos/", RepuestosView.as_view()),
+    path("repuestos/subrubros/", RepuestosSubrubrosView.as_view()),
+    path("repuestos/config/", RepuestosConfigView.as_view()),
+    path("repuestos/movimientos/", RepuestosMovimientosView.as_view()),
+    path("repuestos/cambios/", RepuestosCambiosView.as_view()),
+    path("repuestos/stock-permisos/", RepuestosStockPermisosView.as_view()),
+    path("repuestos/stock-permisos/<int:perm_id>/", RepuestosStockPermisoDetailView.as_view()),
+    path("repuestos/<int:repuesto_id>/", RepuestoDetailView.as_view()),
     path("catalogos/proveedores-externos/", ProveedoresExternosView.as_view()),
     path("catalogos/proveedores-externos/<int:pid>/", ProveedoresExternosView.as_view()),
     # variante simple por modelo (v1)
@@ -225,10 +247,12 @@ urlpatterns = [
     # m�tricas
     path("metricas/resumen/", MetricasResumenView.as_view()),
     path("metricas/series/", MetricasSeriesView.as_view()),
+    path("metricas/finanzas/", MetricasFinanzasView.as_view()),
+    path("metricas/finanzas/liberados/", MetricasFinanzasLiberadosView.as_view()),
     path("metricas/calibracion/", MetricasCalibracionView.as_view()),
     path("metricas/feriados/", FeriadosView.as_view()),
     path("metricas/config/", MetricasConfigView.as_view()),
+
+    # devices: corrección de identificadores (NS / MG)
+    path("devices/<int:device_id>/identificadores/", DeviceIdentificadoresView.as_view()),
 ]
-
-
-

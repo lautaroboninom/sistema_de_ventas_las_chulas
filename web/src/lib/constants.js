@@ -63,6 +63,35 @@ export const NEXT_STATE = {
   [ESTADO.LIBERADO]: ESTADO.ENTREGADO,
 };
 
+// Labels legibles para estados que vienen del backend (snake_case)
+export const ESTADO_VALUE_LABELS = {
+  ingresado: "Ingresado",
+  asignado: "Asignado",
+  diagnosticado: "Diagnosticado",
+  presupuestado: "Presupuestado",
+  reparar: "Reparar",
+  derivado: "Derivado",
+  controlado_sin_defecto: "Controlado sin defecto",
+  reparado: "Reparado",
+  liberado: "Liberado",
+  entregado: "Entregado",
+  alquilado: "Alquilado",
+  baja: "Baja",
+};
+
+export const estadoLabel = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (ESTADO_LABELS[raw]) return ESTADO_LABELS[raw];
+  const lower = raw.toLowerCase();
+  if (ESTADO_VALUE_LABELS[lower]) return ESTADO_VALUE_LABELS[lower];
+  if (raw.includes("_")) {
+    const spaced = raw.replace(/_/g, " ");
+    return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+  }
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+};
+
 
 // =========================
 // Motivos de ingreso

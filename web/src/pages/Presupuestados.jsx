@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { getBlob, downloadAuth } from "../lib/api";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { ingresoIdOf,
   formatOS,
   formatDateOnly,
@@ -15,6 +16,7 @@ import useQueryState from "../hooks/useQueryState";
 const ENDPOINT = "/api/ingresos/presupuestados/"; // <-- AJUSTAR si tu API usa otra ruta
 
 export default function JefePresupuestos() {
+  const { user } = useAuth();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -24,6 +26,7 @@ export default function JefePresupuestos() {
   const [exporting, setExporting] = useState(false);
 
   const navigate = useNavigate();
+  const canApprove = user?.rol === "jefe";
 
   async function load() {
     try {
@@ -122,6 +125,7 @@ export default function JefePresupuestos() {
 
   // Accin: Aprobar presupuesto (por ingreso_id)
   async function aprobar(row) {
+    if (!canApprove) return;
     const ingresoId = ingresoIdOf(row);
     if (!ingresoId) {
       setErr("No se encontr el ID de ingreso para aprobar.");
@@ -266,18 +270,20 @@ export default function JefePresupuestos() {
                     </td>
                     <td className="p-2">
                       <div className="flex gap-2 justify-end">
-                        <button
-                          className="btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            aprobar(row);
-                          }}
-                          disabled={busyId === ingresoId}
-                          aria-busy={busyId === ingresoId ? "true" : "false"}
-                          title="Aprobar presupuesto"
-                        >
-                          Aprobar
-                        </button>
+                        {canApprove ? (
+                          <button
+                            className="btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              aprobar(row);
+                            }}
+                            disabled={busyId === ingresoId}
+                            aria-busy={busyId === ingresoId ? "true" : "false"}
+                            title="Aprobar presupuesto"
+                          >
+                            Aprobar
+                          </button>
+                        ) : null}
                         {/* Si tu backend permite rechazar / anular, pods agregar ac otro botn */}
                       </div>
                     </td>
@@ -294,4 +300,3 @@ export default function JefePresupuestos() {
     </div>
   );
 }
-

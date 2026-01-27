@@ -13,7 +13,7 @@ export const formatOS = (rowOrId, prefix = "") => {
 };
 
 export const formatDateTime = (s, locale = "es-AR") =>
-  s ? new Date(s).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : "-";
+  s ? new Date(s).toLocaleDateString(locale, { dateStyle: "short" }) : "-";
 
 export const resolveFechaIngreso = (row) => row?.fecha_ingreso ?? row?.fecha_creacion ?? null;
 export const resolveFechaCreacion = (row) => row?.fecha_creacion ?? row?.fecha_ingreso ?? null;
@@ -46,6 +46,7 @@ export const modeloSerieVarianteOf = (row, fallback = "-") => {
   );
   const variante = firstNonEmpty(
     row?.equipo_variante,
+    row?.equipo?.variante,
     row?.modelo_variante,
     row?.variante,
     row?.variante_nombre
@@ -133,4 +134,3 @@ export const formatMoney = (amount, currency = "ARS", locale = "es-AR") => {
 };
 
 export const toNum = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
-

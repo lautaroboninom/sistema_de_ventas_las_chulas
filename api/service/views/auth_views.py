@@ -21,6 +21,7 @@ from .helpers import (
     TOKEN_TTL_MIN,
     exec_void,
     q,
+    _set_audit_user,
     _is_login_locked,
     _login_rate_key,
     _register_login_failure,
@@ -145,6 +146,7 @@ class ForgotPasswordView(APIView):
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
 
+        _set_audit_user(request)
         exec_void(
             """
             INSERT INTO password_reset_tokens(user_id, token_hash, expires_at, ip, user_agent)
@@ -205,6 +207,7 @@ class ResetPasswordView(APIView):
             return Response({"detail": "Token inválido o vencido"}, status=400)
 
         hashed = make_password(password)
+        _set_audit_user(request)
         exec_void("UPDATE users SET hash_pw=%s WHERE id=%s", [hashed, row["user_id"]])
         exec_void(
             "UPDATE password_reset_tokens SET used_at=NOW() WHERE id=%s",

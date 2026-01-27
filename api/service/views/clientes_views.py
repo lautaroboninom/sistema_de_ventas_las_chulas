@@ -4,7 +4,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .helpers import exec_void, q, require_roles
+from .helpers import exec_void, q, require_roles, _set_audit_user
 
 
 class CustomersListView(APIView):
@@ -23,6 +23,7 @@ class ClientesView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         if not (d.get("razon_social") and d.get("cod_empresa")):
             raise ValidationError("razon_social y cod_empresa son requeridos")
@@ -39,6 +40,7 @@ class ClienteDeleteView(APIView):
 
     def patch(self, request, cid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         rs = (d.get("razon_social") or "").strip()
         ce = (d.get("cod_empresa") or "").strip()
@@ -87,6 +89,7 @@ class ClienteDeleteView(APIView):
                 status=409
             )
         try:
+            _set_audit_user(request)
             exec_void("DELETE FROM customers WHERE id = %(id)s", {"id": cid})
             return Response({"ok": True})
         except Exception:
@@ -100,6 +103,7 @@ class ClienteMergeView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         try:
             source_id = int(d.get("source_id"))

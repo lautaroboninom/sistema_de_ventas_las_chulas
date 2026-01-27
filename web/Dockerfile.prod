@@ -3,7 +3,7 @@ WORKDIR /app
 
 # Dependencies layer
 COPY package*.json ./
-RUN npm ci
+RUN npm install --no-audit --no-fund
 
 # Build with optional API base and flags passed at build time
 ARG VITE_API_URL

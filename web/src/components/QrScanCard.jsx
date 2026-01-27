@@ -1,0 +1,343 @@
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { lookupScan, postEntregarIngreso } from "../lib/api";
+import { formatOS } from "../lib/ui-helpers";
+
+const emptyEntrega = { remito_salida: "", retira_persona: "", serial_confirm: "" };
+
+const safeText = (value, fallback = "-") => (value == null || value === "" ? fallback : String(value));
+
+const estadoLabel = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  return raw.replace(/_/g, " ");
+};
+
+export default function QrScanCard() {
+  const nav = useNavigate();
+  const inputRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [result, setResult] = useState(null);
+  const [entrega, setEntrega] = useState(emptyEntrega);
+  const [saving, setSaving] = useState(false);
+  const [deliverErr, setDeliverErr] = useState("");
+  const [deliverOk, setDeliverOk] = useState("");
+
+  const resetState = () => {
+    setCode("");
+    setErr("");
+    setResult(null);
+    setEntrega(emptyEntrega);
+    setSaving(false);
+    setDeliverErr("");
+    setDeliverOk("");
+  };
+
+  const openModal = () => {
+    resetState();
+    setOpen(true);
+  };
+
+  const closeModal = () => {
+    setOpen(false);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const id = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(id);
+  }, [open]);
+
+  const onLookup = async (e) => {
+    e.preventDefault();
+    const trimmed = (code || "").trim();
+    if (!trimmed) return;
+    setLoading(true);
+    setErr("");
+    setResult(null);
+    setDeliverErr("");
+    setDeliverOk("");
+    try {
+      const res = await lookupScan(trimmed);
+      setResult(res);
+      setEntrega(emptyEntrega);
+    } catch (e2) {
+      setErr(e2?.message || "No se pudo leer el codigo.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const ingreso = result?.ingreso || null;
+  const device = result?.device || null;
+  const flags = result?.flags || {};
+  const estado = String(ingreso?.estado || "").toLowerCase();
+  const isLiberado = estado === "liberado";
+  const isEntregado = estado === "entregado";
+  const requiereSerial = String(ingreso?.resolucion || "").toLowerCase() === "cambio";
+  const hoyLabel = new Date().toLocaleDateString("es-AR");
+
+  const propiedadLabel = () => {
+    if (flags?.vendido) return "Cliente";
+    if (flags?.es_propietario_mg) {
+      return device?.alquilado ? "Propio (alquilado)" : "Propio";
+    }
+    return "Cliente";
+  };
+
+  const goNuevoIngreso = (prefill) => {
+    if (prefill) {
+      nav("/ingresos/nuevo", { state: { prefill } });
+    } else {
+      const serie = (result?.normalized || code || "").trim();
+      nav(`/ingresos/nuevo?serie=${encodeURIComponent(serie)}`);
+    }
+    closeModal();
+  };
+
+  const onEntregar = async () => {
+    if (!ingreso?.id) return;
+    const remito = (entrega.remito_salida || "").trim();
+    const retira = (entrega.retira_persona || "").trim();
+    const serialConfirm = (entrega.serial_confirm || "").trim();
+    if (!remito) {
+      setDeliverErr("Remito requerido.");
+      return;
+    }
+    if (!retira) {
+      setDeliverErr("Persona que retira requerida.");
+      return;
+    }
+    if (requiereSerial && !serialConfirm) {
+      setDeliverErr("Serie requerida para cambio.");
+      return;
+    }
+    setSaving(true);
+    setDeliverErr("");
+    setDeliverOk("");
+    try {
+      await postEntregarIngreso(ingreso.id, {
+        remito_salida: remito,
+        retira_persona: retira,
+        ...(requiereSerial ? { serial_confirm: serialConfirm } : {}),
+      });
+      setDeliverOk("Entrega registrada.");
+      setResult((prev) => {
+        if (!prev || !prev.ingreso) return prev;
+        return {
+          ...prev,
+          ingreso: {
+            ...prev.ingreso,
+            estado: "entregado",
+            fecha_entrega: new Date().toISOString(),
+          },
+        };
+      });
+    } catch (e2) {
+      setDeliverErr(e2?.message || "No se pudo marcar la entrega.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="border rounded p-4 mt-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="font-semibold">Lectura de QR</div>
+          <div className="text-xs text-gray-500">Escanear codigo QR o de barras.</div>
+        </div>
+        <button
+          className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+          onClick={openModal}
+        >
+          Abrir
+        </button>
+      </div>
+
+      {open && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded shadow-lg w-full max-w-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-lg font-semibold">Lectura de QR</div>
+              <button className="px-2 py-1 rounded border" onClick={closeModal}>
+                Cerrar
+              </button>
+            </div>
+
+            <form onSubmit={onLookup} className="flex flex-col md:flex-row gap-2">
+              <input
+                ref={inputRef}
+                className="border rounded p-2 w-full"
+                placeholder="Escanear o pegar codigo"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                aria-label="Lectura de codigo"
+              />
+              <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">
+                Buscar
+              </button>
+              <button
+                type="button"
+                className="px-3 py-2 rounded border"
+                onClick={resetState}
+              >
+                Limpiar
+              </button>
+            </form>
+
+            {loading && <div className="text-sm text-gray-500 mt-3">Buscando...</div>}
+            {err && <div className="bg-red-100 text-red-800 border border-red-300 rounded p-2 mt-3">{err}</div>}
+
+            {!loading && result && (
+              <div className="mt-4 space-y-4">
+                {ingreso && (
+                  <div className="border rounded p-3">
+                    <div className="font-semibold mb-2">Ingreso encontrado</div>
+                    <div className="text-sm text-gray-700 grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <div>OS: {formatOS(ingreso)}</div>
+                      <div>Estado: {estadoLabel(ingreso.estado)}</div>
+                      <div>Cliente: {safeText(ingreso.razon_social)}</div>
+                      <div>Equipo: {safeText(ingreso.marca)} {safeText(ingreso.modelo)}</div>
+                      <div>Serie: {safeText(ingreso.numero_serie || ingreso.numero_interno)}</div>
+                      <div>Tipo: {safeText(ingreso.tipo_equipo)}</div>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        className="px-3 py-1.5 rounded border"
+                        onClick={() => {
+                          nav(`/ingresos/${ingreso.id}`);
+                          closeModal();
+                        }}
+                      >
+                        Ver hoja de servicio
+                      </button>
+                    </div>
+
+                    {isLiberado && !isEntregado && (
+                      <div className="mt-4 border-t pt-4">
+                        <div className="font-semibold text-emerald-700">Equipo liberado</div>
+                        <div className="text-xs text-gray-500">Fecha de entrega: {hoyLabel} (auto)</div>
+                        {deliverOk && (
+                          <div className="bg-emerald-100 text-emerald-800 border border-emerald-300 rounded p-2 mt-2">
+                            {deliverOk}
+                          </div>
+                        )}
+                        {deliverErr && (
+                          <div className="bg-red-100 text-red-800 border border-red-300 rounded p-2 mt-2">
+                            {deliverErr}
+                          </div>
+                        )}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                          <label className="block">
+                            <div className="text-sm text-gray-700 mb-1">Remito de entrega</div>
+                            <input
+                              className="border rounded p-2 w-full"
+                              value={entrega.remito_salida}
+                              onChange={(e) => setEntrega((s) => ({ ...s, remito_salida: e.target.value }))}
+                            />
+                          </label>
+                          <label className="block">
+                            <div className="text-sm text-gray-700 mb-1">Persona que retira</div>
+                            <input
+                              className="border rounded p-2 w-full"
+                              value={entrega.retira_persona}
+                              onChange={(e) => setEntrega((s) => ({ ...s, retira_persona: e.target.value }))}
+                            />
+                          </label>
+                          {requiereSerial && (
+                            <label className="block md:col-span-2">
+                              <div className="text-sm text-gray-700 mb-1">Serie confirmacion (cambio)</div>
+                              <input
+                                className="border rounded p-2 w-full"
+                                value={entrega.serial_confirm}
+                                onChange={(e) => setEntrega((s) => ({ ...s, serial_confirm: e.target.value }))}
+                              />
+                            </label>
+                          )}
+                        </div>
+                        <div className="mt-3 flex items-center gap-2">
+                          <button
+                            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                            disabled={saving}
+                            onClick={onEntregar}
+                          >
+                            Marcar entrega
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {device && (
+                  <div className="border rounded p-3">
+                    <div className="font-semibold mb-2">Equipo encontrado</div>
+                    <div className="text-sm text-gray-700 grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <div>Propiedad: {propiedadLabel()}</div>
+                      <div>Cliente: {safeText(device.customer_nombre)}</div>
+                      <div>Serie: {safeText(device.numero_serie || device.numero_interno)}</div>
+                      <div>Equipo: {safeText(device.marca)} {safeText(device.modelo)}</div>
+                      <div>Alquilado: {device.alquilado ? "Si" : "No"}</div>
+                      <div>Alquiler a: {safeText(device.alquiler_a)}</div>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                        onClick={() =>
+                          goNuevoIngreso({
+                            numero_serie: device.numero_serie || result?.normalized || code,
+                            numero_interno: device.numero_interno || "",
+                            marca_id: device.marca_id,
+                            marca: device.marca,
+                            model_id: device.model_id,
+                            modelo: device.modelo,
+                            tipo_equipo: device.tipo_equipo,
+                            variante: device.variante || ingreso?.equipo_variante || "",
+                            customer_id: device.customer_id,
+                            customer_nombre: device.customer_nombre,
+                            customer_cod: device.customer_cod,
+                            customer_telefono: device.customer_telefono,
+                            propietario_nombre: device.propietario_nombre,
+                            propietario_contacto: device.propietario_contacto,
+                            propietario_doc: device.propietario_doc,
+                            alquilado: device.alquilado,
+                            alquiler_a: device.alquiler_a,
+                            es_propietario_mg: flags?.es_propietario_mg,
+                            vendido: flags?.vendido,
+                          })
+                        }
+                      >
+                        Nuevo ingreso con datos
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {!ingreso && !device && (
+                  <div className="border rounded p-3">
+                    <div className="font-semibold mb-2">Sin coincidencias</div>
+                    <div className="text-sm text-gray-600">
+                      No se encontro un equipo con ese codigo.
+                    </div>
+                    <div className="mt-3">
+                      <button
+                        className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                        onClick={() => goNuevoIngreso(null)}
+                      >
+                        Crear nuevo ingreso
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

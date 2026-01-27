@@ -108,6 +108,51 @@ def _filters_join_where(req):
     return join_sql, where_sql, params
 
 
+def _quote_total_join(alias="qt"):
+    return (
+        "LEFT JOIN (SELECT quote_id, ROUND(SUM(qi.qty*qi.precio_u),2) AS subtotal_calc "
+        "FROM quote_items qi GROUP BY quote_id) "
+        f"{alias} ON {alias}.quote_id=q.id\n"
+    )
+
+
+def _quote_total_expr(alias="qt"):
+    return (
+        f"COALESCE(q.total, COALESCE(q.subtotal,0) + COALESCE(q.iva_21,0), "
+        f"ROUND({alias}.subtotal_calc * 1.21, 2), 0)"
+    )
+
+
+def _presu_audit_meta():
+    if getattr(connection, "vendor", "") == "postgresql":
+        join_sql = (
+            "LEFT JOIN (SELECT ingreso_id, MIN(ts) AS presu_ts "
+            "FROM audit.change_log "
+            "WHERE table_name='ingresos' AND column_name='presupuesto_estado' AND new_value='presupuestado' "
+            "GROUP BY ingreso_id) presu_log ON presu_log.ingreso_id=i.id\n"
+            "LEFT JOIN (SELECT ingreso_id, MIN(ts) AS dec_ts "
+            "FROM audit.change_log "
+            "WHERE table_name='ingresos' AND column_name='presupuesto_estado' AND new_value IN ('aprobado','rechazado') "
+            "GROUP BY ingreso_id) dec_log ON dec_log.ingreso_id=i.id\n"
+            "LEFT JOIN (SELECT ingreso_id, MIN(ts) AS noap_ts "
+            "FROM audit.change_log "
+            "WHERE table_name='ingresos' AND column_name='presupuesto_estado' AND new_value='no_aplica' "
+            "GROUP BY ingreso_id) noap_log ON noap_log.ingreso_id=i.id\n"
+        )
+        return {
+            "join": join_sql,
+            "presu_ts_expr": "COALESCE(presu_log.presu_ts, q.fecha_emitido)",
+            "dec_ts_expr": "COALESCE(dec_log.dec_ts, q.fecha_aprobado)",
+            "noap_filter": " AND noap_log.noap_ts IS NULL",
+        }
+    return {
+        "join": "",
+        "presu_ts_expr": "q.fecha_emitido",
+        "dec_ts_expr": "q.fecha_aprobado",
+        "noap_filter": " AND i.presupuesto_estado <> 'no_aplica'",
+    }
+
+
 def _pctiles(values, percent_list=(50, 75, 90, 95)):
     arr = sorted([float(v) for v in values if v is not None])
     n = len(arr)
@@ -195,6 +240,8 @@ class MetricasSeriesView(APIView):
         require_roles(request, ["jefe"])  # solo Jefe
         since, until = _parse_range_params(request)
         join_dm, where_i, where_params = _filters_join_where(request)
+        qt_join = _quote_total_join()
+        qt_expr = _quote_total_expr()
 
         # buckets mensuales
         months = []
@@ -213,6 +260,7 @@ class MetricasSeriesView(APIView):
             "sla_diag_total": 0,
             "sla_diag_dentro": 0,
             "aprob_emitidos": 0,
+            "aprob_rechazados": 0,
             "aprob_aprobados": 0,
             "t_emitir_min_sum": 0,
             "t_emitir_n": 0,
@@ -224,12 +272,12 @@ class MetricasSeriesView(APIView):
         } for k in months}
 
         # Entregados por mes
-        ym_e = _sql_ym('e.ts')
+        ym_ent = _sql_ym('i.fecha_entrega')
         entreg_sql = (
-            f"SELECT {ym_e} AS ym, COUNT(*) AS c\n"
-            "FROM ingreso_events e JOIN ingresos i ON i.id=e.ingreso_id\n"
+            f"SELECT {ym_ent} AS ym, COUNT(*) AS c\n"
+            "FROM ingresos i\n"
             f"{join_dm}\n"
-            "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+            "WHERE i.fecha_entrega BETWEEN %s AND %s"
             f"{where_i}\n"
             "GROUP BY ym"
         )
@@ -287,7 +335,7 @@ class MetricasSeriesView(APIView):
         # Presupuestos por mes (emitidos/aprobados y tiempos)
         ym_emit = _sql_ym('q.fecha_emitido')
         emit_rows = q((
-            f"SELECT {ym_emit} AS ym, q.fecha_emitido, q.fecha_aprobado, q.ingreso_id\n"
+            f"SELECT {ym_emit} AS ym, q.fecha_emitido, q.fecha_aprobado, q.ingreso_id, q.estado\n"
             "FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
             f"{join_dm}\n"
             "WHERE q.fecha_emitido BETWEEN %s AND %s"
@@ -309,10 +357,13 @@ class MetricasSeriesView(APIView):
                     data[k]["t_emitir_hours_vals"].append(max(0.0, (fei - diag_ts).total_seconds() / 3600.0))
                 except Exception:
                     pass
-            if fa:
+            estado = (r.get("estado") or "").strip().lower()
+            if fa and estado == "aprobado":
                 data[k]["aprob_aprobados"] += 1
                 data[k]["t_aprobar_min_sum"] += int(max(0, (fa - fei).total_seconds() // 60))
                 data[k]["t_aprobar_n"] += 1
+            elif fa and estado == "rechazado":
+                data[k]["aprob_rechazados"] += 1
 
         # Distribución mensual: emitir->aprobar (horas)
         mins_emit_aprob = _sql_mins('q.fecha_emitido','q.fecha_aprobado')
@@ -320,7 +371,9 @@ class MetricasSeriesView(APIView):
             f"SELECT {ym_emit} AS ym, {mins_emit_aprob} AS mins\n"
             "FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
             f"{join_dm}\n"
-            "WHERE q.fecha_emitido BETWEEN %s AND %s AND q.fecha_aprobado IS NOT NULL"
+            "WHERE q.fecha_emitido BETWEEN %s AND %s "
+            "AND q.fecha_aprobado IS NOT NULL "
+            "AND q.estado='aprobado'"
             f"{where_i}\n"
         ), [since, until, *where_params]) or []
         for r in aprobar_rows:
@@ -335,10 +388,10 @@ class MetricasSeriesView(APIView):
 
         # TAT (Ingreso -> Entregado) por mes (días calendario)
         tat_rows = q((
-            f"SELECT {ym_e} AS ym, i.fecha_ingreso, e.ts AS entregado_ts\n"
-            "FROM ingreso_events e JOIN ingresos i ON i.id=e.ingreso_id\n"
+            f"SELECT {ym_ent} AS ym, i.fecha_ingreso, i.fecha_entrega AS entregado_ts\n"
+            "FROM ingresos i\n"
             f"{join_dm}\n"
-            "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+            "WHERE i.fecha_entrega BETWEEN %s AND %s"
             f"{where_i}\n"
         ), [since, until, *where_params]) or []
         for r in tat_rows:
@@ -364,7 +417,11 @@ class MetricasSeriesView(APIView):
                 "aprob_presupuestos": {
                     "emitidos": data[k]["aprob_emitidos"],
                     "aprobados": data[k]["aprob_aprobados"],
-                    "tasa": (data[k]["aprob_aprobados"] / data[k]["aprob_emitidos"]) if data[k]["aprob_emitidos"] else 0.0,
+                    "rechazados": data[k]["aprob_rechazados"],
+                    "tasa": (
+                        data[k]["aprob_aprobados"] /
+                        (data[k]["aprob_aprobados"] + data[k]["aprob_rechazados"])
+                    ) if (data[k]["aprob_aprobados"] + data[k]["aprob_rechazados"]) else 0.0,
                     "t_emitir_horas": (data[k]["t_emitir_min_sum"] / 60 / data[k]["t_emitir_n"]) if data[k]["t_emitir_n"] else None,
                     "t_aprobar_horas": (data[k]["t_aprobar_min_sum"] / 60 / data[k]["t_aprobar_n"]) if data[k]["t_aprobar_n"] else None,
                     "t_emitir_percentiles": _pctiles(data[k]["t_emitir_hours_vals"], (25,50,75,90,95)) if data[k]["t_emitir_hours_vals"] else {"p25": None, "p50": None, "p75": None, "p90": None, "p95": None, "avg": None, "count": 0},
@@ -387,6 +444,7 @@ class MetricasSeriesView(APIView):
                 "sla_dentro": 0,
                 "emitidos": 0,
                 "aprobados": 0,
+                "rechazados": 0,
                 "t_emitir_sum": 0.0,
                 "t_emitir_n": 0,
                 "t_aprobar_sum": 0.0,
@@ -402,6 +460,7 @@ class MetricasSeriesView(APIView):
             ap = it.get("aprob_presupuestos", {})
             yy["emitidos"] += ap.get("emitidos", 0)
             yy["aprobados"] += ap.get("aprobados", 0)
+            yy["rechazados"] += ap.get("rechazados", 0)
             if ap.get("t_emitir_horas") is not None:
                 yy["t_emitir_sum"] += ap["t_emitir_horas"]
                 yy["t_emitir_n"] += 1
@@ -422,7 +481,8 @@ class MetricasSeriesView(APIView):
                 "aprob_presupuestos": {
                     "emitidos": v["emitidos"],
                     "aprobados": v["aprobados"],
-                    "tasa": (v["aprobados"] / v["emitidos"]) if v["emitidos"] else 0.0,
+                    "rechazados": v["rechazados"],
+                    "tasa": (v["aprobados"] / (v["aprobados"] + v["rechazados"])) if (v["aprobados"] + v["rechazados"]) else 0.0,   
                     "t_emitir_horas": (v["t_emitir_sum"] / v["t_emitir_n"]) if v["t_emitir_n"] else None,
                     "t_aprobar_horas": (v["t_aprobar_sum"] / v["t_aprobar_n"]) if v["t_aprobar_n"] else None,
                 },
@@ -433,20 +493,21 @@ class MetricasSeriesView(APIView):
         # Agrupaciones para export (técnico, marca, tipo, cliente)
         group = (request.GET.get("group") or "").strip().lower()
         if group == "tecnico":
-            ym_e = _sql_ym('e.ts'); ym_qap = _sql_ym('q.fecha_aprobado')
+            ym_ent = _sql_ym('i.fecha_entrega'); ym_qap = _sql_ym('q.fecha_aprobado')
             bytec = q((
-                f"SELECT {ym_e} AS period, i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS entregados\n"
-                "FROM ingreso_events e JOIN ingresos i ON i.id=e.ingreso_id\n"
+                f"SELECT {ym_ent} AS period, i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS entregados\n"
+                "FROM ingresos i\n"
                 f"{join_dm}\n"
                 "LEFT JOIN users u ON u.id=i.asignado_a\n"
-                "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                "WHERE i.fecha_entrega BETWEEN %s AND %s"
                 f"{where_i}\n"
                 "GROUP BY period, i.asignado_a, tecnico_nombre\n"
                 "ORDER BY period ASC, entregados DESC\n"
             ), [since, until, *where_params]) or []
             fac_tec = q((
-                f"SELECT {ym_qap} AS period, i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM(q.total),2) AS facturacion\n"
+                f"SELECT {ym_qap} AS period, i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM({qt_expr}),2) AS facturacion\n"
                 "FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{qt_join}"
                 f"{join_dm}\n"
                 "LEFT JOIN users u ON u.id=i.asignado_a\n"
                 "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s"
@@ -483,21 +544,22 @@ class MetricasSeriesView(APIView):
                 "repuestos_tecnico_monthly": rep_tec,
             })
         elif group == "marca":
-            ym_e = _sql_ym('e.ts'); ym_qap = _sql_ym('q.fecha_aprobado')
+            ym_ent = _sql_ym('i.fecha_entrega'); ym_qap = _sql_ym('q.fecha_aprobado')
             bym = q((
-                f"SELECT {ym_e} AS period, d.marca_id AS marca_id, COALESCE(b.nombre,'') AS marca_nombre, COUNT(*) AS entregados\n"
-                "FROM ingreso_events e JOIN ingresos i ON i.id=e.ingreso_id\n"
+                f"SELECT {ym_ent} AS period, d.marca_id AS marca_id, COALESCE(b.nombre,'') AS marca_nombre, COUNT(*) AS entregados\n"
+                "FROM ingresos i\n"
                 "JOIN devices d ON d.id=i.device_id\n"
                 "LEFT JOIN marcas b ON b.id=d.marca_id\n"
                 f"{join_dm}\n"
-                "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                "WHERE i.fecha_entrega BETWEEN %s AND %s"
                 f"{where_i}\n"
                 "GROUP BY period, d.marca_id, marca_nombre\n"
                 "ORDER BY period ASC, entregados DESC\n"
             ), [since, until, *where_params]) or []
             facm = q((
-                f"SELECT {ym_qap} AS period, d.marca_id AS marca_id, COALESCE(b.nombre,'') AS marca_nombre, ROUND(SUM(q.total),2) AS facturacion\n"
+                f"SELECT {ym_qap} AS period, d.marca_id AS marca_id, COALESCE(b.nombre,'') AS marca_nombre, ROUND(SUM({qt_expr}),2) AS facturacion\n"
                 "FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{qt_join}"
                 "JOIN devices d ON d.id=i.device_id\n"
                 "LEFT JOIN marcas b ON b.id=d.marca_id\n"
                 f"{join_dm}\n"
@@ -537,21 +599,22 @@ class MetricasSeriesView(APIView):
                 "repuestos_marca_monthly": repm,
             })
         elif group in ("tipo", "tipo_equipo"):
-            ym_e = _sql_ym('e.ts'); ym_qap = _sql_ym('q.fecha_aprobado')
+            ym_ent = _sql_ym('i.fecha_entrega'); ym_qap = _sql_ym('q.fecha_aprobado')
             byt = q((
-                f"SELECT {ym_e} AS period, COALESCE(m.tipo_equipo,'') AS tipo_equipo, COUNT(*) AS entregados\n"
-                "FROM ingreso_events e JOIN ingresos i ON i.id=e.ingreso_id\n"
+                f"SELECT {ym_ent} AS period, COALESCE(m.tipo_equipo,'') AS tipo_equipo, COUNT(*) AS entregados\n"
+                "FROM ingresos i\n"
                 "JOIN devices d ON d.id=i.device_id\n"
                 "LEFT JOIN models m ON m.id=d.model_id\n"
                 f"{join_dm}\n"
-                "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                "WHERE i.fecha_entrega BETWEEN %s AND %s"
                 f"{where_i}\n"
                 "GROUP BY period, tipo_equipo\n"
                 "ORDER BY period ASC, entregados DESC\n"
             ), [since, until, *where_params]) or []
             fact = q((
-                f"SELECT {ym_qap} AS period, COALESCE(m.tipo_equipo,'') AS tipo_equipo, ROUND(SUM(q.total),2) AS facturacion\n"
+                f"SELECT {ym_qap} AS period, COALESCE(m.tipo_equipo,'') AS tipo_equipo, ROUND(SUM({qt_expr}),2) AS facturacion\n"
                 "FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{qt_join}"
                 "JOIN devices d ON d.id=i.device_id\n"
                 "LEFT JOIN models m ON m.id=d.model_id\n"
                 f"{join_dm}\n"
@@ -591,21 +654,22 @@ class MetricasSeriesView(APIView):
                 "repuestos_tipo_monthly": rept,
             })
         elif group in ("cliente", "customer"):
-            ym_e = _sql_ym('e.ts'); ym_qap = _sql_ym('q.fecha_aprobado')
+            ym_ent = _sql_ym('i.fecha_entrega'); ym_qap = _sql_ym('q.fecha_aprobado')
             byc = q((
-                f"SELECT {ym_e} AS period, c.id AS cliente_id, COALESCE(c.razon_social,'') AS cliente_nombre, COUNT(*) AS entregados\n"
-                "FROM ingreso_events e JOIN ingresos i ON i.id=e.ingreso_id\n"
+                f"SELECT {ym_ent} AS period, c.id AS cliente_id, COALESCE(c.razon_social,'') AS cliente_nombre, COUNT(*) AS entregados\n"
+                "FROM ingresos i\n"
                 "JOIN devices d ON d.id=i.device_id\n"
                 "JOIN customers c ON c.id=d.customer_id\n"
                 f"{join_dm}\n"
-                "WHERE e.a_estado='entregado' AND e.ts BETWEEN %s AND %s"
+                "WHERE i.fecha_entrega BETWEEN %s AND %s"
                 f"{where_i}\n"
                 "GROUP BY period, c.id, cliente_nombre\n"
                 "ORDER BY period ASC, entregados DESC\n"
             ), [since, until, *where_params]) or []
             facc = q((
-                f"SELECT {ym_qap} AS period, c.id AS cliente_id, COALESCE(c.razon_social,'') AS cliente_nombre, ROUND(SUM(q.total),2) AS facturacion\n"
+                f"SELECT {ym_qap} AS period, c.id AS cliente_id, COALESCE(c.razon_social,'') AS cliente_nombre, ROUND(SUM({qt_expr}),2) AS facturacion\n"
                 "FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
+                f"{qt_join}"
                 "JOIN devices d ON d.id=i.device_id\n"
                 "JOIN customers c ON c.id=d.customer_id\n"
                 f"{join_dm}\n"
@@ -646,6 +710,247 @@ class MetricasSeriesView(APIView):
             })
 
         return Response(resp)
+
+
+class MetricasFinanzasView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        require_roles(request, ["jefe", "jefe_veedor"])
+        since, until = _parse_range_params(request)
+        join_dm, where_i, where_params = _filters_join_where(request)
+
+        # buckets mensuales
+        months = []
+        y, m = since.year, since.month
+        while y < until.year or (y == until.year and m <= until.month):
+            months.append(f"{y:04d}-{m:02d}")
+            if m == 12:
+                y += 1; m = 1
+            else:
+                m += 1
+        data = {k: {"cobro": 0, "liberados": 0, "mo": 0, "repuestos": 0, "costos_repuestos": 0} for k in months}
+
+        ev_join = (
+            "JOIN (SELECT ingreso_id, MAX(ts) AS ts "
+            "FROM ingreso_events WHERE a_estado='liberado' GROUP BY ingreso_id) ev "
+            "ON ev.ingreso_id=i.id\n"
+        )
+        quote_join = (
+            "LEFT JOIN (SELECT ingreso_id, MAX(id) AS quote_id "
+            "FROM quotes WHERE estado='aprobado' GROUP BY ingreso_id) qa "
+            "ON qa.ingreso_id=i.id\n"
+            "LEFT JOIN (SELECT ingreso_id, MAX(id) AS quote_id "
+            "FROM quotes GROUP BY ingreso_id) ql "
+            "ON ql.ingreso_id=i.id\n"
+            "LEFT JOIN quotes q ON q.id=COALESCE(qa.quote_id, ql.quote_id)\n"
+        )
+        items_join = (
+            "LEFT JOIN ("
+            "  SELECT quote_id,\n"
+            "         ROUND(SUM(qi.qty*qi.precio_u),2) AS subtotal,\n"
+            "         ROUND(SUM(CASE WHEN qi.tipo='mano_obra' THEN qi.qty*qi.precio_u ELSE 0 END),2) AS mano_obra,\n"
+            "         ROUND(SUM(CASE WHEN qi.tipo='repuesto' THEN qi.qty*qi.precio_u ELSE 0 END),2) AS repuestos,\n"
+            "         ROUND(SUM(CASE WHEN qi.tipo='repuesto' THEN qi.qty*COALESCE(qi.costo_u_neto, CASE WHEN cfg.mult > 0 THEN qi.precio_u / cfg.mult ELSE 0 END) ELSE 0 END),2) AS costo_repuestos\n"
+            "  FROM quote_items qi\n"
+            "  CROSS JOIN (SELECT COALESCE((SELECT multiplicador_general FROM repuestos_config ORDER BY id LIMIT 1), 1) AS mult) cfg\n"
+            "  GROUP BY quote_id"
+            ") qs ON qs.quote_id=q.id\n"
+        )
+        ym_ev = _sql_ym("ev.ts")
+
+        # Ingresos sin IVA: subtotal del presupuesto (aprobado o ultimo) en equipos liberados
+        total_rows = q((
+            f"SELECT {ym_ev} AS ym,\n"
+            "       COUNT(*) AS liberados,\n"
+            "       ROUND(SUM(COALESCE(qs.subtotal,0)),2) AS cobro,\n"
+            "       ROUND(SUM(COALESCE(qs.mano_obra,0)),2) AS monto_mo,\n"
+            "       ROUND(SUM(CASE WHEN i.presupuesto_estado='no_aplica' THEN COALESCE(qs.costo_repuestos,0) ELSE COALESCE(qs.repuestos,0) END),2) AS monto_rep,\n"
+            "       ROUND(SUM(COALESCE(qs.costo_repuestos,0)),2) AS costos_repuestos\n"
+            "FROM ingresos i\n"
+            f"{quote_join}"
+            f"{items_join}"
+            f"{ev_join}"
+            f"{join_dm}\n"
+            "WHERE ev.ts BETWEEN %s AND %s\n"
+            f"{where_i}\n"
+            "GROUP BY ym"
+        ), [since, until, *where_params]) or []
+        for r in total_rows:
+            k = r.get("ym")
+            if k in data:
+                data[k]["liberados"] = r.get("liberados", 0) or 0
+                data[k]["cobro"] = r.get("cobro", 0) or 0
+                data[k]["mo"] = r.get("monto_mo", 0) or 0
+                data[k]["repuestos"] = r.get("monto_rep", 0) or 0
+                data[k]["costos_repuestos"] = r.get("costos_repuestos", 0) or 0
+
+        monthly = []
+        for k in months:
+            monthly.append({
+                "period": k,
+                "cobro": data[k]["cobro"],
+                "liberados": data[k]["liberados"],
+                "mo": data[k]["mo"],
+                "repuestos": data[k]["repuestos"],
+                "costos_repuestos": data[k]["costos_repuestos"],
+                "margen": (data[k]["cobro"] or 0) - (data[k]["costos_repuestos"] or 0),
+            })
+
+        yearly = {}
+        for it in monthly:
+            y = it["period"].split("-")[0]
+            yy = yearly.setdefault(y, {
+                "period": y,
+                "cobro": 0,
+                "liberados": 0,
+                "mo": 0,
+                "repuestos": 0,
+                "costos_repuestos": 0,
+                "margen": 0,
+            })
+            yy["cobro"] += it.get("cobro") or 0
+            yy["liberados"] += it.get("liberados") or 0
+            yy["mo"] += it.get("mo") or 0
+            yy["repuestos"] += it.get("repuestos") or 0
+            yy["costos_repuestos"] += it.get("costos_repuestos") or 0
+            yy["margen"] += it.get("margen") or 0
+
+        yearly_list = [v for _, v in sorted(yearly.items())]
+        total_cobro = sum((it.get("cobro") or 0) for it in monthly)
+        total_lib = sum((it.get("liberados") or 0) for it in monthly)
+        total_mo = sum((it.get("mo") or 0) for it in monthly)
+        total_rep = sum((it.get("repuestos") or 0) for it in monthly)
+        total_costos = sum((it.get("costos_repuestos") or 0) for it in monthly)
+        total_margen = total_cobro - total_costos
+
+        summary = {
+            "cobro_total": total_cobro,
+            "liberados_total": total_lib,
+            "mo_total": total_mo,
+            "repuestos_total": total_rep,
+            "costos_repuestos_total": total_costos,
+            "margen_total": total_margen,
+            "ticket_promedio": (total_cobro / total_lib) if total_lib else None,
+        }
+
+        return Response({
+            "range": {"from": since, "to": until},
+            "summary": summary,
+            "monthly": monthly,
+            "yearly": yearly_list,
+        })
+
+
+class MetricasFinanzasLiberadosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        require_roles(request, ["jefe", "jefe_veedor"])
+        tz = timezone.get_current_timezone()
+        month = (request.GET.get("month") or "").strip()
+        if month:
+            try:
+                y_str, m_str = month.split("-", 1)
+                y = int(y_str); m = int(m_str)
+                if m < 1 or m > 12:
+                    raise ValueError("month fuera de rango")
+                since = timezone.make_aware(dt.datetime(y, m, 1), tz)
+                if m == 12:
+                    next_month = dt.datetime(y + 1, 1, 1)
+                else:
+                    next_month = dt.datetime(y, m + 1, 1)
+                until = timezone.make_aware(next_month, tz) - dt.timedelta(microseconds=1)
+            except Exception:
+                return Response({"detail": "month invalido (YYYY-MM)"}, status=400)
+        else:
+            since, until = _parse_range_params(request)
+
+        # Enforce global cutoff (inclusive)
+        try:
+            cutoff = _cutoff_ts()
+            if since < cutoff:
+                since = cutoff
+        except Exception:
+            pass
+
+        wh = []
+        params = []
+        # Filtro global por ingreso (consistente con metricas)
+        try:
+            params.append(_cutoff_ts())
+            wh.append(" i.fecha_ingreso >= %s ")
+        except Exception:
+            pass
+        t_id = request.GET.get("tecnico_id")
+        if t_id:
+            try:
+                params.append(int(t_id))
+                wh.append(" i.asignado_a = %s ")
+            except Exception:
+                pass
+        m_id = request.GET.get("marca_id")
+        if m_id:
+            try:
+                params.append(int(m_id))
+                wh.append(" d.marca_id = %s ")
+            except Exception:
+                pass
+        tipo = (request.GET.get("tipo_equipo") or "").strip()
+        if tipo:
+            params.append(tipo)
+            wh.append(" UPPER(TRIM(m.tipo_equipo)) = UPPER(TRIM(%s)) ")
+        where_sql = (" AND " + " AND ".join(wh)) if wh else ""
+
+        rows = q((
+            "SELECT\n"
+            "  i.id AS ingreso_id,\n"
+            "  ev.ts AS fecha_liberado,\n"
+            "  i.fecha_ingreso,\n"
+            "  i.estado,\n"
+            "  i.presupuesto_estado,\n"
+            "  i.resolucion,\n"
+            "  COALESCE(u.nombre,'') AS tecnico_nombre,\n"
+            "  c.razon_social AS cliente,\n"
+            "  COALESCE(b.nombre,'') AS marca,\n"
+            "  COALESCE(m.nombre,'') AS modelo,\n"
+            "  COALESCE(m.tipo_equipo,'') AS tipo_equipo,\n"
+            "  COALESCE(d.numero_serie,'') AS numero_serie,\n"
+            "  COALESCE(d.numero_interno,'') AS numero_interno,\n"
+            "  q.id AS quote_id,\n"
+            "  q.estado AS quote_estado,\n"
+            "  COALESCE(qs.subtotal, 0) AS ingresos_sin_iva,\n"
+            "  COALESCE(qs.mano_obra, 0) AS mano_obra,\n"
+            "  CASE WHEN i.presupuesto_estado='no_aplica' THEN COALESCE(qs.costo_repuestos,0) ELSE COALESCE(qs.repuestos,0) END AS repuestos,\n"
+            "  COALESCE(qs.costo_repuestos, 0) AS costo_repuestos,\n"
+            "  ROUND(COALESCE(qs.subtotal,0) - COALESCE(qs.costo_repuestos,0), 2) AS margen\n"
+            "FROM ingresos i\n"
+            "JOIN devices d ON d.id=i.device_id\n"
+            "JOIN customers c ON c.id=d.customer_id\n"
+            "LEFT JOIN marcas b ON b.id=d.marca_id\n"
+            "LEFT JOIN models m ON m.id=d.model_id\n"
+            "LEFT JOIN users u ON u.id=i.asignado_a\n"
+            "JOIN (SELECT ingreso_id, MAX(ts) AS ts FROM ingreso_events WHERE a_estado='liberado' GROUP BY ingreso_id) ev\n"
+            "  ON ev.ingreso_id=i.id\n"
+            "LEFT JOIN (SELECT ingreso_id, MAX(id) AS quote_id FROM quotes WHERE estado='aprobado' GROUP BY ingreso_id) qa\n"
+            "  ON qa.ingreso_id=i.id\n"
+            "LEFT JOIN (SELECT ingreso_id, MAX(id) AS quote_id FROM quotes GROUP BY ingreso_id) ql\n"
+            "  ON ql.ingreso_id=i.id\n"
+            "LEFT JOIN quotes q ON q.id=COALESCE(qa.quote_id, ql.quote_id)\n"
+            "LEFT JOIN (\n"
+            "  SELECT quote_id,\n"
+            "         ROUND(SUM(qi.qty*qi.precio_u),2) AS subtotal,\n"
+            "         ROUND(SUM(CASE WHEN qi.tipo='mano_obra' THEN qi.qty*qi.precio_u ELSE 0 END),2) AS mano_obra,\n"
+            "         ROUND(SUM(CASE WHEN qi.tipo='repuesto' THEN qi.qty*qi.precio_u ELSE 0 END),2) AS repuestos,\n"
+            "         ROUND(SUM(CASE WHEN qi.tipo='repuesto' THEN qi.qty*COALESCE(qi.costo_u_neto, CASE WHEN cfg.mult > 0 THEN qi.precio_u / cfg.mult ELSE 0 END) ELSE 0 END),2) AS costo_repuestos\n"
+            "    FROM quote_items qi\n"
+            "    CROSS JOIN (SELECT COALESCE((SELECT multiplicador_general FROM repuestos_config ORDER BY id LIMIT 1), 1) AS mult) cfg\n"
+            "   GROUP BY quote_id\n"
+            ") qs ON qs.quote_id=q.id\n"
+            "WHERE ev.ts BETWEEN %s AND %s"
+            f"{where_sql}\n"
+            "ORDER BY ev.ts ASC, i.id ASC\n"
+        ), [since, until, *params]) or []
+
+        return Response(rows)
 
 
 class MetricasCalibracionView(APIView):
@@ -713,24 +1018,20 @@ class MetricasCalibracionView(APIView):
         apr_rep_days = [max(0.0, (row["reparado_ts"] - row["fecha_aprobado"]).total_seconds() / 86400.0) for row in t_rep_rows if row.get("fecha_aprobado") and row.get("reparado_ts") and row.get("reparado_ts") > row.get("fecha_aprobado")]
 
         rep_ent_rows = q((
-            "SELECT r.reparado_ts, e2.ts AS entregado_ts\n"
+            "SELECT r.reparado_ts, i.fecha_entrega AS entregado_ts\n"
             "FROM (SELECT ingreso_id, MIN(ts) AS reparado_ts FROM ingreso_events WHERE a_estado='reparado' GROUP BY ingreso_id) r\n"
-            "JOIN (SELECT ingreso_id, MIN(ts) AS ts FROM ingreso_events WHERE a_estado='entregado' GROUP BY ingreso_id) e2\n"
-            "  ON e2.ingreso_id=r.ingreso_id\n"
             "JOIN ingresos i ON i.id=r.ingreso_id\n"
             f"{join_dm}\n"
-            "WHERE e2.ts BETWEEN %s AND %s"
+            "WHERE i.fecha_entrega BETWEEN %s AND %s"
             f"{where_i}\n"
         ), [since, until, *where_params]) or []
         rep_ent_days = [max(0.0, (row["entregado_ts"] - row["reparado_ts"]).total_seconds() / 86400.0) for row in rep_ent_rows if row.get("reparado_ts") and row.get("entregado_ts") and row.get("entregado_ts") > row.get("reparado_ts")]
 
         ing_ent_rows = q((
-            "SELECT i.fecha_ingreso, e2.ts AS entregado_ts\n"
+            "SELECT i.fecha_ingreso, i.fecha_entrega AS entregado_ts\n"
             "FROM ingresos i\n"
             f"{join_dm}\n"
-            "JOIN (SELECT ingreso_id, MIN(ts) AS ts FROM ingreso_events WHERE a_estado='entregado' GROUP BY ingreso_id) e2\n"
-            "  ON e2.ingreso_id=i.id\n"
-            "WHERE e2.ts BETWEEN %s AND %s"
+            "WHERE i.fecha_entrega BETWEEN %s AND %s"
             f"{where_i}\n"
         ), [since, until, *where_params]) or []
         ing_ent_days = [max(0.0, (row["entregado_ts"] - row["fecha_ingreso"]).total_seconds() / 86400.0) for row in ing_ent_rows if row.get("fecha_ingreso") and row.get("entregado_ts") and row.get("entregado_ts") > row.get("fecha_ingreso")]
@@ -750,16 +1051,17 @@ class MetricasResumenView(APIView):
         require_roles(request, ["jefe"])  # solo Jefe
         since, until = _parse_range_params(request)
         join_dm, where_i, where_params = _filters_join_where(request)
+        qt_join = _quote_total_join()
+        qt_expr = _quote_total_expr()
 
         # CERRADOS 7/30 días (entregado)
         seven = _sql_now_minus_days(7)
         cerrados_7d = q((
             "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS cerrados\n"
-            "FROM ingreso_events e\n"
-            "JOIN ingresos i ON i.id=e.ingreso_id\n"
+            "FROM ingresos i\n"
             f"{join_dm}\n"
             "LEFT JOIN users u ON u.id=i.asignado_a\n"
-            f"WHERE e.a_estado='entregado' AND e.ts >= ({seven})"
+            f"WHERE i.fecha_entrega >= ({seven})"
             f"{where_i}\n"
             "GROUP BY i.asignado_a, tecnico_nombre\n"
             "ORDER BY cerrados DESC"
@@ -767,11 +1069,10 @@ class MetricasResumenView(APIView):
         thirty = _sql_now_minus_days(30)
         cerrados_30d = q((
             "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS cerrados\n"
-            "FROM ingreso_events e\n"
-            "JOIN ingresos i ON i.id=e.ingreso_id\n"
+            "FROM ingresos i\n"
             f"{join_dm}\n"
             "LEFT JOIN users u ON u.id=i.asignado_a\n"
-            f"WHERE e.a_estado='entregado' AND e.ts >= ({thirty})"
+            f"WHERE i.fecha_entrega >= ({thirty})"
             f"{where_i}\n"
             "GROUP BY i.asignado_a, tecnico_nombre\n"
             "ORDER BY cerrados DESC"
@@ -782,12 +1083,14 @@ class MetricasResumenView(APIView):
             "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, COUNT(*) AS wip\n"
             "FROM ingresos i\n"
             f"{join_dm}\n"
+            "JOIN locations loc ON loc.id=i.ubicacion_id\n"
             "LEFT JOIN users u ON u.id=i.asignado_a\n"
-            "WHERE i.estado IN ('ingresado','diagnosticado','presupuestado','reparar','reparado')"
+            "WHERE i.estado NOT IN ('diagnosticado','presupuestado','reparado','controlado_sin_defecto','entregado','liberado','alquilado','baja','derivado')\n"
+            "  AND LOWER(loc.nombre) = LOWER(%s)"
             f"{(' AND ' + where_i[5:]) if where_i else ''}\n"
             "GROUP BY i.asignado_a, tecnico_nombre\n"
             "ORDER BY wip DESC"
-        ), where_params) or []
+        ), ["taller", *where_params]) or []
 
         # Aging WIP (días hábiles desde ingreso hasta ahora)
         now_ts = timezone.now()
@@ -795,9 +1098,11 @@ class MetricasResumenView(APIView):
             "SELECT i.id, i.fecha_ingreso\n"
             "FROM ingresos i\n"
             f"{join_dm}\n"
-            "WHERE i.estado IN ('ingresado','diagnosticado','presupuestado','reparar','reparado')"
+            "JOIN locations loc ON loc.id=i.ubicacion_id\n"
+            "WHERE i.estado NOT IN ('diagnosticado','presupuestado','reparado','controlado_sin_defecto','entregado','liberado','alquilado','baja','derivado')\n"
+            "  AND LOWER(loc.nombre) = LOWER(%s)"
             f"{where_i}\n"
-        ), where_params) or []
+        ), ["taller", *where_params]) or []
         holi = _holidays_between((since - dt.timedelta(days=7)).date(), (until + dt.timedelta(days=7)).date())
         buckets = {"0-2": 0, "3-5": 0, "6-10": 0, "11-15": 0, "16+": 0}
         for r in open_rows:
@@ -873,10 +1178,19 @@ class MetricasResumenView(APIView):
         presup_aprobados = q((
             "SELECT COUNT(*) AS c FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
             f"{join_dm}\n"
-            "WHERE q.fecha_aprobado BETWEEN %s AND %s"
+            "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s"
             f"{where_i}\n"
         ), [since, until, *where_params], one=True) or {"c": 0}
-        aprob_tasa = (presup_aprobados.get("c", 0) / float(presup_emitidos.get("c", 0))) if presup_emitidos.get("c", 0) else 0.0
+
+        presup_rechazados = q((
+            "SELECT COUNT(*) AS c FROM quotes q JOIN ingresos i ON i.id=q.ingreso_id\n"
+            f"{join_dm}\n"
+            "WHERE q.estado='rechazado' AND q.fecha_aprobado BETWEEN %s AND %s"
+            f"{where_i}\n"
+        ), [since, until, *where_params], one=True) or {"c": 0}
+
+        den = (presup_aprobados.get("c", 0) or 0) + (presup_rechazados.get("c", 0) or 0)
+        aprob_tasa = ((presup_aprobados.get("c", 0) or 0) / float(den)) if den else 0.0
 
         t_emit_rows = q((
             "SELECT COALESCE(di.ts, i.fecha_servicio, i.fecha_ingreso) AS diag_ts, q.fecha_emitido\n"
@@ -925,9 +1239,10 @@ class MetricasResumenView(APIView):
         t_rep_dias = (sum(t_rep_min) / 60 / 24 / len(t_rep_min)) if t_rep_min else None
 
         fact_rows = q((
-            "SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM(q.total),2) AS facturacion\n"
+            f"SELECT i.asignado_a AS tecnico_id, COALESCE(u.nombre,'') AS tecnico_nombre, ROUND(SUM({qt_expr}),2) AS facturacion\n"
             "FROM quotes q\n"
             "JOIN ingresos i ON i.id=q.ingreso_id\n"
+            f"{qt_join}"
             f"{join_dm}\n"
             "LEFT JOIN users u ON u.id=i.asignado_a\n"
             "WHERE q.estado='aprobado' AND q.fecha_aprobado BETWEEN %s AND %s"
@@ -987,15 +1302,13 @@ class MetricasResumenView(APIView):
             f"{where_i}\n"
         ), [since, until, *where_params], one=True) or {"c": 0, "avg_min": None}
         deriv_t_deriv_a_dev_dias = ((deriv_devueltos.get("avg_min") or 0) / 60 / 24) if deriv_devueltos.get("avg_min") is not None else None
-        avg_ent_min = _sql_mins('ed.fecha_entrega','ev.ts')
+        avg_ent_min = _sql_mins('ed.fecha_entrega','i.fecha_entrega')
         deriv_dev_a_ent = q((
             f"SELECT AVG({avg_ent_min}) AS avg_min\n"
             "FROM equipos_derivados ed\n"
             "JOIN ingresos i ON i.id=ed.ingreso_id\n"
             f"{join_dm}\n"
-            "JOIN (SELECT ingreso_id, MIN(ts) AS ts FROM ingreso_events WHERE a_estado='entregado' GROUP BY ingreso_id) ev\n"
-            "  ON ev.ingreso_id=ed.ingreso_id\n"
-            "WHERE ed.fecha_entrega BETWEEN %s AND %s AND ed.fecha_entrega IS NOT NULL"
+            "WHERE ed.fecha_entrega BETWEEN %s AND %s AND ed.fecha_entrega IS NOT NULL AND i.fecha_entrega IS NOT NULL"
             f"{where_i}\n"
         ), [since, until, *where_params], one=True) or {"avg_min": None}
         deriv_t_dev_a_ent_dias = ((deriv_dev_a_ent.get("avg_min") or 0) / 60 / 24) if deriv_dev_a_ent.get("avg_min") is not None else None
@@ -1007,6 +1320,7 @@ class MetricasResumenView(APIView):
             "aprob_presupuestos": {
                 "emitidos": presup_emitidos.get("c", 0),
                 "aprobados": presup_aprobados.get("c", 0),
+                "rechazados": presup_rechazados.get("c", 0),
                 "tasa": aprob_tasa,
                 "t_emitir_horas": t_emit_horas,
                 "t_aprobar_horas": t_aprob_horas,

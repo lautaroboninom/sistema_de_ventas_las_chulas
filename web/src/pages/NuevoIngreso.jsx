@@ -1,6 +1,6 @@
 // web/src/pages/NuevoIngreso.jsx (UTF-8 authoring; will be re-encoded to Windows-1252)
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   getClientes,
   getMarcas,
@@ -16,6 +16,7 @@ import {
   getCatalogTipos,
   getCatalogModelos,
   getCatalogVariantes,
+  lookupScan,
 } from "@/lib/api";
 
 const Input = (p) => <input {...p} className={`border rounded p-2 w-full ${p.className || ""}`} />;
@@ -33,6 +34,13 @@ function clone(obj) {
 
 export default function NuevoIngreso() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const prefillRef = useRef(null);
+  const prefillAppliedRef = useRef(false);
+  const prefillModelAppliedRef = useRef(false);
+  const prefillClienteAppliedRef = useRef(false);
+  const prefillSkipTipoResetRef = useRef(false);
 
   // Catálogos base
   const [marcas, setMarcas] = useState([]);
@@ -98,6 +106,12 @@ export default function NuevoIngreso() {
   const [clientesPerm, setClientesPerm] = useState(true);
   const [garRepLoading, setGarRepLoading] = useState(false);
   const [garRepError, setGarRepError] = useState(false);
+  const [mgLookup, setMgLookup] = useState({ loading: false, notFound: false, checkedNs: "" });
+  const [mgAutoFilled, setMgAutoFilled] = useState(false);
+  const mgLookupSeqRef = useRef(0);
+  const mgAutoNsRef = useRef("");
+  const mgValueRef = useRef("");
+  const mgAutoRef = useRef(false);
 
   // Helpers de clientes
   const findClienteByRS = (v) =>
@@ -133,7 +147,17 @@ export default function NuevoIngreso() {
     if (!val) return "-";
     const d = new Date(val);
     if (Number.isNaN(d.getTime())) return String(val);
-    return d.toLocaleString();
+    return d.toLocaleDateString();
+  };
+  const normalizeFechaIngreso = (val) => {
+    const s = String(val || "").trim();
+    if (!s) return "";
+    const m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+    if (m) {
+      const [, dd, mm, yyyy] = m;
+      return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+    }
+    return s;
   };
 
   const resetFormFields = () => {
@@ -159,7 +183,151 @@ export default function NuevoIngreso() {
     setTecnicoId(null);
     setEmpresaFact("SEPID");
     setVarianteTxt("");
+    setMgLookup({ loading: false, notFound: false, checkedNs: "" });
+    setMgAutoFilled(false);
+    mgAutoNsRef.current = "";
   };
+
+  useEffect(() => {
+    mgValueRef.current = form.equipo.numero_interno || "";
+  }, [form.equipo.numero_interno]);
+
+  useEffect(() => {
+    mgAutoRef.current = mgAutoFilled;
+  }, [mgAutoFilled]);
+
+  useEffect(() => {
+    if (prefillAppliedRef.current) return;
+    const payload = location?.state?.prefill || null;
+    const serieParam = (searchParams.get("serie") || "").trim();
+    const prefill = payload || (serieParam ? { numero_serie: serieParam } : null);
+    if (!prefill) return;
+
+    prefillAppliedRef.current = true;
+    prefillModelAppliedRef.current = false;
+    prefillClienteAppliedRef.current = false;
+    prefillSkipTipoResetRef.current = true;
+    prefillRef.current = prefill;
+
+    setForm((f0) => {
+      const f = clone(f0);
+      if (prefill.numero_serie) f.equipo.numero_serie = prefill.numero_serie;
+      if (prefill.numero_interno) f.equipo.numero_interno = prefill.numero_interno;
+      if (prefill.marca_id) f.equipo.marca_id = prefill.marca_id;
+      if (prefill.model_id) f.equipo.modelo_id = prefill.model_id;
+      return f;
+    });
+    if (prefill.marca_id) setMarcaId(prefill.marca_id);
+    if (prefill.marca) setMarcaTxt(prefill.marca);
+    const variantePrefill = prefill.variante || prefill.equipo_variante || "";
+    if (variantePrefill) setVarianteTxt(variantePrefill);
+    if (prefill.customer_nombre || prefill.alquiler_a) {
+      setClienteRsInput(prefill.customer_nombre || prefill.alquiler_a || "");
+      setClienteCodInput(prefill.customer_cod || "");
+    }
+    if (prefill.propietario_nombre || prefill.propietario_contacto || prefill.propietario_doc) {
+      setPropietario({
+        nombre: prefill.propietario_nombre || "",
+        contacto: prefill.propietario_contacto || "",
+        doc: prefill.propietario_doc || "",
+      });
+    }
+    if (prefill.alquilado && prefill.alquiler_a) {
+      setNotice(`Equipo alquilado a ${prefill.alquiler_a}. Completa los datos restantes.`);
+    } else if (prefill.customer_nombre) {
+      setNotice("Datos cargados desde lectura de codigo.");
+    } else if (prefill.numero_serie || prefill.numero_interno) {
+      setNotice("Serie cargada desde lectura de codigo.");
+    }
+  }, [location, searchParams]);
+
+  useEffect(() => {
+    if (prefillModelAppliedRef.current) return;
+    const prefill = prefillRef.current;
+    if (!prefill || !prefill.model_id) return;
+    if (!modelos || modelos.length === 0) return;
+    const exists = modelos.some((m) => String(m.id) === String(prefill.model_id));
+    if (!exists) return;
+    setForm((f0) => ({ ...f0, equipo: { ...f0.equipo, modelo_id: prefill.model_id } }));
+    prefillModelAppliedRef.current = true;
+  }, [modelos]);
+
+  useEffect(() => {
+    if (prefillClienteAppliedRef.current) return;
+    const prefill = prefillRef.current;
+    if (!prefill) return;
+    if (!clientes || clientes.length === 0) return;
+    const rsVal = (clienteRsInput || prefill.customer_nombre || prefill.alquiler_a || "").trim();
+    const codVal = (clienteCodInput || prefill.customer_cod || "").trim();
+    if (!rsVal && !codVal) {
+      prefillClienteAppliedRef.current = true;
+      return;
+    }
+    if (!clienteRsInput && rsVal) setClienteRsInput(rsVal);
+    if (!clienteCodInput && codVal) setClienteCodInput(codVal);
+    syncClienteFromInputs(rsVal, codVal);
+    prefillClienteAppliedRef.current = true;
+  }, [clientes]);
+
+  // Autocompletar MG por N/S (debounce 400ms)
+  useEffect(() => {
+    const ns = (form.equipo.numero_serie || "").trim();
+    if (!ns) {
+      setMgLookup({ loading: false, notFound: false, checkedNs: "" });
+      if (mgAutoRef.current && (mgValueRef.current || "").trim()) {
+        setForm((prev) => {
+          const copy = clone(prev);
+          copy.equipo.numero_interno = "";
+          return copy;
+        });
+        setMgAutoFilled(false);
+        mgAutoNsRef.current = "";
+      }
+      return;
+    }
+
+    if (mgAutoRef.current && mgAutoNsRef.current && mgAutoNsRef.current !== ns) {
+      setForm((prev) => {
+        const copy = clone(prev);
+        copy.equipo.numero_interno = "";
+        return copy;
+      });
+      setMgAutoFilled(false);
+      mgAutoNsRef.current = "";
+    }
+
+    setMgLookup((s) => (s.notFound || s.loading ? { ...s, notFound: false, loading: false } : s));
+    const seq = ++mgLookupSeqRef.current;
+    const h = setTimeout(async () => {
+      setMgLookup((s) => ({ ...s, loading: true, notFound: false, checkedNs: ns }));
+      try {
+        const res = await lookupScan(ns);
+        if (mgLookupSeqRef.current !== seq) return;
+        const foundMg = (res?.device?.numero_interno || "").trim();
+        const currentMg = (mgValueRef.current || "").trim();
+        const canAuto = !currentMg || mgAutoRef.current;
+        if (foundMg && canAuto) {
+          setForm((prev) => {
+            const copy = clone(prev);
+            copy.equipo.numero_interno = foundMg;
+            return copy;
+          });
+          setMgAutoFilled(true);
+          mgAutoNsRef.current = ns;
+        }
+        if (foundMg) {
+          setMgLookup({ loading: false, notFound: false, checkedNs: ns });
+        } else {
+          const showNotFound = !currentMg || mgAutoRef.current;
+          setMgLookup({ loading: false, notFound: showNotFound, checkedNs: ns });
+        }
+      } catch {
+        if (mgLookupSeqRef.current !== seq) return;
+        setMgLookup((s) => ({ ...s, loading: false }));
+      }
+    }, 400);
+    return () => clearTimeout(h);
+  }, [form.equipo.numero_serie]);
 
   // Garantía de reparación (por N/S o MG) - debounce 400ms
   useEffect(() => {
@@ -325,8 +493,8 @@ export default function NuevoIngreso() {
   useEffect(() => {
     const m = (modelos || []).find((x) => x.id === Number(form.equipo.modelo_id));
     if (!m || !marcaId || !catTipoId) {
-      setVarianteTxt("");
       setVarianteSugeridas([]);
+      if (!varianteTxt) setVarianteTxt("");
       return;
     }
     const needle = (m.nombre || "").trim().toUpperCase();
@@ -337,7 +505,7 @@ export default function NuevoIngreso() {
     });
     if (cmatch.length !== 1) {
       setVarianteSugeridas([]);
-      setVarianteTxt("");
+      if (!varianteTxt) setVarianteTxt("");
       return;
     }
     const cm = cmatch[0];
@@ -346,12 +514,12 @@ export default function NuevoIngreso() {
         const vars = await getCatalogVariantes(marcaId, catTipoId, cm.id);
         const names = (vars || []).filter((v) => v && v.name).map((v) => v.name);
         setVarianteSugeridas(names);
-        if (names.length === 1) setVarianteTxt(names[0]);
+        if (!varianteTxt && names.length === 1) setVarianteTxt(names[0]);
       } catch {
         setVarianteSugeridas([]);
       }
     })();
-  }, [form.equipo.modelo_id, modelos, marcaId, catTipoId, catModelos]);
+  }, [form.equipo.modelo_id, modelos, marcaId, catTipoId, catModelos, varianteTxt]);
 
   // Técnico por modelo
   useEffect(() => {
@@ -382,6 +550,18 @@ export default function NuevoIngreso() {
     });
   };
 
+  const onNumeroSerieChange = (e) => {
+    setMgLookup((s) => (s.notFound || s.loading ? { ...s, notFound: false, loading: false } : s));
+    onChange("equipo.numero_serie")(e);
+  };
+
+  const onNumeroInternoChange = (e) => {
+    setMgAutoFilled(false);
+    mgAutoNsRef.current = "";
+    setMgLookup((s) => (s.notFound ? { ...s, notFound: false } : s));
+    onChange("equipo.numero_interno")(e);
+  };
+
   function onMarcaInput(val) {
     setMarcaTxt(val);
     const pool = tipoSel ? (marcasPorTipo.length ? marcasPorTipo : marcas) : marcas;
@@ -391,6 +571,11 @@ export default function NuevoIngreso() {
 
   // Cambio de tipo => filtra marcas
   useEffect(() => {
+    if (prefillSkipTipoResetRef.current && !tipoSel) {
+      prefillSkipTipoResetRef.current = false;
+      setMarcasPorTipo([]);
+      return;
+    }
     setMarcaTxt("");
     setMarcaId(null);
     setModelos([]);
@@ -452,6 +637,7 @@ export default function NuevoIngreso() {
     }
 
     try {
+      const fechaIngresoNorm = normalizeFechaIngreso(form.fecha_ingreso);
       const payload = {
         cliente: { id: c.id },
         equipo: {
@@ -466,7 +652,7 @@ export default function NuevoIngreso() {
         informe_preliminar: form.informe_preliminar,
         comentarios: form.comentarios,
         remito_ingreso: (form.remito_ingreso || "").trim(),
-        ...(form.fecha_ingreso ? { fecha_ingreso: form.fecha_ingreso } : {}),
+        ...(fechaIngresoNorm ? { fecha_ingreso: fechaIngresoNorm } : {}),
         accesorios_items: accItems.map((it) => ({
           accesorio_id: Number(it.accesorio_id),
           referencia: (it.referencia || "").trim(),
@@ -744,13 +930,18 @@ export default function NuevoIngreso() {
             {/* Número de serie */}
             <div className="md:col-span-2">
               <label className="text-sm">Número de serie</label>
-              <Input value={form.equipo.numero_serie} onChange={onChange("equipo.numero_serie")} />
+              <Input value={form.equipo.numero_serie} onChange={onNumeroSerieChange} />
             </div>
 
-            {/* Número interno (MG) */}
+            {/* Número interno */}
             <div className="md:col-span-2">
-              <label className="text-sm">Número interno (MG)</label>
-              <Input value={form.equipo.numero_interno} onChange={onChange("equipo.numero_interno")} placeholder="MG ..." />
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm">Número Interno</label>
+                {mgLookup.notFound && (
+                  <span className="text-xs text-amber-600">MG no encontrado</span>
+                )}
+              </div>
+              <Input value={form.equipo.numero_interno} onChange={onNumeroInternoChange} placeholder="MG/NM/NV/CE ..." />
             </div>
 
             {/* Garantías */}

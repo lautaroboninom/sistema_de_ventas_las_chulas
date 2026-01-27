@@ -22,6 +22,7 @@ class CatalogoAccesoriosView(APIView):
         old_name = (d.get("rename_from") or "").strip()
         if not new_name:
             return Response({"detail": "nombre requerido"}, status=400)
+        _set_audit_user(request)
 
         # Renombrar existente (case-insensitive)
         if old_name and old_name.lower() != new_name.lower():
@@ -69,6 +70,7 @@ class CatalogoAccesoriosView(APIView):
         nombre = (request.GET.get("nombre") or "").strip()
         if not nombre:
             return Response({"detail": "nombre requerido"}, status=400)
+        _set_audit_user(request)
         exec_void(
             "UPDATE catalogo_accesorios SET activo=FALSE WHERE LOWER(TRIM(nombre))=LOWER(TRIM(%s))",
             [nombre],
@@ -159,6 +161,7 @@ class BuscarAccesorioPorReferenciaView(APIView):
                   b.nombre AS marca,
                   m.nombre AS modelo,
                   COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                  COALESCE(NULLIF(t.equipo_variante,''), NULLIF(d.variante,''), NULLIF(m.variante,'')) AS equipo_variante,
                   d.numero_serie,
                   t.fecha_ingreso,
                   ia.referencia,

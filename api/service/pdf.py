@@ -67,7 +67,7 @@ def _get_data(ingreso_id: int):
             t.trabajos_realizados,
             t.accesorios,
             t.remito_ingreso,
-            t.equipo_variante,
+            COALESCE(NULLIF(t.equipo_variante,''), NULLIF(d.variante,''), NULLIF(m.variante,'')) AS equipo_variante,
             t.motivo AS motivo,
             c.razon_social AS cliente,
             COALESCE(c.cuit, '') AS cliente_cuit,
@@ -79,6 +79,7 @@ def _get_data(ingreso_id: int):
             COALESCE(d.propietario_contacto, '') AS propietario_contacto,
             COALESCE(d.propietario_doc, '') AS propietario_doc,
             d.numero_serie,
+            COALESCE(d.numero_interno, '') AS numero_interno,
             COALESCE(t.garantia_fabrica, false) AS garantia,
             COALESCE(t.etiq_garantia_ok, true) AS etiq_ok,
             COALESCE(b.nombre,'') AS marca,
@@ -171,6 +172,13 @@ def _first_non_empty(*vals) -> str:
             return s
     return ""
 
+def _compose_serial_internal(numero_serie, numero_interno) -> str:
+    ns = (numero_serie or "").strip()
+    ni = (numero_interno or "").strip()
+    if ns and ni:
+        return f"{ns} | {ni}"
+    return ns or ni or ""
+
 
 def _compose_equipment_label(head: dict) -> str:
     """Build a compact equipment label similar to web catalogEquipmentLabel.
@@ -204,7 +212,7 @@ def _get_derivacion_data(ingreso_id: int, deriv_id: int | None = None) -> dict |
             COALESCE(b.nombre,'') AS marca,
             COALESCE(m.nombre,'') AS modelo,
             m.tipo_equipo AS equipo,
-            NULLIF(t.equipo_variante,'') AS equipo_variante,
+            COALESCE(NULLIF(t.equipo_variante,''), NULLIF(d.variante,''), NULLIF(m.variante,'')) AS equipo_variante,
             COALESCE(d.numero_serie,'') AS numero_serie,
             COALESCE(d.numero_interno,'') AS numero_interno,
             COALESCE(t.informe_preliminar,'') AS informe_preliminar,
@@ -280,8 +288,8 @@ def render_remito_derivacion_pdf(ingreso_id: int, deriv_id: int | None = None, p
     def box(x, y, w, h):
         c.rect(x, y, w, h, stroke=1, fill=0)
 
-    def label_value(x, y, w, h, label, value, fsz=F_FIELD, bold=False):
-        c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
+    def label_value(x, y, w, h, label, value, fsz=F_FIELD, bold=False, label_fsz=F_LABEL):
+        c.setFont("Helvetica", label_fsz); c.setFillColor(colors.grey)
         c.drawString(x, y + h + 1.4 * mm, label)
         c.setFillColor(colors.black)
         box(x, y, w, h)
@@ -519,7 +527,7 @@ def _draw_block(c, x, y, title, value, width, font="Helvetica", fsize=9, leading
         y -= leading
     return y
 
-def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None, remito=None, etiq_ok=None):
+def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, numero_interno=None, equipo=None, remito=None, etiq_ok=None):
     # Mostrar "Fajas de garantía: Abiertas" solo si las fajas NO están OK
     try:
         show_faja = not bool(etiq_ok)
@@ -540,21 +548,23 @@ def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, equipo=None, 
         c.setFont("Helvetica", 9); c.drawString(w- 30*mm, y - 7*mm, "Remito Ingreso:")
         c.setFont("Helvetica", 9); c.drawString(w- 30*mm + 70, y - 7*mm, str(remito))
 
-    col_w = w / 3.0 + 3*mm
+    col_ws = [w * 0.3, w * 0.3, w * 0.4]
+    col_x = [x, x + col_ws[0], x + col_ws[0] + col_ws[1]]
     base_y = y - 14*mm
 
-    def col(ix, label, value):
-        cx = x + ix * col_w + 5*mm
-        c.setFont("Helvetica", 9)
+    def col(ix, label, value, label_fsz=9):
+        cx = col_x[ix] + 5*mm
+        c.setFont("Helvetica", label_fsz)
         c.setFillColor(colors.grey)
         c.drawString(cx, base_y, label)
         c.setFillColor(colors.black)
         c.setFont("Helvetica-Bold", 12)
         c.drawString(cx, base_y - 6*mm, value or "-")
 
+    serial_txt = _compose_serial_internal(numero_serie, numero_interno)
     col(0, "Marca", (marca or "").upper())
     col(1, "Modelo", (modelo or "").upper())
-    col(2, "Número de serie", (numero_serie or "").upper())
+    col(2, "Numero Serie | Numero interno", (serial_txt or "").upper(), label_fsz=8)
     # Línea adicional solo si fajas abiertas
     if show_faja:
         c.setFont("Helvetica", 9)
@@ -699,10 +709,18 @@ def render_quote_pdf(ingreso_id: int):
 
     y = _draw_equipment_panel(
         c, ml, y, W - 2*ml,
-        head.get("marca"), head.get("modelo"), head.get("numero_serie"),
+        head.get("marca"), head.get("modelo"), head.get("numero_serie"), head.get("numero_interno"),
         equipo=head.get("equipo"), remito=head.get("remito_ingreso"), etiq_ok=head.get("etiq_ok"),
     )
     y -= 5
+    motivo_txt = (head.get("motivo") or "").strip()
+    if motivo_txt:
+        c.setFont("Helvetica", 9)
+        max_w = W - 2 * ml
+        for ln in _wrap_lines(f"Motivo: {motivo_txt}", "Helvetica", 9, max_w):
+            c.drawString(ml, y, ln)
+            y -= 11
+        y -= 2
     if head.get("informe_preliminar"):
         y = _draw_block(c, ml, y, "Info. preliminar", head["informe_preliminar"], W-2*ml) - 6
     if head.get("accesorios"):
@@ -926,7 +944,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     W, H = A4
     margin = 12 * mm
     gap = 6 * mm
-    GRID_DOWN = 5 * mm  # bajar grilla medio cm
+    GRID_DOWN = 4 * mm  # bajar grilla medio cm
 
     usable_h = H - 2 * margin
     part = (usable_h - 2 * gap) / 5.0      # 5 partes -> 2-2-1
@@ -966,8 +984,8 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     def box(x, y, w, h):
         c.rect(x, y, w, h, stroke=1, fill=0)
 
-    def label_value(x, y, w, h, label, value, fsz=F_FIELD, bold=False):
-        c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
+    def label_value(x, y, w, h, label, value, fsz=F_FIELD, bold=False, label_fsz=F_LABEL):
+        c.setFont("Helvetica", label_fsz); c.setFillColor(colors.grey)
         c.drawString(x, y + h + 1.4 * mm, label)
         c.setFillColor(colors.black)
         box(x, y, w, h)
@@ -1029,7 +1047,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         # alto de Observaciones ajustado al nuevo ROW_GAP
         obs_h = max(
             9 * mm,
-            content_h - GRID_DOWN - (ROW_H + ROW_GAP) * 3 - SIGN_H - 7 * mm
+            content_h - GRID_DOWN - (ROW_H + ROW_GAP) * 4 - SIGN_H - 7 * mm
         )
 
         # r1: Cliente | Fecha | CUIT (si Particular usa CUIT del propietario)
@@ -1053,21 +1071,36 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         
         y -= (ROW_H + ROW_GAP)
 
-        # r2: Equipo | Marca | Modelo | NumeroSerie
-        label_value(inner_x, y - ROW_H, 55 * mm, ROW_H, "Equipo", head.get("equipo"))
-        label_value(inner_x + 57 * mm, y - ROW_H, 35 * mm, ROW_H, "Marca", head.get("marca"))
+        # r2: Equipo | Marca | Modelo | Numero Serie | Numero interno
+        serial_comp = _compose_serial_internal(head.get("numero_serie"), head.get("numero_interno"))
+        r2_gap = 2 * mm
+        r2_w1 = 50 * mm
+        r2_w2 = 26 * mm
+        r2_w3 = 30 * mm
+        r2_w4 = inner_w - (r2_w1 + r2_w2 + r2_w3 + 3 * r2_gap)
+        r2_x1 = inner_x
+        r2_x2 = r2_x1 + r2_w1 + r2_gap
+        r2_x3 = r2_x2 + r2_w2 + r2_gap
+        r2_x4 = r2_x3 + r2_w3 + r2_gap
+
+        label_value(r2_x1, y - ROW_H, r2_w1, ROW_H, "Equipo", head.get("equipo"))
+        label_value(r2_x2, y - ROW_H, r2_w2, ROW_H, "Marca", head.get("marca"))
         try:
-            label_value(inner_x + 98 * mm, y - ROW_H, 33 * mm, ROW_H, "Modelo", head.get("modelo") + " " + head.get("equipo_variante"))
+            label_value(r2_x3, y - ROW_H, r2_w3, ROW_H, "Modelo", head.get("modelo") + " " + head.get("equipo_variante"))
         except:
-            label_value(inner_x + 98 * mm, y - ROW_H, 33 * mm, ROW_H, "Modelo", head.get("modelo"))
-        label_value(inner_x + 134 * mm, y - ROW_H, 36 * mm, ROW_H, "NumeroSerie", head.get("numero_serie"))
+            label_value(r2_x3, y - ROW_H, r2_w3, ROW_H, "Modelo", head.get("modelo"))
+        label_value(r2_x4, y - ROW_H, r2_w4, ROW_H, "Numero Serie | Numero interno", serial_comp, label_fsz=6.2)
         y -= (ROW_H + ROW_GAP)
 
-        # r3: Accesorios | Garantia | Resolucion
-        label_value(inner_x, y - ROW_H, 102 * mm, ROW_H, "Accesorios", head.get("accesorios"))
+        # r3: Motivo | Garantia | Resolucion
+        label_value(inner_x, y - ROW_H, 102 * mm, ROW_H, "Motivo", head.get("motivo"))
         garantia_txt = "Si" if head.get("garantia") else "No"
         label_value(inner_x + 104 * mm, y - ROW_H, 24 * mm, ROW_H, "Garantia", garantia_txt  )
         label_value(inner_x + 131 * mm, y - ROW_H, 39 * mm, ROW_H, "Resolucion", resolution_label(head.get("resolucion")))
+        y -= (ROW_H + ROW_GAP)
+
+        # r4: Accesorios (ancho completo)
+        label_value(inner_x, y - ROW_H, inner_w, ROW_H, "Accesorios", head.get("accesorios"))
         y -= (ROW_H + ROW_GAP)
 
         # Observaciones (Descripción + Trabajos)
@@ -1129,7 +1162,8 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         y -= 8.5 * mm
         c.setFont("Helvetica", 10.0)
         c.drawString(x, y, f"Cliente: {head.get('cliente') or '-'}"); y -= 6.5 * mm
-        c.drawString(x, y, f"NúmeroSerie: {head.get('numero_serie') or '-'}"); y -= 6.5 * mm
+        serial_comp = _compose_serial_internal(head.get("numero_serie"), head.get("numero_interno"))
+        c.drawString(x, y, f"Numero Serie | Numero interno: {serial_comp or '-'}"); y -= 6.5 * mm
         c.drawString(x, y, f"Equipo: {_compose_equipment_label(head) or (head.get('equipo') or '-')}"); y -= 10 * mm
 
         c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)

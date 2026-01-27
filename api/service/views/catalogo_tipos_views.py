@@ -3,7 +3,7 @@ from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .helpers import exec_void, q, require_roles
+from .helpers import exec_void, q, require_roles, _set_audit_user
 
 
 class TiposEquipoView(APIView):
@@ -30,6 +30,7 @@ class TiposEquipoView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         new_name = (d.get("nombre") or "").strip()
         old_name = (d.get("rename_from") or "").strip()
@@ -76,6 +77,7 @@ class TiposEquipoView(APIView):
         nombre = (request.GET.get("nombre") or "").strip()
         if not nombre:
             return Response({"detail": "nombre requerido"}, status=400)
+        _set_audit_user(request)
         exec_void("DELETE FROM marca_tipos_equipo WHERE UPPER(TRIM(nombre))=UPPER(TRIM(%s))", [nombre])
         exec_void(
             "UPDATE models SET tipo_equipo=NULL WHERE UPPER(TRIM(tipo_equipo))=UPPER(TRIM(%s))",

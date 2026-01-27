@@ -1,8 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { getUbicaciones, getGeneralEquipos } from "../lib/api";
-import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf, nsPreferInternoOf } from "../lib/ui-helpers";
+import { ingresoIdOf, formatOS, formatDateTime, tipoEquipoOf } from "../lib/ui-helpers";
 import { useNavigate } from "react-router-dom";
 import useQueryState from "../hooks/useQueryState";
+
+const numeroInternoOf = (row, fallback = "-") => {
+  if (!row) return fallback;
+  const raw = row?.numero_interno ?? row?.equipo?.numero_interno ?? "";
+  const value = String(raw ?? "").trim();
+  return value || fallback;
+};
+
+const numeroSerieOf = (row, fallback = "-") => {
+  if (!row) return fallback;
+  const raw = row?.numero_serie ?? row?.equipo?.numero_serie ?? "";
+  const value = String(raw ?? "").trim();
+  return value || fallback;
+};
 
 export default function Depositos() {
   const [ubicaciones, setUbicaciones] = useState([]);
@@ -47,7 +61,7 @@ export default function Depositos() {
   }, [ubicacionId, ubicacionNombre]);
 
   return (
-    <div className="p-4 max-w-6xl mx-auto">
+    <div className="p-4 w-full max-w-screen-2xl mx-auto">
       <h1 className="text-2xl font-bold mb-3">Depósitos/Bajas</h1>
       <div className="flex items-center gap-2 mb-3">
         <span className="text-sm">Depósito / Ubicación:</span>
@@ -69,6 +83,7 @@ export default function Depositos() {
                 <th className="p-2 text-left">Marca</th>
                 <th className="p-2 text-left">Modelo</th>
                 <th className="p-2 text-left">Tipo</th>
+                <th className="p-2 text-left min-w-[180px] whitespace-nowrap">N° Interno</th>
                 <th className="p-2 text-left">N° Serie</th>
                 <th className="p-2 text-left">Estado</th>
                 <th className="p-2 text-left">Fecha ingreso</th>
@@ -82,7 +97,8 @@ export default function Depositos() {
                   <td className="p-2">{r.marca}</td>
                   <td className="p-2">{r.modelo}</td>
                   <td className="p-2">{tipoEquipoOf(r)}</td>
-                  <td className="p-2">{nsPreferInternoOf(r)}</td>
+                  <td className="p-2 min-w-[180px] whitespace-nowrap">{numeroInternoOf(r)}</td>
+                  <td className="p-2">{numeroSerieOf(r)}</td>
                   <td className="p-2">{r.estado}</td>
                   <td className="p-2">{formatDateTime(r.fecha_ingreso)}</td>
                 </tr>

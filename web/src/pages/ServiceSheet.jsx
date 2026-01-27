@@ -18,6 +18,7 @@ import {
   resolveFechaIngreso,
   resolveFechaCreacion,
 } from "../lib/ui-helpers";
+import { estadoLabel } from "../lib/constants";
 import { canActAsTech, canRelease, hasAnyRole, ROLES } from "../lib/authz";
 import ArchivosTab from "./ServiceSheet/tabs/ArchivosTab";
 import HistorialTab from "./ServiceSheet/tabs/HistorialTab";
@@ -50,12 +51,18 @@ export default function ServiceSheet() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
+  const isJefe = user?.rol === ROLES.JEFE;
+  const isJefeVeedor = user?.rol === ROLES.JEFE_VEEDOR;
+  const isAdmin = user?.rol === ROLES.ADMIN;
+  const isTech = user?.rol === ROLES.TECNICO;
+
   const actAsTech = canActAsTech(user);
   const release = canRelease(user);
-  const canEditBasics = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR, ROLES.ADMIN]);
-  const canAssignTecnico = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]);
-  const canManagePresupuesto = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR]);
-  const canSeeHistory = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO]);
+  const canEditBasics = isJefe || isAdmin || isJefeVeedor;
+  const canAssignTecnico = isJefe || isAdmin || isJefeVeedor;
+  const canManagePresupuesto = isJefe;
+  const canSeeCosts = isJefe || isJefeVeedor;
+  const canSeeHistory = isJefe || isAdmin || isJefeVeedor || isTech;
 
   // pestañas
   const [tab, setTab] = useState("principal");
@@ -124,7 +131,6 @@ export default function ServiceSheet() {
   const [toastMsg, setToastMsg] = useState("");
   const [showReparadoToast, setShowReparadoToast] = useState(false);
   const [savingDiag, setSavingDiag] = useState(false);
-  const canResolve = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]);
   const toDatetimeLocalStr = (isoOrDate) => {
     if (!isoOrDate) return "";
     const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
@@ -211,6 +217,19 @@ export default function ServiceSheet() {
       setData((d) => ({ ...d, ...fields }));
       setErr("");
     } catch (e) {
+      const conflict = e?.data?.conflict_type;
+      if (conflict) {
+        const detail = e?.data?.detail || "Conflicto al guardar identificadores. Debes corregirlo desde Equipos.";
+        const devId = e?.data?.payload?.device_mg?.id || e?.data?.payload?.device_ns?.id || null;
+        setErr(detail);
+        window.alert(`${detail}\nTe redirigimos a Equipos para corregir N/S o MG.`);
+        if (devId) {
+          navigate(`/equipos?device_id=${devId}&from=service&ingreso_id=${id}`);
+        } else {
+          navigate(`/equipos?from=service&ingreso_id=${id}`);
+        }
+        return;
+      }
       setErr(e?.message || "No se pudo guardar");
     }
   }
@@ -551,9 +570,9 @@ export default function ServiceSheet() {
   useEffect(() => {
     if (!data) return;
     // respetar permisos de edición
-    const isTech = user?.rol === ROLES.TECNICO;
     const userId = Number(user?.id || 0);
-    const canEditDiagLocal = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (isTech && userId && data?.asignado_a === userId);
+    const assignedToMe = userId && data?.asignado_a === userId;
+    const canEditDiagLocal = isJefe || isAdmin || ((isTech || isJefeVeedor) && assignedToMe);
     if (!canEditDiagLocal) return;
     if (isEntregadoOBaja) return;
 
@@ -588,10 +607,12 @@ export default function ServiceSheet() {
   const isAprobado = data.presupuesto_estado === "aprobado";
   const numeroSerie = (data?.numero_serie || "").trim();
   const userId = Number(user?.id || 0);
-  const canManagePhotos = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (user?.rol === ROLES.TECNICO && userId);
-  const isTech = user?.rol === ROLES.TECNICO;
-  const canEditDiag = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR]) || (isTech && userId && data?.asignado_a === userId);
+  const assignedToMe = userId && data?.asignado_a === userId;
+  const canManagePhotos = isJefe || isAdmin || isJefeVeedor || (isTech && userId);
+  const canEditDiag = isJefe || isAdmin || ((isTech || isJefeVeedor) && assignedToMe);
   const canMarkReparado = canEditDiag;
+  const canResolve = isJefe || isAdmin || (isJefeVeedor && assignedToMe);
+  const canAutorizarReparar = isJefe || isAdmin || (isJefeVeedor && assignedToMe);
   const canDarBaja = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR, ROLES.ADMIN, ROLES.RECEPCION]);
   const hasMenuActions = Boolean(canSeeHistory || numeroSerie || canDarBaja);
 
@@ -676,6 +697,7 @@ export default function ServiceSheet() {
         <PrincipalTab
           id={id}
           data={data}
+          user={user}
           release={release}
           numeroSerie={numeroSerie}
           editBasics={editBasics}
@@ -740,6 +762,7 @@ export default function ServiceSheet() {
           canResolve={canResolve}
           resolucion={resolucion}
           setResolucion ={setResolucion}
+          canAutorizarReparar={canAutorizarReparar}
           actAsTech={actAsTech}
           canEditDiag={canEditDiag}
           canMarkReparado={canMarkReparado}
@@ -759,6 +782,7 @@ export default function ServiceSheet() {
           id={id}
           data={data}
           canManagePresupuesto={canManagePresupuesto}
+          canSeeCosts={canSeeCosts}
           money={money}
           refreshIngreso={refreshIngreso}
           setErr={setErr}
@@ -807,7 +831,7 @@ export default function ServiceSheet() {
                         return (
                           <tr key={ingresoId} className={`border-t hover:bg-gray-50 cursor-pointer ${isCurrent ? 'bg-blue-50' : ''}`} onClick={() => { setRelatedOpen(false); if (ingresoId) navigate(`/ingresos/${ingresoId}`); }}>
                             <td className="p-2 underline">{formatOSHelper(ingresoId)}</td>
-                            <td className="p-2 capitalize">{r?.estado || '-'}</td>
+                            <td className="p-2">{estadoLabel(r?.estado) || '-'}</td>
                             <td className="p-2">{(() => {
                               const v = r?.presupuesto_estado;
                               if (!v) return '-';

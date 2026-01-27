@@ -65,6 +65,7 @@ class IngresoListItemSerializer(serializers.Serializer):
     marca = serializers.CharField(allow_blank=True, required=False)
     modelo = serializers.CharField(allow_blank=True, required=False)
     tipo_equipo = serializers.CharField(allow_blank=True, required=False)
+    equipo_variante = serializers.CharField(allow_blank=True, required=False, allow_null=True)
     fecha_servicio = serializers.DateTimeField(required=False, allow_null=True)
     fecha_entrega = serializers.DateTimeField(required=False, allow_null=True)
     fecha_aprobado = serializers.DateTimeField(required=False, allow_null=True)
@@ -188,10 +189,13 @@ class QuoteItemSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     tipo = serializers.CharField()  # 'repuesto' | 'mano_obra' | 'servicio'
     repuesto_id = serializers.IntegerField(allow_null=True, required=False)
+    repuesto_codigo = serializers.CharField(allow_null=True, required=False)
     descripcion = serializers.CharField()
     qty = serializers.DecimalField(max_digits=10, decimal_places=2)
     precio_u = serializers.DecimalField(max_digits=12, decimal_places=2)
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2)
+    costo_u_neto = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True, required=False)
+    costo_total_neto = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True, required=False)
 
 
 class QuoteDetailSerializer(serializers.Serializer):

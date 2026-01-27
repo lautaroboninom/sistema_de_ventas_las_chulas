@@ -129,6 +129,7 @@ class ModeloVarianteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, marca_id: int, modelo_id: int):
+        _set_audit_user(request)
         d = request.data or {}
         variante = (d.get("variante") or "").strip()
         exec_void(
@@ -146,6 +147,7 @@ class ModeloTecnicoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, bid, mid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         tecnico_id = request.data.get("tecnico_id")
         if tecnico_id:
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
@@ -160,6 +162,7 @@ class MarcaTecnicoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def patch(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         tecnico_id = request.data.get("tecnico_id")
         if tecnico_id:
             ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
@@ -174,6 +177,7 @@ class MarcaAplicarTecnicoAModelosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def post(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         if connection.vendor == "postgresql":
             q(
                 """
@@ -218,6 +222,7 @@ class ModelosPorMarcaView(APIView):
 
     def post(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         n = (d.get("nombre") or d.get("name") or "").strip()
         if not n:
@@ -286,6 +291,7 @@ class MarcaDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         try:
             row = q("SELECT COUNT(*) AS cnt FROM models WHERE marca_id=%s", [bid], one=True)
             if row and (row.get("cnt") or 0) > 0:
@@ -302,6 +308,7 @@ class MarcaDeleteView(APIView):
 
     def patch(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         nombre = (d.get("nombre") or d.get("name") or "").strip()
         if not nombre:
@@ -320,6 +327,7 @@ class ModeloDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, mid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         try:
             exec_void("DELETE FROM models WHERE id = %s", [mid])
             return Response({"ok": True})
@@ -330,6 +338,7 @@ class ModeloDeleteView(APIView):
 
     def patch(self, request, mid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         nombre = (d.get("nombre") or d.get("name") or "").strip()
         if not nombre:
@@ -353,6 +362,7 @@ class ModelMergeView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         try:
             source_id = int(d.get("source_id"))
@@ -527,6 +537,7 @@ class MarcaMergeView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         try:
             source_id = int(d.get("source_id"))
@@ -893,6 +904,7 @@ class MarcaDeleteCascadeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def delete(self, request, bid):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         try:
             with transaction.atomic():
                 exec_void(

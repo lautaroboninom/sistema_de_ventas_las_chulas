@@ -3,7 +3,7 @@ from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .helpers import exec_void, exec_returning, q, require_roles
+from .helpers import exec_void, exec_returning, q, require_roles, _set_audit_user
 
 
 class CatalogoTiposView(APIView):
@@ -154,6 +154,7 @@ class CatalogoTiposCreateView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         try:
             marca_id = int(d.get("marca_id"))
@@ -191,6 +192,7 @@ class CatalogoTipoDetailView(APIView):
 
     def patch(self, request, tipo_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         row = q("SELECT id, marca_id, nombre, activo FROM marca_tipos_equipo WHERE id=%s", [tipo_id], one=True)
         if not row:
             return Response({"detail": "tipo no encontrado"}, status=404)
@@ -228,6 +230,7 @@ class CatalogoModelosCreateView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         try:
             marca_id = int(d.get("marca_id"))
@@ -270,6 +273,7 @@ class CatalogoModeloDetailView(APIView):
 
     def patch(self, request, serie_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         row = q("SELECT id, marca_id, tipo_id, nombre, alias, activo FROM marca_series WHERE id=%s", [serie_id], one=True)
         if not row:
             return Response({"detail": "serie no encontrada"}, status=404)
@@ -311,6 +315,7 @@ class CatalogoVariantesCreateView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         d = request.data or {}
         try:
             marca_id = int(d.get("marca_id"))
@@ -433,6 +438,7 @@ class CatalogoVarianteDetailView(APIView):
 
     def patch(self, request, variante_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         row = q(
             "SELECT id, marca_id, tipo_id, serie_id, nombre, activo FROM marca_series_variantes WHERE id=%s",
             [variante_id], one=True,
@@ -471,6 +477,7 @@ class CatalogoVarianteDetailView(APIView):
 
     def delete(self, request, variante_id: int):
         require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        _set_audit_user(request)
         exec_void("DELETE FROM marca_series_variantes WHERE id=%s", [variante_id])
         return Response({"ok": True})
 
@@ -479,6 +486,7 @@ class ModeloTipoEquipoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, marca_id: int, modelo_id: int):
+        _set_audit_user(request)
         d = request.data or {}
         tipo_nombre = (d.get("tipo_equipo") or "").strip()
         tipo_id = d.get("tipo_equipo_id")

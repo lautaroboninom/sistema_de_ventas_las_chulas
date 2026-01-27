@@ -6,6 +6,7 @@ from rest_framework import exceptions
 from django.contrib.auth.hashers import check_password, make_password
 from django.conf import settings
 from .models import User
+from .views.helpers import _set_audit_user
 
 # Usá la misma clave en todos los contenedores; para dev vale el default
 JWT_SECRET = os.getenv("DJANGO_SECRET_KEY", "change-me")
@@ -74,6 +75,7 @@ class JWTAuthentication(BaseAuthentication):
         request.user_id = user.id
         request.user_role = role
         request.user_obj = user
+        _set_audit_user(request)
 
         # DRF verá a 'user' como autenticado
         return (DRFUser(user.id, user.nombre, user.rol), None)

@@ -15,7 +15,8 @@ from .helpers import (
     q,
     exec_void,
     require_roles,
-    require_jefe,
+    require_roles_strict,
+    _set_audit_user,
     _email_append_footer_text,
     _email_append_footer_html,
     TOKEN_TTL_MIN,
@@ -39,7 +40,7 @@ class UsuariosView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        require_roles_strict(request, ["jefe", "admin"])
         data = request.data or {}
         nombre = (data.get("nombre") or "").strip()
         email = (data.get("email") or "").strip().lower()
@@ -51,6 +52,7 @@ class UsuariosView(APIView):
         if rol not in ROLE_KEYS:
             raise ValidationError("Rol invalido")
 
+        _set_audit_user(request)
         existed = q("SELECT id FROM users WHERE email=%s", [email], one=True)
         q(
             """
@@ -111,7 +113,8 @@ class UsuarioActivoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, uid):
-        require_roles(request, ["jefe", "admin","jefe_veedor"])
+        require_roles_strict(request, ["jefe", "admin"])
+        _set_audit_user(request)
         activo = bool(request.data.get("activo"))
         q("UPDATE users SET activo = %(a)s WHERE id = %(id)s", {"a": activo, "id": uid})
         return Response({"ok": True, "activo": activo})
@@ -121,11 +124,12 @@ class UsuarioResetPassView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, uid):
-        require_jefe(request)
+        require_roles_strict(request, ["jefe", "admin"])
         user = q("SELECT id, email, nombre, activo FROM users WHERE id=%s", [uid], one=True)
         if not user or not user.get("activo"):
             return Response({"detail": "Usuario inexistente o inactivo"}, status=404)
 
+        _set_audit_user(request)
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         exp = timezone.now() + dt.timedelta(minutes=TOKEN_TTL_MIN)
@@ -168,10 +172,11 @@ class UsuarioRolePermView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def patch(self, request, uid):
-        require_jefe(request)
+        require_roles_strict(request, ["jefe", "admin"])
         rol = request.data.get("rol")
         perm_ing = request.data.get("perm_ingresar")
 
+        _set_audit_user(request)
         sets, params = [], {"id": uid}
         if rol is not None:
             r = (rol or "").strip().lower()
@@ -193,9 +198,10 @@ class UsuarioDeleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def delete(self, request, uid):
-        require_jefe(request)
+        require_roles_strict(request, ["jefe", "admin"])
         try:
             with transaction.atomic():
+                _set_audit_user(request)
                 exec_void("UPDATE ingresos SET asignado_a = NULL WHERE asignado_a = %s", [uid])
                 exec_void("UPDATE ingresos SET recibido_por = NULL WHERE recibido_por = %s", [uid])
                 exec_void("UPDATE models   SET tecnico_id  = NULL WHERE tecnico_id  = %s", [uid])
@@ -214,7 +220,7 @@ class CatalogoRolesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        require_roles(request, ["jefe", "admin"])  # mantener restriccion como en legacy
+        require_roles_strict(request, ["jefe", "admin"])  # mantener restriccion como en legacy
         return Response([{"value": k, "label": v} for k, v in ROLE_CHOICES])
 
 

@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { formatDateTime as formatDateTimeHelper } from "../../../lib/ui-helpers";
 import { getDerivacionesPorIngreso, postDerivacionDevuelto } from "../../../lib/api";
+import { estadoLabel } from "../../../lib/constants";
 
 export default function DerivacionesTab({ id, setErr, refreshIngreso }) {
   const [derivs, setDerivs] = useState([]);
@@ -83,7 +84,7 @@ export default function DerivacionesTab({ id, setErr, refreshIngreso }) {
                 <td className="p-2">{d.remit_deriv || "-"}</td>
                 <td className="p-2 whitespace-nowrap">{d.fecha_deriv ? formatDateTimeHelper(d.fecha_deriv) : "-"}</td>
                 <td className="p-2 whitespace-nowrap">{d.fecha_entrega ? formatDateTimeHelper(d.fecha_entrega) : "-"}</td>
-                <td className="p-2">{d.estado || "-"}</td>
+                <td className="p-2">{estadoLabel(d.estado) || "-"}</td>
                 <td className="p-2">{d.comentarios || "-"}</td>
               </tr>
             ))}

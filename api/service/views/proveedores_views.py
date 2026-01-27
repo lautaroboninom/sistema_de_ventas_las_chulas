@@ -3,7 +3,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .helpers import exec_void, exec_returning, q, require_roles
+from .helpers import exec_void, exec_returning, q, require_roles, _set_audit_user
 
 
 class ProveedoresExternosView(APIView):
@@ -19,6 +19,7 @@ class ProveedoresExternosView(APIView):
 
     def post(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
+        _set_audit_user(request)
         data = request.data or {}
 
         nombre = (data.get("nombre") or "").strip()
@@ -125,6 +126,7 @@ class ProveedoresExternosView(APIView):
                 {"ok": False, "detail": f"No se puede eliminar: proveedor referenciado por {nrefs} derivaciones"},
                 status=409,
             )
+        _set_audit_user(request)
         exec_void("DELETE FROM proveedores_externos WHERE id = %(id)s", {"id": pid})
         return Response({"ok": True})
 

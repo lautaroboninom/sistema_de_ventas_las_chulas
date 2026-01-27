@@ -1,7 +1,7 @@
 import Row from "../../../components/Row";
 import IngresoPhotos from "../../../components/IngresoPhotos";
 import { RESOLUCION_OPTIONS, RESOLUCION, ESTADO } from "../../../lib/constants";
-import { getBlob, postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso, postMarcarControladoSinDefecto } from "../../../lib/api";
+import { getBlob, postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso, postMarcarControladoSinDefecto, postMarcarParaReparar } from "../../../lib/api";
 import { useEffect, useState } from "react";
 
 export default function DiagnosticoTab({
@@ -25,6 +25,7 @@ export default function DiagnosticoTab({
   canResolve,
   resolucion,
   setResolucion,
+  canAutorizarReparar,
   // permisos
   actAsTech,
   canEditDiag,
@@ -43,6 +44,7 @@ export default function DiagnosticoTab({
   const [deletingAccId, setDeletingAccId] = useState(null);
   const [savingAll, setSavingAll] = useState(false);
   const [savingResol, setSavingResol] = useState(false);
+  const [marcandoReparar, setMarcandoReparar] = useState(false);
   const [serialCambio, setSerialCambio] = useState("");
   const isEntregadoOBaja = ["entregado", "baja"].includes((data?.estado || "").toLowerCase());
   const estadoLower = (data?.estado || "").toLowerCase();
@@ -55,6 +57,8 @@ export default function DiagnosticoTab({
     ESTADO.CONTROLADO_SIN_DEFECTO,
   ].map((s) => String(s || "").toLowerCase()));
   const isEstadoBloqueadoDiag = estadosBloqueadosDiag.has(estadoLower);
+  const puedeReparar = !!canAutorizarReparar && estadoLower !== "reparar" && !isEstadoBloqueadoDiag;
+  const sinTecnicoAsignado = !data?.asignado_a;
 
   useEffect(() => {
     try {
@@ -112,6 +116,24 @@ export default function DiagnosticoTab({
     }
   }
 
+
+  async function marcarParaReparar() {
+    try {
+      setErr("");
+      setMarcandoReparar(true);
+      const resp = await postMarcarParaReparar(id);
+      await refreshIngreso();
+      const msg = resp?.email_sent
+        ? "Aviso enviado al tecnico para reparar"
+        : "Estado actualizado a 'reparar'";
+      setToastMsg(msg);
+      setTimeout(() => setToastMsg(""), 3000);
+    } catch (e) {
+      setErr(e?.message || "No se pudo marcar para reparar");
+    } finally {
+      setMarcandoReparar(false);
+    }
+  }
 
   async function addAccesorio() {
     try {
@@ -255,6 +277,18 @@ export default function DiagnosticoTab({
         </div>
 
         <div className="ml-auto flex items-end gap-2">
+          {puedeReparar && (
+            <button
+              className="bg-amber-600 text-white px-3 py-2 rounded disabled:opacity-60"
+              disabled={marcandoReparar || sinTecnicoAsignado || !puedeReparar}
+              onClick={marcarParaReparar}
+              title={sinTecnicoAsignado ? "Asigná un tecnico para habilitar reparacion" : undefined}
+              type="button"
+            >
+              {marcandoReparar ? "Avisando..." : "Reparar"}
+            </button>
+          )}
+
           {canResolve && (
             <>
               <div className="min-w-[260px]">
