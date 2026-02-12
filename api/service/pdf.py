@@ -322,7 +322,7 @@ def render_remito_derivacion_pdf(ingreso_id: int, deriv_id: int | None = None, p
             title_w = 75
         c.setFont("Helvetica-Bold", 12.8)
         c.drawString(x + title_w + 3 * mm, y_top - 5 * mm, f"{head['ingreso_id']}")
-        # Subtítulo
+        # Subtí­tulo
         c.setFont("Helvetica-Bold", 11)
         c.drawString(x, y_top - 12 * mm, "EQUIPO DERIVADO")
         # Logo
@@ -345,10 +345,10 @@ def render_remito_derivacion_pdf(ingreso_id: int, deriv_id: int | None = None, p
         label_value(inner_x + 112 * mm, y - ROW_H, 30 * mm, ROW_H, "MG", head.get("numero_interno") or "")
         y -= (ROW_H + ROW_GAP)
 
-        # r3: Marca | Modelo | Número de serie
+        # r3: Marca | Modelo | NumeroSerie
         label_value(inner_x, y - ROW_H, 52 * mm, ROW_H, "Marca", head.get("marca"))
         label_value(inner_x + 54 * mm, y - ROW_H, 38 * mm, ROW_H, "Modelo", head.get("modelo"))
-        label_value(inner_x + 95 * mm, y - ROW_H, 36 * mm, ROW_H, "Número de serie", head.get("numero_serie"))
+        label_value(inner_x + 95 * mm, y - ROW_H, 36 * mm, ROW_H, "NumeroSerie", head.get("numero_serie"))
         y -= (ROW_H + ROW_GAP)
 
         # r4: Informe preliminar
@@ -365,7 +365,7 @@ def render_remito_derivacion_pdf(ingreso_id: int, deriv_id: int | None = None, p
         c.drawString(inner_x, y, "Recibido:")
         c.setFillColor(colors.black); box(inner_x + 18 * mm, y - (SIGN_H/2), 60 * mm, SIGN_H)
         c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
-        c.drawString(inner_x + 88 * mm, y, "Aclaración:")
+        c.drawString(inner_x + 88 * mm, y, "Aclaracion:")
         c.setFillColor(colors.black); box(inner_x + 110 * mm, y - (SIGN_H/2), 60 * mm, SIGN_H)
 
     def draw_form(y_top, height, leyenda):
@@ -389,7 +389,7 @@ def render_remito_derivacion_pdf(ingreso_id: int, deriv_id: int | None = None, p
 
 # Logo: detectar primera ruta disponible (permite logo-app.png)
 def _detect_logo_path():
-    env = os.environ.get("LOGO_PATH") or os.environ.get("LOGO_PATH_FALLBACK")
+    env = os.environ.get("LOGO_PATH") or os.environ.get("SEPID_LOGO_PATH")
     candidates = [
         env,
         # rutas comunes en contenedor
@@ -413,7 +413,7 @@ LOGO_PATH = _detect_logo_path()
 
 # --- Empresa/branding helpers ---
 def _get_empresa_facturar(ingreso_id: int) -> str:
-    """Returns normalized billing company code from ingresos."""
+    """Returns 'SEPID' (default) or 'MGBIO' from ingresos. Safe if column is missing."""
     try:
         with connection.cursor() as cur:
             cur.execute(
@@ -427,13 +427,13 @@ def _get_empresa_facturar(ingreso_id: int) -> str:
             )
             exists = cur.fetchone() is not None
             if not exists:
-                return "EQUILUX"
+                return "SEPID"
             cur.execute("SELECT empresa_facturar FROM ingresos WHERE id=%s", [ingreso_id])
             row = cur.fetchone()
-            val = (row[0] if row else None) or "EQUILUX"
-            return "EQUILUX" if str(val).strip().upper() == "EQUILUX" else "EQUILUX"
+            val = (row[0] if row else None) or "SEPID"
+            return "MGBIO" if str(val).strip().upper() == "MGBIO" else "SEPID"
     except Exception:
-        return "EQUILUX"
+        return "SEPID"
 
 
 def _logo_path_for_company(code: str) -> str | None:
@@ -443,6 +443,18 @@ def _logo_path_for_company(code: str) -> str | None:
     and finally repo-local development paths.
     """
     candidates: list[str | None] = []
+
+    if code == "MGBIO":
+        # override especí­fica para la segunda marca
+        candidates.append(os.environ.get("LOGO_PATH_2"))
+        # variantes habituales del nombre del archivo
+        candidates += [
+            "/app/staticfiles/branding/logo-empresa-2.png",
+            "/app/staticfiles/logo-empresa-2.png",
+            os.path.join(settings.BASE_DIR, "web", "public", "branding", "logo-empresa-2.png"),
+            os.path.join(settings.BASE_DIR, "..", "web", "public", "branding", "logo-empresa-2.png"),
+        ]
+
     # Comunes a cualquier marca
     candidates += [
         os.environ.get("LOGO_PATH"),
@@ -470,8 +482,13 @@ def _company_header_lines(code: str):
 
     Safe defaults are provided and variables are always defined to avoid runtime errors.
     """
-    name = os.environ.get("COMPANY_NAME", "REPARACIÓN Y DISTRIBUCIÓN")
-    addr = os.environ.get("COMPANY_HEADER_L1", "DE EQUIPOS MÉDICOS")
+    if code == "MGBIO":
+        name = os.environ.get("COMPANY_NAME_2", "MG BIO")
+        addr = os.environ.get("COMPANY_HEADER_L1_2") or os.environ.get("COMPANY_HEADER_L1", "")
+        cuit = os.environ.get("COMPANY_FOOTER_CUIT_2", "")
+        return addr, name, (f"CUIT {cuit}" if cuit else "")
+    name = os.environ.get("COMPANY_NAME", "SEPID SA")
+    addr = os.environ.get("COMPANY_HEADER_L1", "")
     cuit = os.environ.get("COMPANY_FOOTER_CUIT", "")
     return addr, name, (f"CUIT {cuit}" if cuit else "")
 
@@ -496,7 +513,7 @@ def _wrap_lines(text, font, size, max_width):
     return lines
 
 def _draw_block(c, x, y, title, value, width, font="Helvetica", fsize=9, leading=12):
-    """Dibuja un título y un bloque multilínea sin detallar precios."""
+    """Dibuja un tí­tulo y un bloque multilí­nea sin detallar precios."""
     c.setFont("Helvetica-Bold", 10)
     c.drawString(x, y, title)
     y -= 4
@@ -528,7 +545,7 @@ def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, numero_intern
         c.setFont("Helvetica", 9); c.drawString(x + 5*mm, y - 7*mm, f"Equipo: {equipo}")
 
     if remito:
-        c.setFont("Helvetica", 9); c.drawString(w- 35*mm, y - 7*mm, "Remito de ingreso:")
+        c.setFont("Helvetica", 9); c.drawString(w- 30*mm, y - 7*mm, "Remito Ingreso:")
         c.setFont("Helvetica", 9); c.drawString(w- 30*mm + 70, y - 7*mm, str(remito))
 
     col_ws = [w * 0.3, w * 0.3, w * 0.4]
@@ -547,7 +564,7 @@ def _draw_equipment_panel(c, x, y, w, marca, modelo, numero_serie, numero_intern
     serial_txt = _compose_serial_internal(numero_serie, numero_interno)
     col(0, "Marca", (marca or "").upper())
     col(1, "Modelo", (modelo or "").upper())
-    col(2, "Número de serie | Número interno", (serial_txt or "").upper(), label_fsz=8)
+    col(2, "Numero Serie | Numero interno", (serial_txt or "").upper(), label_fsz=8)
     # Línea adicional solo si fajas abiertas
     if show_faja:
         c.setFont("Helvetica", 9)
@@ -581,20 +598,23 @@ def render_quote_pdf(ingreso_id: int):
     except Exception:
         pass
 
-    # Empresa para logo/pie/encabezado
+    # Empresa para logo/pie, pero los headers permanecen fijos como antes
     empresa = _get_empresa_facturar(ingreso_id)
     _LOGO_THIS = _logo_path_for_company(empresa)
-    EMPRESA_LINEA1, EMPRESA_LINEA2, EMPRESA_LINEA3 = _company_header_lines(empresa)
+    # Encabezado de empresa (fijo, indiferente de la empresa seleccionada)
+    EMPRESA_LINEA1 = getattr(settings, "COMPANY_HEADER_L1", "Valdenegro 4578 C.A.B.A (1430)")
+    EMPRESA_LINEA2 = getattr(settings, "COMPANY_HEADER_L2", "IMPORTADORES DE EQUIPOS")
+    EMPRESA_LINEA3 = getattr(settings, "COMPANY_HEADER_L3", "MEDICOS Y REPARACIONES")
 
     
-    # Ajustes de cliente/propietario para visualización (cliente propio y Particular)
+    # Ajustes de cliente/propietario para visualizacion (MGBIO y Particular)
     try:
         _cliente_rs = (head.get('cliente') or '').strip()
         _cl_norm = _cliente_rs.lower()
-        _is_own = ('equilux' in _cl_norm)
+        _is_mgbio = ('mg' in _cl_norm and 'bio' in _cl_norm)
         _is_particular = (_cl_norm == 'particular')
         _has_owner = bool((head.get('propietario_nombre') or '').strip())
-        if (_is_own or _is_particular) and _has_owner:
+        if (_is_mgbio or _is_particular) and _has_owner:
             head['cliente'] = head.get('propietario_nombre') or head.get('cliente')
             if (head.get('propietario_doc') or '').strip():
                 head['cliente_cuit'] = (head.get('propietario_doc') or '').strip()
@@ -646,12 +666,12 @@ def render_quote_pdf(ingreso_id: int):
     c.setFont("Helvetica", 9)
     c.drawCentredString(W - W/3+5*mm, y-14*mm, EMPRESA_LINEA1)
 
-    # Título de OS a la derecha, debajo del encabezado de empresa
+    # Tí­tulo de OS a la derecha, debajo del encabezado de empresa
     c.setFont("Helvetica-Bold", 18)
     y_title = y - 25*mm
     c.drawCentredString(W/2, y_title, title)
 
-    # Separación suficiente para no superponer con encabezado/título
+    # Separación suficiente para no superponer con encabezado/tí­tulo
     y -= 27 *mm
     c.setLineWidth(0.8)
     c.line(ml, y, W-ml, y)
@@ -702,7 +722,7 @@ def render_quote_pdf(ingreso_id: int):
             y -= 11
         y -= 2
     if head.get("informe_preliminar"):
-        y = _draw_block(c, ml, y, "Información preliminar", head["informe_preliminar"], W-2*ml) - 6
+        y = _draw_block(c, ml, y, "Info. preliminar", head["informe_preliminar"], W-2*ml) - 6
     if head.get("accesorios"):
         y = _draw_block(c, ml, y, "Accesorios", head["accesorios"], W-2*ml) - 6
 
@@ -727,10 +747,10 @@ def render_quote_pdf(ingreso_id: int):
     diag = (head.get("descripcion_problema") or "").strip()
     trab = (head.get("trabajos_realizados") or "").strip()
     diag_trab = (diag + ("\n" if diag and trab else "") + trab) or "-"
-    y = _draw_block(c, ml, y, "Detalle rep. (Diagnóstico / trabajos a realizar)", diag_trab, W-2*ml) - 2
+    y = _draw_block(c, ml, y, "Detalle Rep. (Diagnostico / Trabajos a realizar)", diag_trab, W-2*ml) - 2
 
 
-    # Imágenes adjuntas (2 por fila) con pie de foto usando el comentario u original_name
+    # Imagenes adjuntas (2 por fila) con pie de foto usando el comentario u original_name
     try:
         media_rows = _q(
             """
@@ -757,7 +777,7 @@ def render_quote_pdf(ingreso_id: int):
         imgs_to_draw = media_rows[:max_imgs]
         if imgs_to_draw:
             c.setFont("Helvetica-Bold", 10)
-            c.drawString(ml, y, "Imágenes:")
+            c.drawString(ml, y, "Imagenes:")
             y -= 8
             rows_used = (len(imgs_to_draw) + 1) // 2
             for idx, img in enumerate(imgs_to_draw):
@@ -822,13 +842,13 @@ def render_quote_pdf(ingreso_id: int):
 
     c.setFont("Helvetica", 10)
     forma_pago = head.get("forma_pago") or "30 F.F."
-    c.drawString(ml, y, "Plazo de entrega: < 5 DÍAS HÁBILES")
-    c.drawRightString(W - ml, y, f"Forma de pago: {forma_pago}"); y -= 12
+    c.drawString(ml, y, "PlazoEntrega: < 5 DÍAS HÁBILES")
+    c.drawRightString(W - ml, y, f"FormaPago: {forma_pago}"); y -= 12
     c.drawString(ml, y, "Garantía: 90 DÍAS")
-    c.drawRightString(W - ml, y, "Mant. de oferta: 7 DÍAS"); y -= 18
+    c.drawRightString(W - ml, y, "Mant. de Oferta: 7 DÍAS"); y -= 18
 
     y -= 25
-    c.drawString(ml, y, "Atte. Servicio técnico"); y -= 14
+    c.drawString(ml, y, "Atte. Serv.Técnico"); y -= 14
     c.setFont("Helvetica-Oblique", 9)
     c.drawString(ml, y, "Ante cualquier duda esperamos su llamado")
 
@@ -894,17 +914,17 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         total_calc = subtotal_calc + iva_21_calc
         head["subtotal"], head["iva_21"], head["total"] = subtotal_calc, iva_21_calc, total_calc
     except Exception:
-        # Si falla el cálculo, continuamos con los valores existentes
+        # Si falla el calculo, continuamos con los valores existentes
         pass
 
-        # Ajustes de cliente/propietario para visualización (cliente propio y Particular)
+        # Ajustes de cliente/propietario para visualizacion (MGBIO y Particular)
     try:
         _cliente_rs = (head.get('cliente') or '').strip()
         _cl_norm = _cliente_rs.lower()
-        _is_own = ('equilux' in _cl_norm)
+        _is_mgbio = ('mg' in _cl_norm and 'bio' in _cl_norm)
         _is_particular = (_cl_norm == 'particular')
         _has_owner = bool((head.get('propietario_nombre') or '').strip())
-        if (_is_own or _is_particular) and _has_owner:
+        if (_is_mgbio or _is_particular) and _has_owner:
             head['cliente'] = head.get('propietario_nombre') or head.get('cliente')
             if (head.get('propietario_doc') or '').strip():
                 head['cliente_cuit'] = (head.get('propietario_doc') or '').strip()
@@ -920,7 +940,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
 
-    # --- Geometría A4 ---
+    # --- Geometrí­a A4 ---
     W, H = A4
     margin = 12 * mm
     gap = 6 * mm
@@ -989,11 +1009,11 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
 
     def big_title(y_top):
         x = margin + 6 * mm
-        # Título y número de OS juntos
+        # Tí­tulo y número de OS juntos
         c.setFont("Helvetica", 10.2)
         title_txt = "Orden Interna de Servicio :"
         c.drawString(x, y_top - 5 * mm, title_txt)
-        # Calcular ancho del título para ubicar el número pegado a la derecha
+        # Calcular ancho del tí­tulo para ubicar el número pegado a la derecha
         try:
             title_w = pdfmetrics.stringWidth(title_txt, "Helvetica", 10.2)
         except Exception:
@@ -1003,14 +1023,14 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         # Logo arriba a la derecha (sin nombre de empresa ni dirección para evitar solapes)
         draw_logo(W - margin - 26 * mm, y_top - 10 * mm, w=24 * mm)
 
-        # No dibujar nombre ni dirección; opcionalmente podría mostrarse el CUIT si se desea.
+        # No dibujar nombre ni dirección; opcionalmente podrí­a mostrarse el CUIT si se desea.
         # Lo omitimos para asegurar que no tape los campos superiores.
 
         c.setFont("Helvetica-Bold", 8.5)
         c.drawString(x, y_top - 11.5 * mm, "ENTREGA DE EQUIPO")
         c.setFont("Helvetica", 9.2)
-        c.drawString(x + 35 * mm, y_top - 11.5 * mm, "Fecha de liberación:")
-        c.drawString(x + 70 * mm, y_top - 11.5 * mm, datetime.now().strftime("%d/%m/%y"))
+        c.drawString(x + 35 * mm, y_top - 11.5 * mm, "  —    Fecha liberación: ")
+        c.drawString(x + 70 * mm, y_top - 11.5 * mm,datetime.now().strftime("%d/%m/%y"))
         c.setFont("Helvetica-Bold", 12.8)
 
     def field_grid(y_top, height):
@@ -1051,7 +1071,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         
         y -= (ROW_H + ROW_GAP)
 
-        # r2: Equipo | Marca | Modelo | Número de serie | Número interno
+        # r2: Equipo | Marca | Modelo | Numero Serie | Numero interno
         serial_comp = _compose_serial_internal(head.get("numero_serie"), head.get("numero_interno"))
         r2_gap = 2 * mm
         r2_w1 = 50 * mm
@@ -1069,14 +1089,14 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
             label_value(r2_x3, y - ROW_H, r2_w3, ROW_H, "Modelo", head.get("modelo") + " " + head.get("equipo_variante"))
         except:
             label_value(r2_x3, y - ROW_H, r2_w3, ROW_H, "Modelo", head.get("modelo"))
-        label_value(r2_x4, y - ROW_H, r2_w4, ROW_H, "Número de serie | Número interno", serial_comp, label_fsz=6.2)
+        label_value(r2_x4, y - ROW_H, r2_w4, ROW_H, "Numero Serie | Numero interno", serial_comp, label_fsz=6.2)
         y -= (ROW_H + ROW_GAP)
 
-        # r3: Motivo | Garantía | Resolución
+        # r3: Motivo | Garantia | Resolucion
         label_value(inner_x, y - ROW_H, 102 * mm, ROW_H, "Motivo", head.get("motivo"))
-        garantia_txt = "Sí" if head.get("garantia") else "No"
-        label_value(inner_x + 104 * mm, y - ROW_H, 24 * mm, ROW_H, "Garantía", garantia_txt  )
-        label_value(inner_x + 131 * mm, y - ROW_H, 39 * mm, ROW_H, "Resolución", resolution_label(head.get("resolucion")))
+        garantia_txt = "Si" if head.get("garantia") else "No"
+        label_value(inner_x + 104 * mm, y - ROW_H, 24 * mm, ROW_H, "Garantia", garantia_txt  )
+        label_value(inner_x + 131 * mm, y - ROW_H, 39 * mm, ROW_H, "Resolucion", resolution_label(head.get("resolucion")))
         y -= (ROW_H + ROW_GAP)
 
         # r4: Accesorios (ancho completo)
@@ -1143,7 +1163,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         c.setFont("Helvetica", 10.0)
         c.drawString(x, y, f"Cliente: {head.get('cliente') or '-'}"); y -= 6.5 * mm
         serial_comp = _compose_serial_internal(head.get("numero_serie"), head.get("numero_interno"))
-        c.drawString(x, y, f"Número de serie | Número interno: {serial_comp or '-'}"); y -= 6.5 * mm
+        c.drawString(x, y, f"Numero Serie | Numero interno: {serial_comp or '-'}"); y -= 6.5 * mm
         c.drawString(x, y, f"Equipo: {_compose_equipment_label(head) or (head.get('equipo') or '-')}"); y -= 10 * mm
 
         c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
@@ -1151,7 +1171,7 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         c.setFillColor(colors.black); box(x + 18 * mm, y - (SIGN_H/2), 60 * mm, SIGN_H)
 
         c.setFont("Helvetica", F_LABEL); c.setFillColor(colors.grey)
-        c.drawString(x + 118 * mm, y, "Costo neto:")
+        c.drawString(x + 118 * mm, y, "Costo Neto:")
         # Draw box and value for net cost (subtotal)
         x_box = x + 138 * mm
         w_box = 24 * mm

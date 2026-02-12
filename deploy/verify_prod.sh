@@ -1,7 +1,7 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-DOMAIN=${1:-reparacionesequilux.tailc98abd.ts.net}
+DOMAIN=${1:-reparaciones.sepid.com.ar}
 
 echo "== Verify DNS resolves =="
 getent ahosts ${DOMAIN} || (echo "DNS failed" && exit 1)
@@ -24,3 +24,4 @@ curl -fsSI https://${DOMAIN}/ | grep -E "Strict-Transport-Security|X-Frame-Optio
   echo "Missing some security headers"; exit 1; }
 
 echo "All checks green."
+

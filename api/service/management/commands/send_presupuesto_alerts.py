@@ -78,7 +78,7 @@ def _send_mail_with_fallback(subject, body, recipients):
         if port_cfg == 587:
             try:
                 conn = get_connection(
-                    backend=getattr(settings, "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"),
+                    backend="django.core.mail.backends.smtp.EmailBackend",
                     host=getattr(settings, "EMAIL_HOST", None),
                     port=465,
                     username=getattr(settings, "EMAIL_HOST_USER", None),

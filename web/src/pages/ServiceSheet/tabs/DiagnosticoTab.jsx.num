@@ -1,0 +1,291 @@
+﻿0001:import Row from "../../../components/Row";
+0002:import IngresoPhotos from "../../../components/IngresoPhotos";
+0003:import { RESOLUCION_OPTIONS } from "../../../lib/constants";
+0004:import { postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso } from "../../../lib/api";
+0005:import { useState } from "react";
+0006:
+0007:export default function DiagnosticoTab({
+0008:  id,
+0009:  data,
+0010:  // accesorios
+0011:  canEditAcc,
+0012:  accesCatalogo,
+0013:  nuevoAcc,
+0014:  setNuevoAcc,
+0015:  // diagnostico/trabajos
+0016:  descripcion,
+0017:  setDescripcion,
+0018:  trabajos,
+0019:  setTrabajos,
+0020:  // fecha servicio
+0021:  fechaServStr,
+0022:  setFechaServStr,
+0023:  maxLocalNow,
+0024:  // resolucion
+0025:  canResolve,
+0026:  resolucion,
+0027:  setResolucion,
+0028:  // permisos
+0029:  actAsTech,
+0030:  canEditDiag,
+0031:  canMarkReparado,
+0032:  // helpers
+0033:  patch,
+0034:  setErr,
+0035:  refreshIngreso,
+0036:  setShowReparadoToast,
+0037:  savingDiag,
+0038:  // fotos
+0039:  canManagePhotos,
+0040:}) {
+0041:  const [addingAcc, setAddingAcc] = useState(false);
+0042:  const [deletingAccId, setDeletingAccId] = useState(null);
+0043:  const [savingAll, setSavingAll] = useState(false);
+0044:  const [savingResol, setSavingResol] = useState(false);
+0045:
+0046:
+0047:  async function addAccesorio() {
+0048:    try {
+0049:      const d = (nuevoAcc?.descripcion || "").trim().toLowerCase();
+0050:      if (!d) { setErr("EscribÃ­ una descripciÃ³n"); return; }
+0051:      const acc = (accesCatalogo || []).find(a => (a?.nombre || "").trim().toLowerCase() === d);
+0052:      if (!acc) { setErr("ElegÃ­ una descripciÃ³n vÃ¡lida de la lista"); return; }
+0053:      setAddingAcc(true);
+0054:      await postAccesorioIngreso(id, {
+0055:        accesorio_id: Number(acc.id),
+0056:        referencia: (nuevoAcc?.referencia || "").trim() || null,
+0057:      });
+0058:      setNuevoAcc && setNuevoAcc({ descripcion: "", referencia: "" });
+0059:      await refreshIngreso();
+0060:      setErr("");
+0061:    } catch (e) {
+0062:      setErr(e?.message || "No se pudo agregar el accesorio");
+0063:    } finally {
+0064:      setAddingAcc(false);
+0065:    }
+0066:  }
+0067:
+0068:  async function removeAccesorio(itemId) {
+0069:    try {
+0070:      setDeletingAccId(itemId);
+0071:      await deleteAccesorioIngreso(id, itemId);
+0072:      await refreshIngreso();
+0073:      setErr("");
+0074:    } catch (e) {
+0075:      setErr(e?.message || "No se pudo quitar el accesorio");
+0076:    } finally {
+0077:      setDeletingAccId(null);
+0078:    }
+0079:  }
+0080:
+0081:  async function saveDiagYreparacion() {
+0082:    try {
+0083:      setSavingAll(true);
+0084:      const payload = {
+0085:        descripcion_problema: descripcion,
+0086:        trabajos_realizados: trabajos,
+0087:        fecha_servicio: (fechaServStr || "").trim() || null,
+0088:      };
+0089:      await patch(payload);
+0090:      await refreshIngreso();
+0091:      setErr("");
+0092:    } catch (e) {
+0093:      setErr(e?.message || "No se pudo guardar");
+0094:    } finally {
+0095:      setSavingAll(false);
+0096:    }
+0097:  }
+0098:
+0099:  async function saveResolucion() {
+0100:    try {
+0101:      if (!resolucion) { setErr("SeleccionÃ¡ una resoluciÃ³n."); return; }
+0102:      setSavingResol(true);
+0103:      await postCerrarReparacion(id, { resolucion });
+0104:      await refreshIngreso();
+0105:      setErr("");
+0106:    } catch (e) {
+0107:      setErr(e?.message || "No se pudo guardar la resoluciÃ³n");
+0108:    } finally {
+0109:      setSavingResol(false);
+0110:    }
+0111:  }
+0112:
+0113:  return (
+0114:    <div className="border rounded p-4">
+0115:      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+0116:        <div className="border rounded p-3 bg-gray-50">
+0117:          <div className="text-xs uppercase text-gray-500 mb-1">Informe preliminar</div>
+0118:          <div className="whitespace-pre-wrap">{data.informe_preliminar || "-"}</div>
+0119:        </div>
+0120:        <div className="border rounded p-3 bg-gray-50">
+0121:          <div className="text-xs uppercase text-gray-500 mb-1">Accesorios</div>
+0122:          <div>
+0123:            {Array.isArray(data.accesorios_items) && data.accesorios_items.length > 0 ? (
+0124:              <ul className="list-disc list-inside text-sm">
+0125:                {data.accesorios_items.map((it) => (
+0126:                  <li key={it.id} className="flex items-center justify-between gap-2">
+0127:                    <span>
+0128:                      {it.accesorio_nombre}
+0129:                      {it.referencia ? ` (ref: ${it.referencia})` : ""}
+0130:                    </span>
+0131:                    {canEditAcc && (
+0132:                      <button
+0133:                        className="text-red-600 text-xs"
+0134:                        onClick={() => removeAccesorio(it.id)}
+0135:                        disabled={deletingAccId === it.id}
+0136:                        type="button"
+0137:                      >
+0138:                        {deletingAccId === it.id ? "Quitando..." : "Quitar"}
+0139:                      </button>
+0140:                    )}
+0141:                  </li>
+0142:                ))}
+0143:              </ul>
+0144:            ) : (
+0145:              <div className="whitespace-pre-wrap">{data.accesorios || "-"}</div>
+0146:            )}
+0147:          </div>
+0148:
+0149:          {canEditAcc && (
+0150:            <div className="mt-3 border-t pt-3">
+0151:              <div className="text-xs uppercase text-gray-500 mb-2">Agregar accesorio</div>
+0152:              <div className="flex flex-wrap items-end gap-2">
+0153:                <input
+0154:                  className="border rounded p-2 min-w-[240px]"
+0155:                  list="accesorios_catalogo"
+0156:                  placeholder="DescripciÃ³n (elegÃ­ de la lista)"
+0157:                  value={nuevoAcc.descripcion}
+0158:                  onChange={(e) => setNuevoAcc((s) => ({ ...s, descripcion: e.target.value }))}
+0159:                />
+0160:                <datalist id="accesorios_catalogo">
+0161:                  {accesCatalogo.map((a) => (
+0162:                    <option key={a.id} value={a.nombre} />
+0163:                  ))}
+0164:                </datalist>
+0165:                <input
+0166:                  className="border rounded p-2 w-40"
+0167:                  placeholder="Nro de referencia (opcional)"
+0168:                  value={nuevoAcc.referencia}
+0169:                  onChange={(e) => setNuevoAcc((s) => ({ ...s, referencia: e.target.value }))}
+0170:                />
+0171:                <button
+0172:                  className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
+0173:                  onClick={addAccesorio}
+0174:                  disabled={addingAcc || !(nuevoAcc.descripcion || "").trim()}
+0175:                  type="button"
+0176:                >
+0177:                  {addingAcc ? "Agregando..." : "Agregar"}
+0178:                </button>
+0179:              </div>
+0180:            </div>
+0181:          )}
+0182:        </div>
+0183:      </div>
+0184:
+0185:      <h2 className="font-semibold mb-2">DescripciÃ³n del problema (diagnÃ³stico)</h2>
+0186:
+0187:      <div className="flex flex-wrap items-end gap-3 mb-3">
+0188:        <div>
+0189:          <label className="block text-sm text-gray-600 mb-1">Fecha de servicio</label>
+0190:          <input
+0191:            type="datetime-local"
+0192:            className="border rounded p-2"
+0193:            value={fechaServStr}
+0194:            onChange={(e) => {
+0195:              const el = e.currentTarget;
+0196:              const v = el.value;
+0197:              setFechaServStr(v);
+0198:              if (v) setTimeout(() => el.blur(), 0);
+0199:            }}
+0200:            max={maxLocalNow}
+0201:            placeholder="YYYY-MM-DD HH:mm"
+0202:            disabled={typeof canEditDiag === 'boolean' ? !canEditDiag : false}
+0203:          />
+0204:        </div>
+0205:
+0206:        <div className="ml-auto flex items-end gap-2">
+0207:          {canResolve && (
+0208:            <>
+0209:              <div className="min-w-[260px]">
+0210:                <label className="block text-sm text-gray-600 mb-1">ResoluciÃ³n de reparaciÃ³n</label>
+0211:                <select
+0212:                  className="border rounded p-2 w-full"
+0213:                  value={resolucion}
+0214:                  onChange={(e) => setResolucion(e.target.value)}
+0215:                  disabled={data?.estado === "entregado"}
+0216:                >
+0217:                  <option value="">-- Seleccionar --</option>
+0218:                  {RESOLUCION_OPTIONS.map((opt) => (
+0219:                    <option key={opt.value} value={opt.value}>
+0220:                      {opt.label}
+0221:                    </option>
+0222:                  ))}
+0223:                </select>
+0224:              </div>
+0225:
+0226:              <button
+0227:                className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
+0228:                disabled={savingResol || !resolucion}
+0229:                onClick={saveResolucion}
+0230:                type="button"
+0231:              >
+0232:                {savingResol ? "Guardando..." : "Guardar resoluciÃ³n"}
+0233:              </button>
+0234:            </>
+0235:          )}
+0236:
+0237:          {(typeof canMarkReparado === 'boolean' ? canMarkReparado : actAsTech) && !["reparado", "liberado", "entregado"].includes(data?.estado) && (
+0238:            <button
+0239:              className="bg-emerald-600 text-white px-3 py-2 rounded"
+0240:              onClick={async () => {
+0241:                try {
+0242:                  await postMarcarReparado(id);
+0243:                  await refreshIngreso();
+0244:                  setShowReparadoToast(true);
+0245:                  setTimeout(() => setShowReparadoToast(false), 2000);
+0246:                } catch (e) {
+0247:                  setErr(e?.message || "No se pudo marcar como reparado");
+0248:                }
+0249:              }}
+0250:              type="button"
+0251:            >
+0252:              Marcar reparado
+0253:            </button>
+0254:          )}
+0255:        </div>
+0256:      </div>
+0257:
+0258:      <textarea
+0259:        className="w-full border rounded p-2 min-h-[180px]"
+0260:        value={descripcion}
+0261:        onChange={(e) => setDescripcion(e.target.value)}
+0262:        disabled={typeof canEditDiag === 'boolean' ? !canEditDiag : false}
+0263:        placeholder="Ej.: Ingreso de agua; placa de control con Ã³xido; vÃ¡lvula X no abre..."
+0264:      />
+0265:
+0266:      <div className="border rounded p-4 mt-4">
+0267:        <h2 className="font-semibold mb-2">Trabajos realizados</h2>
+0268:        <textarea
+0269:          className="w-full border rounded p-2 min-h-[200px]"
+0270:          value={trabajos}
+0271:          onChange={(e) => setTrabajos(e.target.value)}
+0272:          disabled={typeof canEditDiag === 'boolean' ? !canEditDiag : false}
+0273:          placeholder="Ej.: Cambio de turbina; limpieza y secado; resoldado de conector; calibraciÃ³n; pruebas OK."
+0274:        />
+0275:        <div className="mt-2 text-xs text-gray-500" aria-live="polite">
+0276:          {(savingDiag || savingAll) ? "Guardando..." : "Los cambios se guardan automǭticamente"}
+0277:        </div>
+0278:      </div>
+0279:
+0280:      <IngresoPhotos ingresoId={Number(id)} canManage={canManagePhotos} />
+0281:
+0282:      <Row label="Faja de garantÃ­a Nro">
+0283:        <input
+0284:          className="border rounded p-1 w-60"
+0285:          value={data.faja_garantia || ""}
+0286:          onChange={(e) => patch({ faja_garantia: e.target.value })}
+0287:        />
+0288:      </Row>
+0289:    </div>
+0290:  );
+0291:}

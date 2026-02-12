@@ -49,7 +49,6 @@ export default function PendientesGeneral() {
             catalogEquipmentLabel(row),
             tipoEquipoOf(row),
             row?.estado,
-            row?.presupuesto_estado,
             row?.numero_serie,
             row?.numero_interno,
           ];
@@ -127,7 +126,6 @@ export default function PendientesGeneral() {
                 <th className="p-2">Cliente</th>
                 <th className="p-2">Equipo</th>
                 <th className="p-2">Estado</th>
-                <th className="p-2">Presupuesto estado</th>
                 <th className="p-2">N/S o MG</th>
                 <th className="p-2">Fecha ingreso</th>
               </tr>
@@ -136,10 +134,6 @@ export default function PendientesGeneral() {
               {filteredAndSorted.map((row) => {
                 const urgente = isUrgente(row);
                 const devuelto = !!row?.derivado_devuelto;
-                const estadoTxt = String(row?.estado || "").toLowerCase();
-                const presupuestoTxt = String(row?.presupuesto_estado || "").toLowerCase();
-                const showPresupuestoEstado = !(presupuestoTxt === "pendiente" && estadoTxt !== "diagnosticado");
-                const presupuestoValue = showPresupuestoEstado ? row?.presupuesto_estado : "";
                 const rowCls = [
                   "hover:bg-gray-50 cursor-pointer",
                   urgente && "text-red-600 font-semibold",
@@ -178,9 +172,6 @@ export default function PendientesGeneral() {
                     <td className="p-2">{catalogEquipmentLabel(row)}</td>
                     <td className="p-2">
                       <StatusChip value={row?.estado} />
-                    </td>
-                    <td className="p-2">
-                      <StatusChip value={presupuestoValue} />
                     </td>
                     <td className="p-2">{nsPreferInternoOf(row)}</td>
                     <td className="p-2 whitespace-nowrap">{formatDateOnly(resolveFechaIngreso(row))}</td>

@@ -1,4 +1,4 @@
-﻿import Row from "../../../components/Row";
+import Row from "../../../components/Row";
 import IngresoPhotos from "../../../components/IngresoPhotos";
 import { RESOLUCION_OPTIONS, RESOLUCION, ESTADO } from "../../../lib/constants";
 import { getBlob, postMarcarReparado, postCerrarReparacion, postAccesorioIngreso, deleteAccesorioIngreso, postMarcarControladoSinDefecto, postMarcarParaReparar } from "../../../lib/api";
@@ -57,13 +57,6 @@ export default function DiagnosticoTab({
     ESTADO.CONTROLADO_SIN_DEFECTO,
   ].map((s) => String(s || "").toLowerCase()));
   const isEstadoBloqueadoDiag = estadosBloqueadosDiag.has(estadoLower);
-  const estadosBloqueadosReparado = new Set([
-    ESTADO.ENTREGADO,
-    ESTADO.BAJA,
-    ESTADO.ALQUILADO,
-    ESTADO.CONTROLADO_SIN_DEFECTO,
-  ].map((s) => String(s || "").toLowerCase()));
-  const isEstadoBloqueadoReparado = estadosBloqueadosReparado.has(estadoLower);
   const puedeReparar = !!canAutorizarReparar && estadoLower !== "reparar" && !isEstadoBloqueadoDiag;
   const sinTecnicoAsignado = !data?.asignado_a;
 
@@ -77,7 +70,7 @@ export default function DiagnosticoTab({
 
   async function saveResolucionCambioAware() {
     try {
-      if (!resolucion) { setErr("Seleccioná una resolución."); return; }
+      if (!resolucion) { setErr("SeleccionÃ¡ una resoluciÃ³n."); return; }
       if (String(resolucion) === RESOLUCION.CAMBIO) {
         const s = (serialCambio || "").trim();
         if (!s) { setErr("Ingrese la Serie (Cambio)."); return; }
@@ -98,7 +91,7 @@ export default function DiagnosticoTab({
       } catch {}
       setErr("");
     } catch (e) {
-      setErr(e?.message || "No se pudo guardar la resolución");
+      setErr(e?.message || "No se pudo guardar la resoluciÃ³n");
     } finally {
       setSavingResol(false);
     }
@@ -338,17 +331,15 @@ export default function DiagnosticoTab({
             </>
           )}
 
-          {(typeof canMarkReparado === 'boolean' ? canMarkReparado : actAsTech) && !isEstadoBloqueadoReparado && (
+          {(typeof canMarkReparado === 'boolean' ? canMarkReparado : actAsTech) && !isEstadoBloqueadoDiag && (
             <>
-              {!isEstadoBloqueadoDiag && (
-                <button
-                  className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
-                  onClick={marcarControladoSinDefecto}
-                  type="button"
-                >
-                  {savingAll ? "Guardando..." : "Controlado sin defecto"}
-                </button>
-              )}
+              <button
+                className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
+                onClick={marcarControladoSinDefecto}
+                type="button"
+              >
+                {savingAll ? "Guardando..." : "Controlado sin defecto"}
+              </button>
               <button
                 className="bg-emerald-600 text-white px-3 py-2 rounded"
                 onClick={async () => {
@@ -411,4 +402,3 @@ export default function DiagnosticoTab({
     </div>
   );
 }
-

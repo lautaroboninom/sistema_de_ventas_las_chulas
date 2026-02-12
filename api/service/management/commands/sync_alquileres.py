@@ -8,9 +8,9 @@ import re
 
 class Command(BaseCommand):
     help = (
-        "Sincroniza estado de alquiler a partir de ALQS.xlsx, ALQMG.xlsx y Copia Madre (hoja EQUILUX). "
-        "Marca como alquilados los equipos listados y setea 'alquiler_a' en el Ãºltimo ingreso y en devices. "
-        "Genera reporte de MG no alquilados (excluyendo EstanterÃ­a de Alquiler y Desguace)."
+        "Sincroniza estado de alquiler a partir de ALQS.xlsx, ALQMG.xlsx y Copia Madre (hoja MGBIO). "
+        "Marca como alquilados los equipos listados y setea 'alquiler_a' en el último ingreso y en devices. "
+        "Genera reporte de MG no alquilados (excluyendo Estantería de Alquiler y Desguace)."
     )
 
     def add_arguments(self, parser):
@@ -22,13 +22,13 @@ class Command(BaseCommand):
         parser.add_argument(
             "--apply",
             action="store_true",
-            help="Aplica cambios en una transacciÃ³n atÃ³mica",
+            help="Aplica cambios en una transacción atómica",
         )
         parser.add_argument(
             "--limit",
             type=int,
             default=None,
-            help="LÃ­mite mÃ¡ximo de filas a aplicar (para pruebas)",
+            help="Límite máximo de filas a aplicar (para pruebas)",
         )
         parser.add_argument(
             "--docs-dir",
@@ -49,7 +49,7 @@ class Command(BaseCommand):
             action="append",
             default=[],
             help=(
-                "Agregar manualmente cÃ³digos internos (MG|NM|CE) a marcar como alquilados. "
+                "Agregar manualmente códigos internos (MG|NM|CE) a marcar como alquilados. "
                 "Puede repetirse."
             ),
         )
@@ -58,7 +58,7 @@ class Command(BaseCommand):
             action="append",
             default=[],
             help=(
-                "Renombra cÃ³digos internos en devices.n_de_control. Formato FROM:TO (respeta prefijo). "
+                "Renombra códigos internos en devices.n_de_control. Formato FROM:TO (respeta prefijo). "
                 "Puede repetirse."
             ),
         )
@@ -72,7 +72,7 @@ class Command(BaseCommand):
             ),
         )
 
-    # ---- Utilidades de normalizaciÃ³n ----
+    # ---- Utilidades de normalización ----
     @staticmethod
     def _norm_text(s: Optional[str]) -> str:
         try:
@@ -113,7 +113,7 @@ class Command(BaseCommand):
         if not mg:
             return None
         s = (mg or "").upper().strip()
-        # Extraer dÃ­gitos
+        # Extraer dígitos
         m = re.search(r"(\d{1,4})$", s)
         if not m:
             return None
@@ -121,7 +121,7 @@ class Command(BaseCommand):
         if len(num) < 4:
             num = num.zfill(4)
         out = f"MG {num}"
-        # ValidaciÃ³n final
+        # Validación final
         return out if re.match(r"^MG\s\d{4}$", out) else None
 
     @staticmethod
@@ -133,7 +133,7 @@ class Command(BaseCommand):
 
     @staticmethod
     def _norm_stockcode(code: Optional[str]) -> Optional[str]:
-        """Normaliza cÃ³digos internos de stock (MG|NM|CE) a formato 'XX ####'."""
+        """Normaliza códigos internos de stock (MG|NM|CE) a formato 'XX ####'."""
         if not code:
             return None
         s = (code or "").upper().strip()
@@ -158,7 +158,7 @@ class Command(BaseCommand):
                     x = x.replace(tzinfo=None)
                 except Exception:
                     return str(x)
-            # Formato estÃ¡ndar corto
+            # Formato estándar corto
             try:
                 return x.strftime("%Y-%m-%d %H:%M:%S")
             except Exception:
@@ -167,7 +167,7 @@ class Command(BaseCommand):
             return ""
 
     # ---- Lectura de Excel ----
-    def _load_ns_to_code(self, madre_path: str, sheet_name: str = "EQUILUX") -> Dict[str, str]:
+    def _load_ns_to_mg(self, madre_path: str, sheet_name: str = "MGBIO") -> Dict[str, str]:
         from openpyxl import load_workbook
         out: Dict[str, str] = {}
         try:
@@ -192,7 +192,7 @@ class Command(BaseCommand):
             ns_key = self._norm_ns(str(ns_val))
             mg_norm = self._norm_mg(str(mg_val))
             if ns_key and mg_norm:
-                # Ãºltima gana, pero preservamos consistencia simple
+                # última gana, pero preservamos consistencia simple
                 out[ns_key] = mg_norm
         return out
 
@@ -217,7 +217,7 @@ class Command(BaseCommand):
             ns_raw = (str(ns_val).strip() if ns_val is not None else "")
             if not cliente and not ns_raw:
                 continue
-            # HeurÃ­stica simple para saltar encabezado: si 'cliente' incluye 'cliente' y ns parece literal 'ns'
+            # Heurística simple para saltar encabezado: si 'cliente' incluye 'cliente' y ns parece literal 'ns'
             hdr = self._norm_lower_nodiac(cliente)
             if hdr.startswith("cliente"):
                 continue
@@ -265,7 +265,7 @@ class Command(BaseCommand):
         ]
         return rows, "ns"
 
-    # SelecciÃ³n canÃ³nica y detecciÃ³n de conflictos reales (por MG/NS, no por device_id)
+    # Selección canónica y detección de conflictos reales (por MG/NS, no por device_id)
     def _pick_canonical_device(
         self,
         devices: List[Dict[str, Any]],
@@ -291,7 +291,7 @@ class Command(BaseCommand):
 
         unique_keys = set([k for k in keys if k])
 
-        # Elegir canÃ³nico: preferir el que matchee mg_res (si existe), sino mayor device.id
+        # Elegir canónico: preferir el que matchee mg_res (si existe), sino mayor device.id
         candidates = devices
         if mg_res:
             eq_mg = [d for d in devices if dev_mg(d) == mg_res]
@@ -299,7 +299,7 @@ class Command(BaseCommand):
                 candidates = eq_mg
         canonical = max(candidates, key=lambda d: int(d.get("id")))
 
-        # Conflicto real si hay mÃ¡s de una clave de equipo entre candidatos
+        # Conflicto real si hay más de una clave de equipo entre candidatos
         is_conflict = len(unique_keys) > 1
 
         # O si hay mg_res pero ninguna clave coincide (mismatch entre mapeo y BD)
@@ -345,12 +345,12 @@ class Command(BaseCommand):
         return (row[0] or "") if row else None
 
     def _is_excluded_location(self, name: Optional[str]) -> bool:
-        # Excluir EstanterÃ­a de Alquiler o Desguace (normalizando)
+        # Excluir Estantería de Alquiler o Desguace (normalizando)
         key = self._norm_lower_nodiac(name)
         variants = {
-            self._norm_lower_nodiac("EstanterÃ­a de Alquiler"),
+            self._norm_lower_nodiac("Estantería de Alquiler"),
             self._norm_lower_nodiac("Estanteria de Alquiler"),
-            self._norm_lower_nodiac("EstanterÃ­a alquiler"),
+            self._norm_lower_nodiac("Estantería alquiler"),
             self._norm_lower_nodiac("Estanteria alquiler"),
             self._norm_lower_nodiac("Desguace"),
         }
@@ -392,7 +392,7 @@ class Command(BaseCommand):
             self.stderr.write(f"No se pudo escribir reporte '{path}': {e}")
 
     def _pick_docs_dir(self, user_docs_dir: Optional[str]) -> str:
-        # 1) respeta parÃ¡metro explÃ­cito
+        # 1) respeta parámetro explícito
         if user_docs_dir:
             return user_docs_dir
         # 2) si existe ./docs
@@ -421,7 +421,7 @@ class Command(BaseCommand):
         r = cur.fetchone()
         if r:
             return int(r[0])
-        # Buscar variantes sin acentos/espacios mÃºltiples
+        # Buscar variantes sin acentos/espacios múltiples
         def _norm(txt: str) -> str:
             try:
                 import unicodedata
@@ -458,9 +458,9 @@ class Command(BaseCommand):
         alqmg_path = self._resolve_input(docs_dir, "ALQMG.xlsx")
         madre_path = self._resolve_input(docs_dir, "Copia Para Consultar MADRE 2025.xlsx")
 
-        self.stdout.write("Cargando mapeo NS->codigo desde MADRE (EQUILUX)...")
-        ns_to_code = self._load_ns_to_code(madre_path, sheet_name="EQUILUX")
-        self.stdout.write(f"Mapeos NS->codigo cargados: {len(ns_to_code)}")
+        self.stdout.write("Cargando mapeo NS->MG desde MADRE (MGBIO)...")
+        ns_to_mg = self._load_ns_to_mg(madre_path, sheet_name="MGBIO")
+        self.stdout.write(f"Mapeos NS->MG cargados: {len(ns_to_mg)}")
 
         # Cargar filas de ALQ*
         alq_rows = []
@@ -487,7 +487,7 @@ class Command(BaseCommand):
             # Candidato (device)
             "device_id", "customer_id", "cliente_bd", "marca", "modelo", "tipo_equipo",
             "mg_device", "ns_device", "alquilado_device", "alquiler_a_device",
-            # Ãšltimo ingreso
+            # Último ingreso
             "last_ingreso_id", "last_estado", "last_fecha_ingreso", "last_fecha_creacion",
             "last_ubicacion_id", "last_ubicacion_nombre", "alquilado_ingreso", "alquiler_a_ingreso",
         ]]
@@ -510,7 +510,7 @@ class Command(BaseCommand):
                     cliente = self._norm_text(row.get("cliente"))
                     ns_raw = (row.get("ns_raw") or "").strip()
                     ns_key = self._norm_ns(ns_raw)
-                    mg_res = self._norm_mg(ns_to_code.get(ns_key)) if ns_key in ns_to_code else None
+                    mg_res = self._norm_mg(ns_to_mg.get(ns_key)) if ns_key in ns_to_mg else None
 
                     devices, criterio = self._fetch_device_by_mg_or_ns(cur, mg_res, ns_raw)
 
@@ -519,14 +519,14 @@ class Command(BaseCommand):
                             row.get("source"), cliente, ns_raw, mg_res or "",
                         ])
                         continue
-                    # Elegir canÃ³nico por NS/MG (no por device_id) y evaluar conflicto real
+                    # Elegir canónico por NS/MG (no por device_id) y evaluar conflicto real
                     canonical, is_conflict, meta = self._pick_canonical_device(devices, mg_res, ns_key)
-                    # Enriquecer detalle de candidatos (si hay conflicto o si se quiere auditorÃ­a amplia)
+                    # Enriquecer detalle de candidatos (si hay conflicto o si se quiere auditoría amplia)
                     if is_conflict:
                         cand_lines: List[str] = []
                         for d in devices:
                             did = int(d.get("id"))
-                            # Datos bÃ¡sicos del device
+                            # Datos básicos del device
                             cur.execute(
                                 """
                                 SELECT d.numero_interno, d.numero_serie,
@@ -545,7 +545,7 @@ class Command(BaseCommand):
                                 [did],
                             )
                             dr = cur.fetchone() or [None, None, "", None, "", "", "", None, None]
-                            # Ãšltimo ingreso detallado
+                            # Último ingreso detallado
                             cur.execute(
                                 """
                                 SELECT t.id, t.estado, t.fecha_ingreso, t.fecha_creacion,
@@ -575,16 +575,16 @@ class Command(BaseCommand):
                             mg_res or "", len(devices), " ; ".join(cand_lines)
                         ])
 
-                    # Usar el canÃ³nico seleccionado (por device_id mayor o por MG_res)
+                    # Usar el canónico seleccionado (por device_id mayor o por MG_res)
                     dev = canonical or devices[0]
                     device_id = int(dev["id"]) if isinstance(dev, dict) else int(dev[0])
                     n_de_control = dev.get("numero_interno") if isinstance(dev, dict) else None
                     numero_serie = dev.get("numero_serie") if isinstance(dev, dict) else None
 
-                    # Determinar MG final (si no lo tenemos y el device ya lo tiene vÃ¡lido)
+                    # Determinar MG final (si no lo tenemos y el device ya lo tiene válido)
                     mg_final = mg_res or self._norm_mg(n_de_control) or (self._norm_mg(numero_serie) if numero_serie else None)
 
-                    # Ãšltimo ingreso: segÃºn el device canÃ³nico (regla: mayor device_id representa Ãºltimo OS)
+                    # Último ingreso: según el device canónico (regla: mayor device_id representa último OS)
                     ingreso_id = self._fetch_last_ingreso_id(cur, device_id)
 
                     # Backups actuales
@@ -606,7 +606,7 @@ class Command(BaseCommand):
                         alquilado_ing_prev, alquiler_a_ing_prev = iprev[0], iprev[1]
                         backup_ingresos.append([ingreso_id, alquilado_ing_prev, alquiler_a_ing_prev])
 
-                    # AplicaciÃ³n o simulaciÃ³n
+                    # Aplicación o simulación
                     if not dry:
                         # Completar MG en device si falta y lo tenemos
                         if mg_final and (dprev[2] or "").strip() != mg_final:
@@ -619,7 +619,7 @@ class Command(BaseCommand):
                             "UPDATE devices SET alquilado=true, alquiler_a=%s WHERE id=%s",
                             [cliente, device_id],
                         )
-                        # Marcar alquilado solo en el Ãºltimo ingreso
+                        # Marcar alquilado solo en el último ingreso
                         if ingreso_id is not None:
                             cur.execute(
                                 "UPDATE ingresos SET alquilado=true, alquiler_a=%s WHERE id=%s",
@@ -719,14 +719,14 @@ class Command(BaseCommand):
                 add_mg_list = opts.get("add_mg") or []
                 alquiler_a_manual = opts.get("alquiler_a_manual")
                 if add_mg_list:
-                    # Preparar ubicaciÃ³n canÃ³nica
-                    loc_id = self._ensure_location_id(cur, "EstanterÃ­a de Alquiler")
+                    # Preparar ubicación canónica
+                    loc_id = self._ensure_location_id(cur, "Estantería de Alquiler")
                     for mg_in in add_mg_list:
                         mg_norm = self._norm_mg(str(mg_in))
                         if not mg_norm:
                             conflictos_rows.append([
                                 "manual", alquiler_a_manual or "", mg_in, "", "mg",
-                                "", 0, "MG invÃ¡lido"
+                                "", 0, "MG inválido"
                             ])
                             continue
                         # Buscar devices por MG exacto en numero_interno o numero_serie
@@ -784,7 +784,7 @@ class Command(BaseCommand):
                                     "UPDATE devices SET alquilado=true WHERE id=%s",
                                     [device_id],
                                 )
-                            # Marcar Ãºltimo ingreso alquilado y setear ubicaciÃ³n a EstanterÃ­a de Alquiler
+                            # Marcar último ingreso alquilado y setear ubicación a Estantería de Alquiler
                             if ingreso_id is not None:
                                 if alquiler_a_manual is not None:
                                     cur.execute(
@@ -837,11 +837,11 @@ class Command(BaseCommand):
                         rid, mg_norm or (ns or ""), ns or "", (ubic or ""), (cliente_act or ""),
                     ])
 
-                # Si es dry-run, no dejamos la transacciÃ³n abierta
+                # Si es dry-run, no dejamos la transacción abierta
                 if dry:
                     transaction.set_rollback(True)
 
-        # Aplicar renombrados de cÃ³digos en devices.n_de_control (FROM:TO)
+        # Aplicar renombrados de códigos en devices.n_de_control (FROM:TO)
         rename_list = opts.get("rename_code") or []
         if rename_list:
             with transaction.atomic():
@@ -851,7 +851,7 @@ class Command(BaseCommand):
                             from_code, to_code = [x.strip() for x in str(item).split(":", 1)]
                         except Exception:
                             conflictos_rows.append([
-                                "rename", "", item, "", "code", "", 0, "Formato invÃ¡lido (esperado FROM:TO)"
+                                "rename", "", item, "", "code", "", 0, "Formato inválido (esperado FROM:TO)"
                             ])
                             continue
                         # Conteo previo

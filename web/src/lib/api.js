@@ -2,14 +2,14 @@
 import { MOTIVO_OPTIONS } from "./constants";
 
   // === BASE del API robusto ===
-  // 1) Si esta definida VITE_API_URL, la usamos.
-  // 2) Si no, en dev (5173/5175) usamos rutas relativas y Vite proxy (/api -> api:8000).
-  const API_FALLBACK = "";
-  const isDevVite = window.location.port === "5173" || window.location.port === "5175";
+  // 1) Si est definida VITE_API_URL, la usamos.
+  // 2) Si no, caemos al host actual pero en puerto 8000 (til en LAN).
+  const API_FALLBACK = `${window.location.protocol}//${window.location.hostname}:8000`;
+  const isDevVite = window.location.port === "5173";
   const BASE =
     import.meta.env.VITE_API_URL?.replace(/\/+$/, "") ||
     (isDevVite
-      ? API_FALLBACK
+      ? `${window.location.protocol}//${window.location.hostname}:8000`
       : ""); // produccin: mismo origen + rutas /api/ relativas
 
   /* ===== Token en memoria (compatibilidad) ===== */
@@ -250,7 +250,6 @@ export const deleteCatalogVariante = (varianteId) =>
 
 
   export const getClientes = () => api.get("/api/catalogos/clientes/");
-  export const getClientesBasico = () => api.get("/api/clientes/");
   export const postCliente = (payload) =>
     api.post("/api/catalogos/clientes/", payload);
   export const patchCliente = (id, payload) =>

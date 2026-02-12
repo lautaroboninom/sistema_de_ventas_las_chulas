@@ -30,7 +30,7 @@ BEGIN
    ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
    LIMIT 1;
 
-  -- Actualizar snapshot en devices (sin heuristica cliente propio)
+  -- Actualizar snapshot en devices (sin heuristica MGBIO)
   UPDATE devices d
      SET alquilado = COALESCE(v_alquilado, FALSE),
          alquiler_a = v_alquiler_a,
@@ -133,5 +133,4 @@ class Command(BaseCommand):
                 )
 
         self.stdout.write("APLICADO OK: owner fields en devices + Particular + triggers + backfill")
-
 

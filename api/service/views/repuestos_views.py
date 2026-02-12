@@ -493,7 +493,7 @@ class RepuestosView(APIView):
             order_sql = f"ORDER BY {order_expr} {dir_sql}, codigo DESC"
         rows = q(
             f"""
-            SELECT id, codigo, nombre, costo_usd, multiplicador, stock_on_hand, stock_min, estado
+            SELECT id, codigo, nombre, costo_usd, multiplicador, stock_on_hand, stock_min
             FROM catalogo_repuestos
             {where_sql}
             {order_sql}

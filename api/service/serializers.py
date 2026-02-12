@@ -102,7 +102,6 @@ class IngresoDetailSerializer(serializers.Serializer):
     remito_salida = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     factura_numero = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     garantia_reparacion = serializers.BooleanField(required=False)
-    garantia_reparacion_trabajos = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     faja_garantia = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     etiq_garantia_ok = serializers.BooleanField(required=False)
     remito_ingreso = serializers.CharField(allow_null=True, allow_blank=True, required=False)

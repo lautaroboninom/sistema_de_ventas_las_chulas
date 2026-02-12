@@ -1,7 +1,7 @@
 {
-  "name": "Equilux Reparaciones",
-  "short_name": "Equilux",
-  "description": "Gestion de ingresos, reparaciones y stock de EQUILUX",
+  "name": "Sistema de Reparaciones",
+  "short_name": "Reparaciones",
+  "description": "Gestión de ingresos, reparaciones y stock",
   "lang": "es",
   "start_url": "/",
   "scope": "/",

@@ -1,6 +1,5 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { lookupScan, postEntregarIngreso } from "../lib/api";
 import { formatOS } from "../lib/ui-helpers";
 
@@ -17,20 +16,10 @@ const estadoLabel = (value) => {
 export default function QrScanCard() {
   const nav = useNavigate();
   const inputRef = useRef(null);
-  const scannerRef = useRef(null);
-  const scanLockRef = useRef(false);
-  const startLockRef = useRef(false);
-  const fileInputRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [cameraError, setCameraError] = useState("");
-  const [cameraSupported, setCameraSupported] = useState(false);
-  const [mediaSupported, setMediaSupported] = useState(false);
-  const [secureContext, setSecureContext] = useState(true);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [fileDecoding, setFileDecoding] = useState(false);
   const [result, setResult] = useState(null);
   const [entrega, setEntrega] = useState(emptyEntrega);
   const [saving, setSaving] = useState(false);
@@ -40,8 +29,6 @@ export default function QrScanCard() {
   const resetState = () => {
     setCode("");
     setErr("");
-    setCameraError("");
-    setFileDecoding(false);
     setResult(null);
     setEntrega(emptyEntrega);
     setSaving(false);
@@ -55,62 +42,19 @@ export default function QrScanCard() {
   };
 
   const closeModal = () => {
-    void stopCamera();
     setOpen(false);
   };
 
-  const openQrCapture = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-      fileInputRef.current.click();
-    }
-  };
-
-  const readerId = "qr-reader";
-  const ensureScanner = () => {
-    if (!scannerRef.current) {
-      scannerRef.current = new Html5Qrcode(readerId);
-    }
-    return scannerRef.current;
-  };
-
-  const evaluateCameraSupport = () => {
-    const supportsMedia = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
-    const secure = typeof window !== "undefined" ? window.isSecureContext : false;
-    setMediaSupported(supportsMedia);
-    setSecureContext(secure);
-    const canLive = supportsMedia && secure;
-    setCameraSupported(canLive);
-    return { supportsMedia, secure, canLive };
-  };
-
   useEffect(() => {
-    if (!open) {
-      void stopCamera();
-      return;
-    }
-    const isCoarse = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)")?.matches;
-    const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
-    const isMobileUA = /Android|iPhone|iPad|iPod/i.test(ua);
-    const shouldAuto = isCoarse || isMobileUA;
-    const { canLive } = evaluateCameraSupport();
-    if (shouldAuto && canLive) {
-      void startCamera();
-    } else {
-      const id = setTimeout(() => inputRef.current?.focus(), 50);
-      return () => clearTimeout(id);
-    }
+    if (!open) return;
+    const id = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(id);
   }, [open]);
 
-  useEffect(() => {
-    return () => {
-      void stopCamera();
-    };
-  }, []);
-
-  const lookupCode = async (value) => {
-    const trimmed = (value || "").trim();
-    if (!trimmed || loading) return;
+  const onLookup = async (e) => {
+    e.preventDefault();
+    const trimmed = (code || "").trim();
+    if (!trimmed) return;
     setLoading(true);
     setErr("");
     setResult(null);
@@ -125,97 +69,6 @@ export default function QrScanCard() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const onLookup = async (e) => {
-    e.preventDefault();
-    await lookupCode(code);
-  };
-
-  const stopCamera = async () => {
-    startLockRef.current = false;
-    scanLockRef.current = false;
-    const scanner = scannerRef.current;
-    if (scanner) {
-      try {
-        await scanner.stop();
-      } catch (e) {
-        // ignore stop errors when not running
-      }
-      try {
-        scanner.clear();
-      } catch (e) {
-        // ignore clear errors
-      }
-    }
-    setCameraActive(false);
-  };
-
-  const handleScanSuccess = async (decodedText) => {
-    if (scanLockRef.current) return;
-    scanLockRef.current = true;
-    setCode(decodedText);
-    await lookupCode(decodedText);
-    await stopCamera();
-    scanLockRef.current = false;
-  };
-
-  const startCamera = async () => {
-    if (cameraActive || startLockRef.current) return;
-    const { canLive, secure } = evaluateCameraSupport();
-    if (!canLive) {
-      setCameraError(
-        secure
-          ? "La camara no esta disponible en este dispositivo."
-          : "La lectura automatica requiere HTTPS."
-      );
-      return;
-    }
-    setCameraError("");
-    startLockRef.current = true;
-    try {
-      const scanner = ensureScanner();
-      await scanner.start(
-        { facingMode: "environment" },
-        {
-          fps: 10,
-          qrbox: { width: 240, height: 240 },
-          formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
-        },
-        (decodedText) => {
-          void handleScanSuccess(decodedText);
-        },
-        () => {}
-      );
-      setCameraActive(true);
-    } catch (e2) {
-      setCameraError(e2?.message || "No se pudo abrir la camara.");
-      setCameraActive(false);
-    } finally {
-      startLockRef.current = false;
-    }
-  };
-
-  const decodeQrFromFile = async (file) => {
-    if (!file) return;
-    setFileDecoding(true);
-    setCameraError("");
-    try {
-      await stopCamera();
-      const scanner = ensureScanner();
-      const decodedText = await scanner.scanFile(file, true);
-      setCode(decodedText);
-      await lookupCode(decodedText);
-    } catch (e2) {
-      setCameraError(e2?.message || "No se pudo leer el QR.");
-    } finally {
-      setFileDecoding(false);
-    }
-  };
-
-  const onQrFileChange = (event) => {
-    const file = event.target?.files?.[0];
-    if (file) decodeQrFromFile(file);
   };
 
   const ingreso = result?.ingreso || null;
@@ -234,11 +87,6 @@ export default function QrScanCard() {
     }
     return "Cliente";
   };
-
-  const alquilerCliente = (() => {
-    const name = (ingreso?.alquiler_a || "").trim();
-    return ingreso?.alquilado && name ? name : "";
-  })();
 
   const goNuevoIngreso = (prefill) => {
     if (prefill) {
@@ -319,60 +167,6 @@ export default function QrScanCard() {
                 Cerrar
               </button>
             </div>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={onQrFileChange}
-              className="hidden"
-            />
-
-            <div className={mediaSupported ? "mb-3" : "mb-3 hidden"}>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-sm text-gray-600">
-                  {cameraActive ? "Camara activa (QR)" : "Camara"}
-                </div>
-                <button
-                  type="button"
-                  className="px-3 py-1.5 rounded border text-sm"
-                  onClick={cameraActive ? () => void stopCamera() : () => void startCamera()}
-                  disabled={!cameraSupported}
-                >
-                  {cameraActive ? "Cerrar camara" : "Abrir camara"}
-                </button>
-              </div>
-              <div className="mt-2 border rounded overflow-hidden bg-black/5">
-                <div id={readerId} className="w-full h-48 md:h-64"></div>
-              </div>
-            </div>
-
-            {!mediaSupported && (
-              <div className="mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                Tu navegador no permite acceso a camara. Podes cargar una imagen con QR.
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    className="px-3 py-1.5 rounded border text-xs"
-                    onClick={openQrCapture}
-                    disabled={fileDecoding}
-                  >
-                    {fileDecoding ? "Leyendo QR..." : "Abrir camara (QR)"}
-                  </button>
-                </div>
-              </div>
-            )}
-            {fileDecoding && !cameraError && (
-              <div className="mb-3 text-xs text-gray-500">
-                Procesando imagen...
-              </div>
-            )}
-            {cameraError && (
-              <div className="mb-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
-                {cameraError}
-              </div>
-            )}
 
             <form onSubmit={onLookup} className="flex flex-col md:flex-row gap-2">
               <input
@@ -501,21 +295,12 @@ export default function QrScanCard() {
                             marca: device.marca,
                             model_id: device.model_id,
                             modelo: device.modelo,
-                            tipo_equipo: device.tipo_equipo || ingreso?.tipo_equipo || "",
+                            tipo_equipo: device.tipo_equipo,
                             variante: device.variante || ingreso?.equipo_variante || "",
-                            ...(alquilerCliente
-                              ? {
-                                  customer_id: null,
-                                  customer_nombre: alquilerCliente,
-                                  customer_cod: "",
-                                  customer_telefono: "",
-                                }
-                              : {
-                                  customer_id: device.customer_id,
-                                  customer_nombre: device.customer_nombre,
-                                  customer_cod: device.customer_cod,
-                                  customer_telefono: device.customer_telefono,
-                                }),
+                            customer_id: device.customer_id,
+                            customer_nombre: device.customer_nombre,
+                            customer_cod: device.customer_cod,
+                            customer_telefono: device.customer_telefono,
                             propietario_nombre: device.propietario_nombre,
                             propietario_contacto: device.propietario_contacto,
                             propietario_doc: device.propietario_doc,

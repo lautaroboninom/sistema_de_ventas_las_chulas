@@ -1,5 +1,5 @@
 // web/src/pages/Login.jsx
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
@@ -10,6 +10,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const [backendOk, setBackendOk] = useState(true);
 
   const nav = useNavigate();
   const loc = useLocation();
@@ -18,6 +19,18 @@ export default function Login() {
   const params = new URLSearchParams(loc.search || "");
   const nextParam = params.get("next");
   const from = nextParam || loc.state?.from?.pathname || "/";
+
+  // Verificacion rapida del backend para diferenciar error de red vs. credenciales
+  useEffect(() => {
+    (async () => {
+      try {
+        await api.get("/api/health/");
+        setBackendOk(true);
+      } catch {
+        setBackendOk(false);
+      }
+    })();
+  }, []);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -28,14 +41,8 @@ export default function Login() {
       nav(from, { replace: true });
     } catch (e) {
       const msg = e?.message || "Credenciales invalidas";
-      const low = String(msg).toLowerCase();
-      const looksNetwork =
-        low.includes("failed to fetch") ||
-        low.includes("networkerror") ||
-        low.includes("network request failed") ||
-        low.includes("backend no disponible");
-      if (looksNetwork) {
-        setErr("Backend no disponible en /api. Verifica que la API este levantada (http://localhost:18100/api/health/).");
+      if (!backendOk) {
+        setErr("Backend no disponible en /api. Verifica que la API este levantada (http://localhost:8000).");
       } else {
         setErr(msg);
       }
@@ -51,7 +58,7 @@ export default function Login() {
           <div className="flex justify-center mb-4">
             <img
               src="/branding/logo-app.png"
-              alt="EQUILUX Reparaciones"
+              alt="SEPID Reparaciones"
               className="h-12 object-contain"
               onError={(e) => {
                 e.currentTarget.onerror = null;
@@ -59,12 +66,17 @@ export default function Login() {
               }}
             />
           </div>
+          {!backendOk && (
+            <div className="mb-3 text-sm bg-yellow-100 text-yellow-800 p-2 rounded">
+              Backend no disponible.
+            </div>
+          )}
           <div className="h1 mb-4">Ingresar</div>
           <form className="space-y-3" onSubmit={onSubmit}>
             <input
               className="input"
               type="email"
-              placeholder="...@equiluxmd.com"
+              placeholder="...@sepid.com.ar"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"

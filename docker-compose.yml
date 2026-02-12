@@ -1,11 +1,11 @@
-name: equilux-reparaciones-dev
+﻿name: sistemadereparaciones-dev
 
 services:
   postgres:
     image: postgres:16
     env_file: ./.env
     ports:
-      - "5433:5432"
+      - "5433:5433"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro
@@ -23,8 +23,8 @@ services:
       - DB_VENDOR=postgresql
       - POSTGRES_HOST=postgres
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-      - FRONTEND_ORIGIN=${FRONTEND_ORIGIN:-http://localhost:5175}
-      - PUBLIC_WEB_URL=${PUBLIC_WEB_URL:-http://localhost:5175}
+      - FRONTEND_ORIGIN=http://localhost:5176
+      - PUBLIC_WEB_URL=http://localhost:5176
       - LOGO_PATH=${LOGO_PATH:-/app/staticfiles/branding/logo-app.png}
     depends_on:
       postgres:
@@ -32,7 +32,7 @@ services:
     ports:
       - "18100:8000"
     volumes:
-      # Montar sÃ³lo directorio de presupuestos; evitar bind del cÃ³digo en Windows (paths con acentos)
+      # Montar sólo directorio de presupuestos; evitar bind del código en Windows (paths con acentos)
       - type: bind
         source: ${QUOTES_HOST_DIR:-./quotes}
         target: /quotes
@@ -43,7 +43,6 @@ services:
     command: >
       bash -lc "
       python manage.py migrate --noinput &&
-      python manage.py apply_repuestos_schema &&
       gunicorn app.wsgi:application --bind 0.0.0.0:8000 --workers 2
       "
 
@@ -52,15 +51,13 @@ services:
     ports:
       - "5175:5173"
     environment:
-      - VITE_API_URL=${VITE_API_URL:-}
-      - VITE_DEV_PROXY_TARGET=${VITE_DEV_PROXY_TARGET:-http://api:8000}
+      - VITE_API_URL=http://localhost:18110
     command: sh -c "npm install && npm run dev -- --host"
     depends_on:
       api:
         condition: service_started
 volumes:
   pg_data:
-
 
 
 

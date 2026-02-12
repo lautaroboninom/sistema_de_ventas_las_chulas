@@ -30,7 +30,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             "--accdb",
-            default=r"C:\\datos\\equilux\\fuente.accdb",
+            default=r"Z:\\Servicio Tecnico\\1_SISTEMA REPARACIONES\\2025-06\\Tablas2025 MG-SEPID 2.0.accdb",
             help="Ruta del .accdb (Access)",
         )
         parser.add_argument("--apply", action="store_true", help="Aplica cambios (por defecto dry-run)")
@@ -99,7 +99,7 @@ class Command(BaseCommand):
 
         # Query our ingresos 2024 pending
         with connection.cursor() as cur:
-            # Asegurar ubicaciÃ³n placeholder "-"
+            # Asegurar ubicación placeholder "-"
             cur.execute("INSERT INTO locations(nombre) VALUES ('-') ON CONFLICT DO NOTHING")
             dash_id = None
             try:

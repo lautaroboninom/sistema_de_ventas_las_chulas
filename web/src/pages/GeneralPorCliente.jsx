@@ -1,6 +1,6 @@
 // web/src/pages/GeneralPorCliente.jsx
 import { useEffect, useMemo, useState } from "react";
-import api, { getClientesBasico, downloadAuth } from "../lib/api";
+import api, { getClientes, downloadAuth } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateOnly, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import useQueryState from "../hooks/useQueryState";
@@ -28,7 +28,7 @@ export default function GeneralPorCliente() {
       try {
         setErrClientes("");
         setLoadingClientes(true);
-        const data = await getClientesBasico(); // /api/clientes/
+        const data = await getClientes(); // /api/catalogos/clientes/
         setClientes(Array.isArray(data) ? data : []);
       } catch (e) {
         setErrClientes(e?.message || "No se pudieron cargar los clientes");
@@ -164,7 +164,7 @@ export default function GeneralPorCliente() {
           disabled={loadingClientes}
           aria-label="Elegir cliente"
         >
-          <option value="">{loadingClientes ? "Cargando clientes" : "-- Elija cliente --"}</option>
+          <option value="">{loadingClientes ? "Cargando clientes" : "-- Eleg cliente --"}</option>
           {clientes.map((c) => (
             <option key={c.id} value={c.id}>
               {c.razon_social ?? c.nombre ?? `Cliente ${c.id}`}
@@ -224,7 +224,7 @@ export default function GeneralPorCliente() {
         <div className="text-sm text-gray-500">No hay resultados para este cliente.</div>
       ) : rows.length === 0 ? (
         <div className="text-sm text-gray-500">
-          Elija un cliente y presion <span className="font-medium">Buscar</span>.
+          Eleg un cliente y presion <span className="font-medium">Buscar</span>.
         </div>
       ) : (
         <div className="overflow-x-auto">

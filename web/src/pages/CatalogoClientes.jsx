@@ -94,7 +94,7 @@ export default function CatalogoClientes() {
   const merge = async (e) => {
     e.preventDefault();
     if (!mergeFrom || !mergeTo) {
-      setErr("Elegí origen y destino para unificar.");
+      setErr("Elegi origen y destino para unificar.");
       return;
     }
     if (mergeFrom === mergeTo) {
@@ -105,7 +105,7 @@ export default function CatalogoClientes() {
     const dst = rows.find((r) => String(r.id) === String(mergeTo));
     const srcLabel = src ? `${src.razon_social} (#${src.id})` : mergeFrom;
     const dstLabel = dst ? `${dst.razon_social} (#${dst.id})` : mergeTo;
-    if (!confirm(`Unificar ${srcLabel} dentro de ${dstLabel}? Se moverán los equipos y se eliminará el duplicado.`)) return;
+    if (!confirm(`Unificar ${srcLabel} dentro de ${dstLabel}? Se moveran los equipos y se eliminara el duplicado.`)) return;
     try {
       setMerging(true);
       setErr("");
@@ -130,19 +130,19 @@ export default function CatalogoClientes() {
 
       <form onSubmit={add} className="border rounded p-3 grid grid-cols-1 md:grid-cols-4 gap-3">
         <div>
-          <label className="text-sm">Razón social</label>
+          <label className="text-sm">Razn social</label>
           <Input value={f.razon_social} onChange={on("razon_social")} required />
         </div>
         <div>
-          <label className="text-sm">Código empresa</label>
+          <label className="text-sm">Cdigo empresa</label>
           <Input value={f.cod_empresa} onChange={on("cod_empresa")} required />
         </div>
         <div>
-          <label className="text-sm">Teléfono</label>
+          <label className="text-sm">Telfono</label>
           <Input value={f.telefono} onChange={on("telefono")} />
         </div>
         <div>
-          <label className="text-sm">Teléfono 2</label>
+          <label className="text-sm">Telfono 2</label>
           <Input value={f.telefono_2} onChange={on("telefono_2")} />
         </div>
         <div className="md:col-span-2">
@@ -163,7 +163,7 @@ export default function CatalogoClientes() {
             value={mergeFrom}
             onChange={(e) => setMergeFrom(e.target.value)}
           >
-            <option value="">-- Elegí cliente a eliminar --</option>
+            <option value="">-- Elegi cliente a eliminar --</option>
             {rows.map((c) => (
               <option key={c.id} value={c.id}>
                 #{c.id} - {c.cod_empresa} - {c.razon_social}
@@ -178,7 +178,7 @@ export default function CatalogoClientes() {
             value={mergeTo}
             onChange={(e) => setMergeTo(e.target.value)}
           >
-            <option value="">-- Elegí cliente a conservar --</option>
+            <option value="">-- Elegi cliente a conservar --</option>
             {rows.map((c) => (
               <option key={c.id} value={c.id}>
                 #{c.id} - {c.cod_empresa} - {c.razon_social}
@@ -196,7 +196,7 @@ export default function CatalogoClientes() {
           </button>
         </div>
         <div className="md:col-span-3 text-xs text-gray-600">
-          Mueve todos los equipos del origen al destino y elimina el duplicado (útil para casos como OXICASTHOMECARE).
+          Mueve todos los equipos del origen al destino y elimina el duplicado (util para casos como OXICASTHOMECARE).
         </div>
       </form>
 
@@ -204,10 +204,10 @@ export default function CatalogoClientes() {
         <thead>
           <tr className="bg-gray-50">
             <th className="p-2 text-left">ID</th>
-            <th className="p-2 text-left">Razón social</th>
-            <th className="p-2 text-left">Código</th>
-            <th className="p-2 text-left">Teléfono</th>
-            <th className="p-2 text-left">Teléfono 2</th>
+            <th className="p-2 text-left">Razn social</th>
+            <th className="p-2 text-left">Cdigo</th>
+            <th className="p-2 text-left">Telfono</th>
+            <th className="p-2 text-left">Telfono 2</th>
             <th className="p-2 text-left">Email</th>
             <th></th>
           </tr>
@@ -264,19 +264,19 @@ export default function CatalogoClientes() {
             {err && <div className="bg-red-100 text-red-700 p-2 rounded mb-2">{err}</div>}
             <form onSubmit={saveEdit} className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="md:col-span-2">
-                <label className="text-sm">Razón social</label>
+                <label className="text-sm">Razn social</label>
                 <Input value={ef.razon_social} onChange={(e) => setEf({ ...ef, razon_social: e.target.value })} required />
               </div>
               <div>
-                <label className="text-sm">Código empresa</label>
+                <label className="text-sm">Cdigo empresa</label>
                 <Input value={ef.cod_empresa} onChange={(e) => setEf({ ...ef, cod_empresa: e.target.value })} required />
               </div>
               <div>
-                <label className="text-sm">Teléfono</label>
+                <label className="text-sm">Telfono</label>
                 <Input value={ef.telefono} onChange={(e) => setEf({ ...ef, telefono: e.target.value })} />
               </div>
               <div>
-                <label className="text-sm">Teléfono 2</label>
+                <label className="text-sm">Telfono 2</label>
                 <Input value={ef.telefono_2} onChange={(e) => setEf({ ...ef, telefono_2: e.target.value })} />
               </div>
               <div className="md:col-span-2">

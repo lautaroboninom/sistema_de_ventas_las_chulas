@@ -122,8 +122,6 @@ def _fetch_last_ingreso(device_id: int):
           t.id,
           t.estado,
           t.presupuesto_estado,
-          COALESCE(t.alquilado, false) AS alquilado,
-          COALESCE(t.alquiler_a, '') AS alquiler_a,
           t.fecha_ingreso,
           t.fecha_entrega,
           COALESCE(t.equipo_variante,'') AS equipo_variante,

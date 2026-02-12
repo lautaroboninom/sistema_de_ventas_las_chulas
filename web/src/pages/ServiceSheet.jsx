@@ -9,7 +9,6 @@ import {
   getGeneralEquipos,
   postBajaIngreso,
   getClientes,
-  getMotivos,
 } from "../lib/api";
 import { getMarcas, getModelosByBrand, getVariantesPorMarca, checkGarantiaFabrica, patchModeloTipoEquipo } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -114,7 +113,6 @@ export default function ServiceSheet() {
   const [clientesPerm, setClientesPerm] = useState(true);
   const [clienteRsInput, setClienteRsInput] = useState("");
   const [clienteCodInput, setClienteCodInput] = useState("");
-  const clientesLoadedRef = useRef(false);
 
   // tcnicos
   const [tecnicos, setTecnicos] = useState([]);
@@ -159,7 +157,6 @@ export default function ServiceSheet() {
   const [modeloIdSel, setModeloIdSel] = useState(null);
   const [tipoSel, setTipoSel] = useState("");
   const [varSugeridas, setVarSugeridas] = useState([]);
-  const [motivos, setMotivos] = useState([]);
 
   // edición bsica
   const [editBasics, setEditBasics] = useState(false);
@@ -345,7 +342,6 @@ export default function ServiceSheet() {
       remito_ingreso: data?.remito_ingreso || "",
       informe_preliminar: data?.informe_preliminar || "",
       comentarios: data?.comentarios || "",
-      motivo: data?.motivo || "",
       garantia_reparacion: !!data?.garantia_reparacion,
       equipo_variante: data?.equipo_variante || "",
       garantia: !!data?.garantia,
@@ -368,35 +364,21 @@ export default function ServiceSheet() {
     })();
     (async () => {
       try {
+        if (!marcas.length) { try { setMarcas(await getMarcas()); } catch {} }
         const norm = (s) => (s || "").toString().trim().toLowerCase();
-        let marcasList = Array.isArray(marcas) ? marcas : [];
-        if (!marcasList.length) {
-          try {
-            const loaded = await getMarcas();
-            marcasList = Array.isArray(loaded) ? loaded : [];
-            setMarcas(marcasList);
-          } catch {
-            marcasList = [];
-          }
-        }
-        const marcaIdData = data?.marca_id != null ? Number(data.marca_id) : null;
-        const marcaById = marcasList.find((m) => Number(m?.id) === Number(marcaIdData));
         const curMarcaName = norm(data?.marca);
-        const marcaByName = curMarcaName ? marcasList.find((m) => norm(m?.nombre) === curMarcaName) : null;
-        const marcaId = marcaById?.id ?? marcaByName?.id ?? null;
+        let curMarca = (marcas.length ? marcas : await getMarcas()).find((m) => norm(m?.nombre) === curMarcaName);
+        const marcaId = curMarca?.id ?? null;
         setMarcaIdSel(marcaId);
         const tipoActual = (data?.tipo_equipo_nombre || data?.tipo_equipo || "").toString().trim().toUpperCase();
         setTipoSel(tipoActual);
         if (marcaId) {
           try {
             const list = await getModelosByBrand(marcaId);
-            const modelosList = Array.isArray(list) ? list : [];
-            setModelos(modelosList);
-            const modeloIdData = data?.model_id != null ? Number(data.model_id) : null;
-            const modeloById = modelosList.find((x) => Number(x?.id) === Number(modeloIdData));
+            setModelos(list || []);
             const curModeloName = norm(data?.modelo);
-            const modeloByName = curModeloName ? modelosList.find((x) => norm(x?.nombre) === curModeloName) : null;
-            setModeloIdSel(modeloById?.id ?? modeloByName?.id ?? null);
+            const md = (list || []).find((x) => norm(x?.nombre) === curModeloName);
+            setModeloIdSel(md?.id ?? null);
           } catch { setModelos([]); setModeloIdSel(null); }
           try { setVarSugeridas(await getVariantesPorMarca(marcaId)); } catch { setVarSugeridas([]); }
         } else {
@@ -450,9 +432,6 @@ export default function ServiceSheet() {
     if (remitoNuevo !== remitoActual) diff.remito_ingreso = remitoNuevo;
     if (cmp(formBasics.informe_preliminar, data?.informe_preliminar)) diff.informe_preliminar = formBasics.informe_preliminar;
     if (cmp(formBasics.comentarios, data?.comentarios)) diff.comentarios = formBasics.comentarios;
-    const motivoNuevo = (formBasics?.motivo || "").trim();
-    const motivoActual = (data?.motivo || "").trim();
-    if (motivoNuevo && motivoNuevo !== motivoActual) diff.motivo = motivoNuevo;
     if ((formBasics.garantia_reparacion ? 1 : 0) !== (data?.garantia_reparacion ? 1 : 0)) diff.garantia_reparacion = !!formBasics.garantia_reparacion;
     try {
       const norm = (s) => (s || "").toString().trim().toLowerCase();
@@ -521,26 +500,13 @@ export default function ServiceSheet() {
   // cargar catlogos base
   useEffect(() => { (async () => { try { setAccesCatalogo(await getAccesoriosCatalogo()); } catch {} })(); }, []);
   useEffect(() => { (async () => { try { setMarcas(await getMarcas()); } catch {} })(); }, []);
-  useEffect(() => { (async () => { try { const list = await getMotivos(); setMotivos(Array.isArray(list) ? list : []); } catch { setMotivos([]); } })(); }, []);
-  useEffect(() => {
-    if (clientesLoadedRef.current) return;
-    clientesLoadedRef.current = true;
-    (async () => {
-      try {
-        const list = await getClientes();
-        setClientesPerm(true);
-        setClientes(Array.isArray(list) ? list : []);
-      } catch (e) {
-        setClientesPerm(false);
-      }
-    })();
-  }, []);
   useEffect(() => {
     if (!editBasics) return;
     if (!marcaIdSel) { setModelos([]); setModeloIdSel(null); setVarSugeridas([]); return; }
     (async () => {
       try { setModelos(await getModelosByBrand(marcaIdSel) || []); } catch { setModelos([]); }
       try { setVarSugeridas(await getVariantesPorMarca(marcaIdSel)); } catch { setVarSugeridas([]); }
+      setModeloIdSel(null);
     })();
   }, [editBasics, marcaIdSel]);
   useEffect(() => {
@@ -753,7 +719,6 @@ export default function ServiceSheet() {
           tipoSel={tipoSel}
           setTipoSel={setTipoSel}
           variantes={varSugeridas}
-          motivos={motivos}
           ubicaciones={ubicaciones}
           ubicacionId={ubicacionId}
           setUbicacionId={setUbicacionId}
