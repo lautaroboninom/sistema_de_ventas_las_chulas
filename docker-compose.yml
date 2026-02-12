@@ -5,10 +5,10 @@ services:
     image: postgres:16
     env_file: ./.env
     ports:
-      - "5433:5433"
+      - "5433:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./sql:/docker-entrypoint-initdb.d:ro
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -q"]
       interval: 5s
@@ -23,8 +23,8 @@ services:
       - DB_VENDOR=postgresql
       - POSTGRES_HOST=postgres
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-      - FRONTEND_ORIGIN=http://localhost:5176
-      - PUBLIC_WEB_URL=http://localhost:5176
+      - FRONTEND_ORIGIN=${FRONTEND_ORIGIN:-http://localhost:5175}
+      - PUBLIC_WEB_URL=${PUBLIC_WEB_URL:-http://localhost:5175}
       - LOGO_PATH=${LOGO_PATH:-/app/staticfiles/branding/logo-app.png}
     depends_on:
       postgres:
@@ -51,7 +51,7 @@ services:
     ports:
       - "5175:5173"
     environment:
-      - VITE_API_URL=http://localhost:18110
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:18100}
     command: sh -c "npm install && npm run dev -- --host"
     depends_on:
       api:

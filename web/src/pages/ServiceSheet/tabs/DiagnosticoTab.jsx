@@ -57,6 +57,13 @@ export default function DiagnosticoTab({
     ESTADO.CONTROLADO_SIN_DEFECTO,
   ].map((s) => String(s || "").toLowerCase()));
   const isEstadoBloqueadoDiag = estadosBloqueadosDiag.has(estadoLower);
+  const estadosBloqueadosReparado = new Set([
+    ESTADO.ENTREGADO,
+    ESTADO.BAJA,
+    ESTADO.ALQUILADO,
+    ESTADO.CONTROLADO_SIN_DEFECTO,
+  ].map((s) => String(s || "").toLowerCase()));
+  const isEstadoBloqueadoReparado = estadosBloqueadosReparado.has(estadoLower);
   const puedeReparar = !!canAutorizarReparar && estadoLower !== "reparar" && !isEstadoBloqueadoDiag;
   const sinTecnicoAsignado = !data?.asignado_a;
 
@@ -331,15 +338,17 @@ export default function DiagnosticoTab({
             </>
           )}
 
-          {(typeof canMarkReparado === 'boolean' ? canMarkReparado : actAsTech) && !isEstadoBloqueadoDiag && (
+          {(typeof canMarkReparado === 'boolean' ? canMarkReparado : actAsTech) && !isEstadoBloqueadoReparado && (
             <>
-              <button
-                className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
-                onClick={marcarControladoSinDefecto}
-                type="button"
-              >
-                {savingAll ? "Guardando..." : "Controlado sin defecto"}
-              </button>
+              {!isEstadoBloqueadoDiag && (
+                <button
+                  className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60"
+                  onClick={marcarControladoSinDefecto}
+                  type="button"
+                >
+                  {savingAll ? "Guardando..." : "Controlado sin defecto"}
+                </button>
+              )}
               <button
                 className="bg-emerald-600 text-white px-3 py-2 rounded"
                 onClick={async () => {

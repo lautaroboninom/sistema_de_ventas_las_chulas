@@ -148,7 +148,7 @@ export default function Tecnico() {
       {loading ? (
         "Cargando..."
       ) : rows.length === 0 ? (
-        <div className="text-sm text-gray-500">No tens pendientes por ahora.</div>
+        <div className="text-sm text-gray-500">No tenés pendientes por ahora.</div>
       ) : (
         <div className="overflow-x-auto">
           <div className="flex justify-end mb-2">

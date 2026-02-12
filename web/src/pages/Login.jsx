@@ -24,7 +24,14 @@ export default function Login() {
   useEffect(() => {
     (async () => {
       try {
-        await api.get("/api/health/");
+        const base = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+        const pingUrl = `${base}/api/ping/`;
+        const res = await fetch(pingUrl, {
+          method: "GET",
+          credentials: "omit",
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(`Ping failed: ${res.status}`);
         setBackendOk(true);
       } catch {
         setBackendOk(false);
@@ -42,7 +49,7 @@ export default function Login() {
     } catch (e) {
       const msg = e?.message || "Credenciales invalidas";
       if (!backendOk) {
-        setErr("Backend no disponible en /api. Verifica que la API este levantada (http://localhost:8000).");
+        setErr("Backend no disponible en /api. Verifica que la API dev este levantada (http://localhost:18100).");
       } else {
         setErr(msg);
       }

@@ -16,6 +16,7 @@ import {
 
 export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeCosts, money, refreshIngreso, setErr }) {
   const isAprobado = data.presupuesto_estado === "aprobado";
+  const garantiaTrabajos = (data?.garantia_reparacion_trabajos || "").trim();
 
   const [qErr, setQErr] = useState("");
   const [qLoading, setQLoading] = useState(false);
@@ -379,6 +380,12 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeC
           <span> Equipo en {data?.garantia ? "garantía de fábrica" : ""}{data?.garantia && data?.garantia_reparacion ? " y " : ""}{data?.garantia_reparacion ? "garantía de reparación" : ""}.</span>
           {data?.faja_garantia ? (
             <span className="ml-2 text-xs text-yellow-700">Faja: {data.faja_garantia}</span>
+          ) : null}
+          {data?.garantia_reparacion ? (
+            <div className="mt-1 text-sm text-yellow-900">
+              <span className="font-medium">Trabajos realizados (último servicio):</span>{" "}
+              <span className="whitespace-pre-wrap">{garantiaTrabajos || "-"}</span>
+            </div>
           ) : null}
         </div>
       )}

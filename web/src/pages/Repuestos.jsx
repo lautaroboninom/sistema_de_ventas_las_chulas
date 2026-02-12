@@ -16,6 +16,11 @@ import {
   getRepuestosStockPermisos,
   postRepuestosStockPermiso,
   patchRepuestosStockPermiso,
+  getMarcas,
+  getModelos,
+  getCatalogTipos,
+  getCatalogModelos,
+  getCatalogVariantes,
   getTecnicos,
   getProveedoresExternos,
   deleteRepuesto,
@@ -56,6 +61,57 @@ const Tabs = ({ value, onChange, items }) => (
 
 const formatTs = (s) => (s ? new Date(s).toLocaleString("es-AR") : "-");
 
+const normalizeEquipoToken = (value) =>
+  norm(value).replace(/\s+/g, " ").trim();
+
+const canonEquipoName = (value) => norm(value).replace(/\s+/g, " ").trim();
+const typeKey = (value) =>
+  (value ?? "").toString().toLowerCase().replace(/\s+/g, " ").trim();
+
+const splitEquipoParts = (value) =>
+  (value ?? "")
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+const parseEquipoLines = (value) =>
+  (value ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+const isPrefixParts = (shortParts, longParts) => {
+  if (shortParts.length > longParts.length) return false;
+  for (let i = 0; i < shortParts.length; i += 1) {
+    const shortPart = normalizeEquipoToken(shortParts[i]);
+    const longPart = normalizeEquipoToken(longParts[i]);
+    if (!longPart.startsWith(shortPart)) return false;
+  }
+  return true;
+};
+
+const matchEquipoEntry = (filterRaw, entryRaw) => {
+  const filter = (filterRaw || "").trim();
+  if (!filter) return true;
+  const entryParts = splitEquipoParts(entryRaw);
+  if (!entryParts.length) return false;
+  if (!filter.includes("|")) {
+    const needle = normalizeEquipoToken(filter);
+    return entryParts.some((part) => normalizeEquipoToken(part).includes(needle));
+  }
+  const filterParts = splitEquipoParts(filter);
+  if (!filterParts.length) return false;
+  return isPrefixParts(filterParts, entryParts) || isPrefixParts(entryParts, filterParts);
+};
+
+const matchEquipoFilter = (filterRaw, estadoRaw) => {
+  const filter = (filterRaw || "").trim();
+  if (!filter) return true;
+  const entries = parseEquipoLines(estadoRaw);
+  if (!entries.length) return false;
+  return entries.some((entry) => matchEquipoEntry(filter, entry));
+};
+
 const DETAIL_FIELDS = [
   "nombre",
   "tipo_articulo",
@@ -76,7 +132,9 @@ const EMPTY_ADD_FORM = {
   nombre: "",
   tipo_articulo: "",
   categoria: "",
+  nro_parte: "",
   ubicacion_deposito: "",
+  estado: "",
   stock_on_hand: "",
   stock_min: "",
   multiplicador: "",
@@ -137,6 +195,7 @@ export default function Repuestos() {
 
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
+  const [equipo, setEquipo] = useState("");
   const [orderBy, setOrderBy] = useState("codigo");
   const [orderDir, setOrderDir] = useState("desc");
   const [config, setConfig] = useState(null);
@@ -170,18 +229,69 @@ export default function Repuestos() {
   const [addOpen, setAddOpen] = useState(false);
   const [addSaving, setAddSaving] = useState(false);
   const [addForm, setAddForm] = useState(() => ({ ...EMPTY_ADD_FORM }));
+  const [addEquipoInput, setAddEquipoInput] = useState("");
+  const [addEquipoErr, setAddEquipoErr] = useState("");
   const actionsMenuRef = useRef(null);
+  const [equipOptionsAll, setEquipOptionsAll] = useState([]);
+  const [equipOptionsLoading, setEquipOptionsLoading] = useState(false);
+  const [equipOptionsErr, setEquipOptionsErr] = useState("");
+  const [equipOpenId, setEquipOpenId] = useState(null);
 
   const filtered = useMemo(() => {
     const needle = norm(q);
-    if (!needle) return items;
+    const equipoNeedle = (equipo || "").trim();
+    if (!needle && !equipoNeedle) return items;
     return (items || []).filter((it) => {
-      return (
-        norm(it?.codigo || "").includes(needle) ||
-        norm(it?.nombre || "").includes(needle)
-      );
+      if (
+        needle &&
+        !norm(it?.codigo || "").includes(needle) &&
+        !norm(it?.nombre || "").includes(needle)
+      ) {
+        return false;
+      }
+      if (!equipoNeedle) return true;
+      return matchEquipoFilter(equipoNeedle, it?.estado || "");
     });
-  }, [q, items]);
+  }, [q, equipo, items]);
+
+  const equipOptionsIndex = useMemo(() => {
+    return (equipOptionsAll || []).map((opt) => ({
+      raw: opt,
+      norm: normalizeEquipoToken(opt),
+    }));
+  }, [equipOptionsAll]);
+
+  const equipOptionsMap = useMemo(() => {
+    const map = new Map();
+    equipOptionsIndex.forEach((opt) => {
+      if (!opt.norm) return;
+      if (!map.has(opt.norm)) {
+        map.set(opt.norm, opt.raw);
+      }
+    });
+    return map;
+  }, [equipOptionsIndex]);
+
+  const equipOptionsLoadingUi =
+    equipOptionsLoading || (!equipOptionsAll.length && !equipOptionsErr);
+
+  function filterEquipOptions(input) {
+    const needle = normalizeEquipoToken(input);
+    if (!needle) return equipOptionsIndex.map((opt) => opt.raw);
+    return equipOptionsIndex
+      .filter((opt) => opt.norm.includes(needle))
+      .map((opt) => opt.raw);
+  }
+
+  const addEquipDropdownOpen = equipOpenId === "add";
+  const addEquipoSuggestions = addEquipDropdownOpen
+    ? filterEquipOptions(addEquipoInput)
+    : [];
+  const addEquipoSuggestionsTop = addEquipoSuggestions.slice(0, 200);
+  const addEquipoMatch = addEquipoInput
+    ? equipOptionsMap.get(normalizeEquipoToken(addEquipoInput))
+    : null;
+  const addEquipoLines = parseEquipoLines(addForm.estado);
 
   const activePerm = useMemo(() => {
     if (!isTech) return null;
@@ -292,6 +402,105 @@ export default function Repuestos() {
     }
   }
 
+  async function loadEquipOptionsAll() {
+    if (equipOptionsLoading) return;
+    if ((equipOptionsAll || []).length) return;
+    try {
+      setEquipOptionsErr("");
+      setEquipOptionsLoading(true);
+      const marcas = await getMarcas();
+      const allOptions = new Map();
+      const addOption = (value) => {
+        const cleaned = (value || "").trim();
+        if (!cleaned) return;
+        const key = normalizeEquipoToken(cleaned);
+        if (!key || allOptions.has(key)) return;
+        allOptions.set(key, cleaned);
+      };
+
+      for (const marca of marcas || []) {
+        const marcaNombre = (marca?.nombre || marca?.name || "").trim();
+        if (!marcaNombre) continue;
+        addOption(marcaNombre);
+        const modelos = await getModelos(marca.id);
+        const modelosArr = Array.isArray(modelos) ? modelos : [];
+
+        const tipos = await getCatalogTipos(marca.id);
+        const tiposArr = Array.isArray(tipos) ? tipos : [];
+        const tipoByKey = new Map();
+        tiposArr.forEach((tipo) => {
+          const keyName = typeKey(tipo?.name || "");
+          const keyLabel = typeKey(tipo?.label || tipo?.name || "");
+          if (keyName) tipoByKey.set(keyName, tipo);
+          if (keyLabel) tipoByKey.set(keyLabel, tipo);
+        });
+
+        const catalogModelIndexByTipo = new Map();
+        const getCatalogModelIndex = async (tipoId) => {
+          if (catalogModelIndexByTipo.has(tipoId)) {
+            return catalogModelIndexByTipo.get(tipoId);
+          }
+          const modelosCat = await getCatalogModelos(marca.id, tipoId);
+          const index = new Map();
+          (modelosCat || []).forEach((modelo) => {
+            if (modelo?.active === false) return;
+            const nameKey = canonEquipoName(modelo?.name || "");
+            const aliasKey = canonEquipoName(modelo?.alias || "");
+            if (nameKey) index.set(nameKey, modelo);
+            if (aliasKey) index.set(aliasKey, modelo);
+          });
+          catalogModelIndexByTipo.set(tipoId, index);
+          return index;
+        };
+
+        const variantesCache = new Map();
+        const getVariantesBySerie = async (serieId) => {
+          if (variantesCache.has(serieId)) return variantesCache.get(serieId);
+          const rows = await getCatalogVariantes(marca.id, null, serieId);
+          const variantes = (rows || []).filter((v) => v?.active !== false);
+          variantesCache.set(serieId, variantes);
+          return variantes;
+        };
+
+        for (const modelo of modelosArr) {
+          const modeloNombre = (modelo?.nombre || modelo?.name || "").trim();
+          if (!modeloNombre) continue;
+          addOption(`${marcaNombre} | ${modeloNombre}`);
+
+          const varianteSimple = (modelo?.variante || "").trim();
+          if (varianteSimple) {
+            addOption(`${marcaNombre} | ${modeloNombre} | ${varianteSimple}`);
+          }
+
+          const tipoName = (modelo?.tipo_equipo || "").trim();
+          if (!tipoName) continue;
+          const tipo = tipoByKey.get(typeKey(tipoName));
+          if (!tipo) continue;
+
+          const index = await getCatalogModelIndex(tipo.id);
+          const serie = index.get(canonEquipoName(modeloNombre));
+          if (!serie) continue;
+
+          const variantes = await getVariantesBySerie(serie.id);
+          variantes.forEach((variante) => {
+            const varNombre = (variante?.name || variante?.nombre || "").trim();
+            if (!varNombre) return;
+            addOption(`${marcaNombre} | ${modeloNombre} | ${varNombre}`);
+          });
+        }
+      }
+
+      const sorted = Array.from(allOptions.values()).sort((a, b) =>
+        a.localeCompare(b, "es", { sensitivity: "base" })
+      );
+      setEquipOptionsAll(sorted);
+    } catch (e) {
+      setEquipOptionsErr(e?.message || "No se pudieron cargar equipos");
+    } finally {
+      setEquipOptionsLoading(false);
+    }
+  }
+
   function applyItemUpdate(updated) {
     if (!updated?.id) return;
     setItems((prev) =>
@@ -353,6 +562,8 @@ export default function Repuestos() {
         draft: buildDetalleDraft(data),
         proveedoresDraft: buildProveedoresDraft(data),
         tab: "detalle",
+        equipoInput: "",
+        equipoErr: "",
         movs: [],
         movsLoading: false,
         movsError: "",
@@ -366,6 +577,7 @@ export default function Repuestos() {
   }
 
   function toggleDetalle(id) {
+    setEquipOpenId(null);
     setOpenId((prev) => (prev === id ? null : id));
     if (!detalles[id]?.data && !detalles[id]?.loading) {
       loadDetalle(id);
@@ -526,8 +738,16 @@ export default function Repuestos() {
     return () => document.removeEventListener("mousedown", onClick);
   }, [actionsOpen]);
 
+  useEffect(() => {
+    if (!equipOpenId) return;
+    loadEquipOptionsAll();
+  }, [equipOpenId]);
+
   function resetAddForm() {
     setAddForm({ ...EMPTY_ADD_FORM });
+    setAddEquipoInput("");
+    setAddEquipoErr("");
+    setEquipOpenId(null);
   }
 
   function normalizeIntInput(value) {
@@ -639,6 +859,63 @@ export default function Repuestos() {
       ]),
     ];
     downloadXLSX("repuestos_filtrados.xlsx", rows, "Repuestos");
+  }
+
+  function addEquipoLine(repuestoId, value) {
+    const nextValue = (value || "").trim();
+    if (!nextValue) return;
+    setDetalles((prev) => {
+      const st = prev[repuestoId] || {};
+      const draft = { ...(st.draft || {}) };
+      const lines = parseEquipoLines(draft.estado);
+      const normalizedNext = normalizeEquipoToken(nextValue);
+      if (!lines.some((line) => normalizeEquipoToken(line) === normalizedNext)) {
+        lines.push(nextValue);
+      }
+      draft.estado = lines.join("\n");
+      return {
+        ...prev,
+        [repuestoId]: { ...st, draft, equipoInput: "", equipoErr: "" },
+      };
+    });
+  }
+
+  function removeEquipoLine(repuestoId, value) {
+    const normalized = normalizeEquipoToken(value);
+    setDetalles((prev) => {
+      const st = prev[repuestoId] || {};
+      const draft = { ...(st.draft || {}) };
+      const lines = parseEquipoLines(draft.estado).filter(
+        (line) => normalizeEquipoToken(line) !== normalized
+      );
+      draft.estado = lines.join("\n");
+      return { ...prev, [repuestoId]: { ...st, draft } };
+    });
+  }
+
+  function addEquipoLineToAdd(value) {
+    const nextValue = (value || "").trim();
+    if (!nextValue) return;
+    setAddForm((prev) => {
+      const lines = parseEquipoLines(prev.estado);
+      const normalizedNext = normalizeEquipoToken(nextValue);
+      if (!lines.some((line) => normalizeEquipoToken(line) === normalizedNext)) {
+        lines.push(nextValue);
+      }
+      return { ...prev, estado: lines.join("\n") };
+    });
+    setAddEquipoInput("");
+    setAddEquipoErr("");
+  }
+
+  function removeAddEquipoLine(value) {
+    const normalized = normalizeEquipoToken(value);
+    setAddForm((prev) => {
+      const lines = parseEquipoLines(prev.estado).filter(
+        (line) => normalizeEquipoToken(line) !== normalized
+      );
+      return { ...prev, estado: lines.join("\n") };
+    });
   }
 
   function updateDraft(id, key, value) {
@@ -782,9 +1059,12 @@ export default function Repuestos() {
       if (addForm.multiplicador !== "") payload.multiplicador = addForm.multiplicador;
       if (addForm.tipo_articulo.trim()) payload.tipo_articulo = addForm.tipo_articulo.trim();
       if (addForm.categoria.trim()) payload.categoria = addForm.categoria.trim();
+      if (addForm.nro_parte.trim()) payload.nro_parte = addForm.nro_parte.trim();
       if (addForm.ubicacion_deposito.trim()) {
         payload.ubicacion_deposito = addForm.ubicacion_deposito.trim();
       }
+      const equipos = parseEquipoLines(addForm.estado);
+      if (equipos.length) payload.estado = equipos.join("\n");
     }
     if (canEditCost && addForm.costo_usd !== "") {
       payload.costo_usd = addForm.costo_usd;
@@ -806,6 +1086,8 @@ export default function Repuestos() {
           draft: buildDetalleDraft(created),
           proveedoresDraft: buildProveedoresDraft(created),
           tab: "detalle",
+          equipoInput: "",
+          equipoErr: "",
           movs: [],
           movsLoading: false,
           movsError: "",
@@ -852,7 +1134,9 @@ export default function Repuestos() {
 
   async function handleDeleteRepuesto(id) {
     if (!canDelete) return;
-    const ok = window.confirm("¿Eliminar este repuesto? Se marcara como inactivo.");
+    const ok = window.confirm(
+      "¿Eliminar este repuesto? Esta acción lo eliminará del catálogo y liberará el código para reutilizarlo."
+    );
     if (!ok) return;
     try {
       setErr("");
@@ -1037,11 +1321,16 @@ export default function Repuestos() {
 
       <div className="border rounded p-3">
         <div className="flex flex-col md:flex-row md:items-center gap-3 mb-3">
-          <div className="flex-1">
+          <div className="flex-1 space-y-2">
             <Input
               placeholder="Buscar por codigo o nombre"
               value={q}
               onChange={(e) => setQ(e.target.value)}
+            />
+            <Input
+              placeholder="Equipo (Marca | Modelo | Variante)"
+              value={equipo}
+              onChange={(e) => setEquipo(e.target.value)}
             />
           </div>
           <div className="text-xs text-gray-500">
@@ -1233,6 +1522,135 @@ export default function Repuestos() {
                     />
                   </div>
                   <div>
+                    <label className="text-xs text-gray-500">Nro parte</label>
+                    <Input
+                      value={addForm.nro_parte}
+                      onChange={(e) =>
+                        setAddForm((s) => ({ ...s, nro_parte: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className="md:col-span-3">
+                    <label className="text-xs text-gray-500">
+                      Equipo (Marca | Modelo | Variante)
+                    </label>
+                    <div className="relative">
+                      <div className="flex flex-wrap gap-2 items-center">
+                        <input
+                          className="border rounded p-2 flex-1 min-w-[220px]"
+                          placeholder="Escribir para buscar..."
+                          value={addEquipoInput}
+                          onFocus={() => {
+                            setEquipOpenId("add");
+                          }}
+                          onBlur={() => {
+                            setTimeout(() => {
+                              setEquipOpenId((prev) => (prev === "add" ? null : prev));
+                            }, 150);
+                          }}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setAddEquipoInput(value);
+                            setAddEquipoErr("");
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter") return;
+                            e.preventDefault();
+                            if (!addEquipoInput.trim()) return;
+                            if (!addEquipoMatch) {
+                              setAddEquipoErr("Selecciona un equipo de la lista.");
+                              return;
+                            }
+                            addEquipoLineToAdd(addEquipoMatch);
+                            setEquipOpenId(null);
+                          }}
+                        />
+                        <button
+                          className="px-3 py-2 border rounded text-xs disabled:opacity-60"
+                          type="button"
+                          onClick={() => {
+                            if (!addEquipoInput.trim()) return;
+                            if (!addEquipoMatch) {
+                              setAddEquipoErr("Selecciona un equipo de la lista.");
+                              return;
+                            }
+                            addEquipoLineToAdd(addEquipoMatch);
+                            setEquipOpenId(null);
+                          }}
+                        >
+                          Agregar
+                        </button>
+                      </div>
+                      {addEquipDropdownOpen && (
+                        <div
+                          className="absolute left-0 right-0 mt-1 bg-white border rounded shadow-lg z-20 max-h-56 overflow-auto"
+                          onMouseDown={(e) => e.preventDefault()}
+                        >
+                          {equipOptionsLoadingUi && (
+                            <div className="p-2 text-xs text-gray-500">
+                              Cargando equipos...
+                            </div>
+                          )}
+                          {!equipOptionsLoadingUi && equipOptionsErr && (
+                            <div className="p-2 text-xs text-red-600">
+                              {equipOptionsErr}
+                            </div>
+                          )}
+                          {!equipOptionsLoadingUi &&
+                            !equipOptionsErr &&
+                            !addEquipoSuggestionsTop.length && (
+                              <div className="p-2 text-xs text-gray-500">
+                                Sin resultados
+                              </div>
+                            )}
+                          {!equipOptionsLoadingUi &&
+                            !equipOptionsErr &&
+                            addEquipoSuggestionsTop.map((opt) => (
+                              <button
+                                key={opt}
+                                type="button"
+                                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                                onClick={() => {
+                                  addEquipoLineToAdd(opt);
+                                  setEquipOpenId(null);
+                                }}
+                              >
+                                {opt}
+                              </button>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                    {addEquipoErr && (
+                      <div className="text-xs text-red-600 mt-1">{addEquipoErr}</div>
+                    )}
+                    {equipOptionsErr && !equipOptionsLoadingUi && (
+                      <div className="text-xs text-red-600 mt-1">{equipOptionsErr}</div>
+                    )}
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {addEquipoLines.map((line) => (
+                        <div
+                          key={line}
+                          className="flex items-center gap-2 border rounded px-2 py-1 text-xs bg-white"
+                        >
+                          <span>{line}</span>
+                          <button
+                            type="button"
+                            className="text-red-600 underline"
+                            onClick={() => removeAddEquipoLine(line)}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      ))}
+                      {!addEquipoLines.length && (
+                        <span className="text-xs text-gray-500">
+                          Sin equipos asignados
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
                     <label className="text-xs text-gray-500">Ubicacion deposito</label>
                     <Input
                       value={addForm.ubicacion_deposito}
@@ -1311,6 +1729,16 @@ export default function Repuestos() {
                 const detailTab = detail.tab || "detalle";
                 const detailDraft = detail.draft || {};
                 const proveedoresDraft = detail.proveedoresDraft || [];
+                const equipoInput = detail.equipoInput || "";
+                const equipDropdownOpen = equipOpenId === it.id;
+                const equipoSuggestions = equipDropdownOpen
+                  ? filterEquipOptions(equipoInput)
+                  : [];
+                const equipoSuggestionsTop = equipoSuggestions.slice(0, 200);
+                const equipoMatch = equipoInput
+                  ? equipOptionsMap.get(normalizeEquipoToken(equipoInput))
+                  : null;
+                const equipoLines = parseEquipoLines(detailDraft.estado);
                 const detailFieldsToCheck = canEditDetalle ? DETAIL_FIELDS : [];
                 const detailHasChanges =
                   (canEditDetalle &&
@@ -1550,7 +1978,7 @@ export default function Repuestos() {
                                     </div>
                                   )}
                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    <div>
+                                    <div className="md:col-span-2">
                                       <label className="text-xs text-gray-500">Tipo de articulo</label>
                                       <Input
                                         value={detailDraft.tipo_articulo || ""}
@@ -1569,6 +1997,135 @@ export default function Repuestos() {
                                         }
                                         disabled={!canEditDetalle}
                                       />
+                                    </div>
+                                    <div>
+                                      <label className="text-xs text-gray-500">
+                                        Equipo (Marca | Modelo | Variante)
+                                      </label>
+                                      <div className="relative">
+                                        <div className="flex flex-wrap gap-2 items-center">
+                                          <input
+                                            className="border rounded p-2 flex-1 min-w-[220px]"
+                                            placeholder="Escribir para buscar..."
+                                            value={equipoInput}
+                                            onFocus={() => {
+                                              setEquipOpenId(it.id);
+                                            }}
+                                            onBlur={() => {
+                                              setTimeout(() => {
+                                                setEquipOpenId((prev) => (prev === it.id ? null : prev));
+                                              }, 150);
+                                            }}
+                                            onChange={(e) => {
+                                              const value = e.target.value;
+                                              updateDetalleState(it.id, {
+                                                equipoInput: value,
+                                                equipoErr: "",
+                                              });
+                                            }}
+                                            onKeyDown={(e) => {
+                                              if (e.key !== "Enter") return;
+                                              e.preventDefault();
+                                              if (!equipoInput.trim()) return;
+                                              if (!equipoMatch) {
+                                                updateDetalleState(it.id, {
+                                                  equipoErr: "Selecciona un equipo de la lista.",
+                                                });
+                                                return;
+                                              }
+                                              addEquipoLine(it.id, equipoMatch);
+                                              setEquipOpenId(null);
+                                            }}
+                                            disabled={!canEditDetalle}
+                                          />
+                                          <button
+                                            className="px-3 py-2 border rounded text-xs disabled:opacity-60"
+                                            type="button"
+                                            onClick={() => {
+                                              if (!equipoInput.trim()) return;
+                                              if (!equipoMatch) {
+                                                updateDetalleState(it.id, {
+                                                  equipoErr: "Selecciona un equipo de la lista.",
+                                                });
+                                                return;
+                                              }
+                                              addEquipoLine(it.id, equipoMatch);
+                                              setEquipOpenId(null);
+                                            }}
+                                            disabled={!canEditDetalle}
+                                          >
+                                            Agregar
+                                          </button>
+                                        </div>
+                                        {equipDropdownOpen && (
+                                          <div
+                                            className="absolute left-0 right-0 mt-1 bg-white border rounded shadow-lg z-20 max-h-56 overflow-auto"
+                                            onMouseDown={(e) => e.preventDefault()}
+                                          >
+                                            {equipOptionsLoadingUi && (
+                                              <div className="p-2 text-xs text-gray-500">
+                                                Cargando equipos...
+                                              </div>
+                                            )}
+                                            {!equipOptionsLoadingUi && equipOptionsErr && (
+                                              <div className="p-2 text-xs text-red-600">
+                                                {equipOptionsErr}
+                                              </div>
+                                            )}
+                                            {!equipOptionsLoadingUi &&
+                                              !equipOptionsErr &&
+                                              !equipoSuggestionsTop.length && (
+                                                <div className="p-2 text-xs text-gray-500">
+                                                  Sin resultados
+                                                </div>
+                                              )}
+                                            {!equipOptionsLoadingUi &&
+                                              !equipOptionsErr &&
+                                              equipoSuggestionsTop.map((opt) => (
+                                                <button
+                                                  key={opt}
+                                                  type="button"
+                                                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100"
+                                                  onClick={() => {
+                                                    addEquipoLine(it.id, opt);
+                                                    setEquipOpenId(null);
+                                                  }}
+                                                >
+                                                  {opt}
+                                                </button>
+                                              ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      {detail.equipoErr && (
+                                        <div className="text-xs text-red-600 mt-1">
+                                          {detail.equipoErr}
+                                        </div>
+                                      )}
+                                      <div className="flex flex-wrap gap-2 mt-2">
+                                        {equipoLines.map((line) => (
+                                          <div
+                                            key={line}
+                                            className="flex items-center gap-2 border rounded px-2 py-1 text-xs bg-white"
+                                          >
+                                            <span>{line}</span>
+                                            {canEditDetalle && (
+                                              <button
+                                                type="button"
+                                                className="text-red-600 underline"
+                                                onClick={() => removeEquipoLine(it.id, line)}
+                                              >
+                                                Quitar
+                                              </button>
+                                            )}
+                                          </div>
+                                        ))}
+                                        {!equipoLines.length && (
+                                          <span className="text-xs text-gray-500">
+                                            Sin equipos asignados
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
                                     <div>
                                       <label className="text-xs text-gray-500">Unidad de medida</label>
@@ -1606,16 +2163,6 @@ export default function Repuestos() {
                                         value={detailDraft.ubicacion_deposito || ""}
                                         onChange={(e) =>
                                           updateDetalleDraft(it.id, "ubicacion_deposito", e.target.value)
-                                        }
-                                        disabled={!canEditDetalle}
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-xs text-gray-500">Estado</label>
-                                      <Input
-                                        value={detailDraft.estado || ""}
-                                        onChange={(e) =>
-                                          updateDetalleDraft(it.id, "estado", e.target.value)
                                         }
                                         disabled={!canEditDetalle}
                                       />

@@ -33,8 +33,6 @@ services:
       bash -lc "python manage.py migrate --noinput && \
       python manage.py collectstatic --noinput && \
       gunicorn app.wsgi:application -w 3 -k gthread --threads 8 -b 0.0.0.0:8000"
-    ports:
-      - "8000:8000"
     volumes:
       - staticfiles:/app/staticfiles
       - mediafiles:/app/media
@@ -72,8 +70,10 @@ services:
         condition: service_started
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - staticfiles:/static:ro
+      - C:/sepid_certs:/etc/nginx/certs:ro
     restart: unless-stopped
 
   nginx:

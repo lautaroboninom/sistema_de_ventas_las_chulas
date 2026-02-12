@@ -139,6 +139,13 @@ CREATE TABLE IF NOT EXISTS customers (
   email         TEXT
 );
 
+-- Seed minimo para flujos de equipos particulares
+INSERT INTO customers(cod_empresa, razon_social)
+SELECT NULL, 'Particular'
+WHERE NOT EXISTS (
+  SELECT 1 FROM customers WHERE LOWER(razon_social) = 'particular'
+);
+
 -- TODO agregar etiq_garantia_ok a NuevoIgreso
 CREATE TABLE IF NOT EXISTS devices (
   id               INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -167,10 +174,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_ns_norm
   WHERE NULLIF(TRIM(numero_serie), '') IS NOT NULL;
 
 -- Unicidad por número interno normalizado a 'XX ####' (MG|NM|NV|CE)
-CREATE INDEX IF NOT EXISTS idx_devices_numint_norm
-  ON devices ((UPPER(REGEXP_REPLACE(numero_interno,
-       '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))))
-  WHERE numero_interno ~* '^(MG|NM|NV|CE)\s*\d{1,4}$';
+DO $$
+BEGIN
+  BEGIN
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_numint_norm
+      ON devices ((UPPER(REGEXP_REPLACE(numero_interno,
+           '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))))
+      WHERE numero_interno ~* '^(MG|NM|NV|CE)\s*\d{1,4}$';
+  EXCEPTION WHEN OTHERS THEN
+    -- Si hay duplicados en bases legacy, mantener al menos indice no-unico.
+    CREATE INDEX IF NOT EXISTS idx_devices_numint_norm
+      ON devices ((UPPER(REGEXP_REPLACE(numero_interno,
+           '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))))
+      WHERE numero_interno ~* '^(MG|NM|NV|CE)\s*\d{1,4}$';
+  END;
+END $$;
 
 CREATE TABLE IF NOT EXISTS ingresos (
   id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -211,6 +229,188 @@ CREATE TABLE IF NOT EXISTS ingresos (
   resolucion           TEXT NULL
 );
 
+-- Compat de schema para bases legacy (evita parches manuales fase 1/2)
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS numero_interno TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS tipo_equipo TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS variante TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS garantia_vence DATE;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS ubicacion_id INTEGER NULL REFERENCES locations(id) ON DELETE SET NULL;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS propietario_nombre TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS propietario_contacto TEXT;
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS propietario_doc TEXT;
+
+ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS etiq_garantia_ok BOOLEAN;
+ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS garantia_fabrica BOOLEAN;
+ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS propietario_nombre TEXT;
+ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS propietario_contacto TEXT;
+ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS propietario_doc TEXT;
+
+-- Backfill minimo para bases antiguas
+WITH cand AS (
+  SELECT d.id,
+         UPPER(REGEXP_REPLACE(NULLIF(d.n_de_control,''),
+           '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0'))) AS norm
+    FROM devices d
+   WHERE (d.numero_interno IS NULL OR d.numero_interno = '')
+     AND NULLIF(d.n_de_control,'') IS NOT NULL
+)
+UPDATE devices d
+   SET numero_interno = c.norm
+  FROM cand c
+ WHERE d.id = c.id
+   AND c.norm IS NOT NULL
+   AND NOT EXISTS (
+     SELECT 1
+       FROM devices x
+      WHERE x.id <> d.id
+        AND UPPER(REGEXP_REPLACE(x.numero_interno,
+            '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0'))) = c.norm
+   );
+
+UPDATE devices d
+   SET numero_interno = UPPER(REGEXP_REPLACE(d.numero_serie, '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))
+ WHERE d.numero_serie ~* '^(MG|NM|NV|CE)\s*\d{1,4}$'
+   AND (d.numero_interno IS NULL OR d.numero_interno = '')
+   AND NOT EXISTS (
+     SELECT 1
+       FROM devices x
+      WHERE x.id <> d.id
+        AND UPPER(REGEXP_REPLACE(x.numero_interno,
+            '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0'))) =
+            UPPER(REGEXP_REPLACE(d.numero_serie, '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))
+   );
+
+UPDATE devices d
+   SET tipo_equipo = COALESCE(d.tipo_equipo, m.tipo_equipo),
+       variante    = COALESCE(d.variante, m.variante)
+  FROM models m
+ WHERE m.id = d.model_id
+   AND (d.tipo_equipo IS NULL OR d.variante IS NULL);
+
+WITH last_ingreso AS (
+  SELECT DISTINCT ON (t.device_id)
+         t.device_id,
+         NULLIF(t.faja_garantia,'') AS faja
+    FROM ingresos t
+   ORDER BY t.device_id, COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
+)
+UPDATE devices d
+   SET n_de_control = COALESCE(last_ingreso.faja, d.n_de_control)
+  FROM last_ingreso
+ WHERE d.id = last_ingreso.device_id;
+
+WITH last_i AS (
+  SELECT d.id AS device_id,
+         (
+           SELECT t.propietario_nombre
+             FROM ingresos t
+            WHERE t.device_id = d.id
+            ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
+            LIMIT 1
+         ) AS p_nombre,
+         (
+           SELECT t.propietario_contacto
+             FROM ingresos t
+            WHERE t.device_id = d.id
+            ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
+            LIMIT 1
+         ) AS p_contacto,
+         (
+           SELECT t.propietario_doc
+             FROM ingresos t
+            WHERE t.device_id = d.id
+            ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
+            LIMIT 1
+         ) AS p_doc
+    FROM devices d
+)
+UPDATE devices d
+   SET propietario = COALESCE(NULLIF(last_i.p_nombre,''), d.propietario),
+       propietario_nombre = COALESCE(NULLIF(last_i.p_nombre,''), d.propietario_nombre),
+       propietario_contacto = COALESCE(NULLIF(last_i.p_contacto,''), d.propietario_contacto),
+       propietario_doc = COALESCE(NULLIF(last_i.p_doc,''), d.propietario_doc)
+  FROM last_i
+ WHERE d.id = last_i.device_id;
+
+UPDATE devices
+   SET propietario_nombre = COALESCE(propietario_nombre, propietario)
+ WHERE propietario_nombre IS NULL
+   AND NULLIF(COALESCE(propietario,''),'') <> '';
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = ANY(current_schemas(true))
+      AND table_name='devices'
+      AND column_name='etiq_garantia_ok'
+  ) THEN
+    WITH last_ingreso AS (
+      SELECT d.id AS device_id,
+             (
+               SELECT t.id
+               FROM ingresos t
+               WHERE t.device_id = d.id
+               ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
+               LIMIT 1
+             ) AS ingreso_id
+      FROM devices d
+    )
+    UPDATE ingresos t
+       SET etiq_garantia_ok = d.etiq_garantia_ok
+      FROM devices d
+      JOIN last_ingreso li ON li.device_id = d.id
+     WHERE t.id = li.ingreso_id
+       AND d.etiq_garantia_ok IS NOT NULL
+       AND (t.etiq_garantia_ok IS DISTINCT FROM d.etiq_garantia_ok);
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = ANY(current_schemas(true))
+      AND table_name='devices'
+      AND column_name='garantia_bool'
+  ) THEN
+    UPDATE ingresos i
+       SET garantia_fabrica = COALESCE(d.garantia_bool, FALSE)
+      FROM devices d
+     WHERE d.id = i.device_id
+       AND i.garantia_fabrica IS NULL;
+  END IF;
+END $$;
+
+ALTER TABLE devices DROP COLUMN IF EXISTS etiq_garantia_ok;
+ALTER TABLE devices DROP COLUMN IF EXISTS garantia_bool;
+
+DO $$
+DECLARE
+  v_id_dash INTEGER;
+  v_id_desguace INTEGER;
+  v_id_alquilado INTEGER;
+BEGIN
+  INSERT INTO locations(nombre) VALUES ('-')
+    ON CONFLICT (nombre) DO NOTHING;
+
+  SELECT id INTO v_id_dash FROM locations WHERE nombre = '-' LIMIT 1;
+  SELECT id INTO v_id_desguace FROM locations WHERE LOWER(nombre) = LOWER('Desguace') LIMIT 1;
+  SELECT id INTO v_id_alquilado FROM locations WHERE LOWER(nombre) = LOWER('Alquilado') LIMIT 1;
+
+  IF v_id_dash IS NOT NULL THEN
+    IF v_id_desguace IS NOT NULL THEN
+      UPDATE ingresos SET estado='baja', ubicacion_id = v_id_dash WHERE ubicacion_id = v_id_desguace;
+      UPDATE devices SET ubicacion_id = v_id_dash WHERE ubicacion_id = v_id_desguace;
+      DELETE FROM locations WHERE id = v_id_desguace;
+    END IF;
+    IF v_id_alquilado IS NOT NULL THEN
+      UPDATE ingresos SET estado='alquilado', ubicacion_id = v_id_dash WHERE ubicacion_id = v_id_alquilado;
+      UPDATE devices SET ubicacion_id = v_id_dash WHERE ubicacion_id = v_id_alquilado;
+      DELETE FROM locations WHERE id = v_id_alquilado;
+    END IF;
+  END IF;
+END $$;
+
 -- Reglas de garantía (excepciones administrables) - Parte 2 editará, Parte 1 solo lectura
 CREATE TABLE IF NOT EXISTS warranty_rules (
   id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -240,6 +440,8 @@ DECLARE
   v_alquilado BOOLEAN;
   v_alquiler_a TEXT;
   v_propietario_nombre TEXT;
+  v_propietario_contacto TEXT;
+  v_propietario_doc TEXT;
   v_faja TEXT;
   v_ubic_id INTEGER;
   v_is_own BOOLEAN;
@@ -248,8 +450,8 @@ BEGIN
   v_device_id := COALESCE(NEW.device_id, OLD.device_id);
 
   -- Último ingreso del equipo afectado
-  SELECT t.id, t.alquilado, t.alquiler_a, t.propietario_nombre, t.faja_garantia, t.ubicacion_id
-    INTO v_last_id, v_alquilado, v_alquiler_a, v_propietario_nombre, v_faja, v_ubic_id
+  SELECT t.id, t.alquilado, t.alquiler_a, t.propietario_nombre, t.propietario_contacto, t.propietario_doc, t.faja_garantia, t.ubicacion_id
+    INTO v_last_id, v_alquilado, v_alquiler_a, v_propietario_nombre, v_propietario_contacto, v_propietario_doc, v_faja, v_ubic_id
     FROM ingresos t
    WHERE t.device_id = v_device_id
    ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
@@ -274,7 +476,10 @@ BEGIN
          alquiler_a = v_alquiler_a,
          ubicacion_id = COALESCE(v_ubic_id, d.ubicacion_id),
          n_de_control = COALESCE(NULLIF(v_faja, ''), d.n_de_control),
-         propietario = CASE WHEN v_is_own THEN COALESCE(v_propietario_nombre, d.propietario) ELSE d.propietario END,
+         propietario = CASE WHEN v_is_own THEN COALESCE(NULLIF(v_propietario_nombre, ''), d.propietario) ELSE d.propietario END,
+         propietario_nombre = COALESCE(NULLIF(v_propietario_nombre, ''), d.propietario_nombre),
+         propietario_contacto = COALESCE(NULLIF(v_propietario_contacto, ''), d.propietario_contacto),
+         propietario_doc = COALESCE(NULLIF(v_propietario_doc, ''), d.propietario_doc),
          customer_id = CASE WHEN v_is_own AND v_mgbio_id IS NOT NULL THEN v_mgbio_id ELSE d.customer_id END
    WHERE d.id = v_device_id;
 
@@ -292,7 +497,7 @@ AFTER INSERT ON ingresos
 FOR EACH ROW EXECUTE FUNCTION sync_device_snapshot();
 
 CREATE TRIGGER trg_sync_device_snapshot_upd
-AFTER UPDATE OF device_id, fecha_ingreso, fecha_creacion, ubicacion_id, alquiler_a, alquilado, faja_garantia, propietario_nombre ON ingresos
+AFTER UPDATE OF device_id, fecha_ingreso, fecha_creacion, ubicacion_id, alquiler_a, alquilado, faja_garantia, propietario_nombre, propietario_contacto, propietario_doc ON ingresos
 FOR EACH ROW EXECUTE FUNCTION sync_device_snapshot();
 
 CREATE TRIGGER trg_sync_device_snapshot_del
@@ -326,6 +531,10 @@ CREATE TABLE IF NOT EXISTS quote_items (
   repuesto_codigo TEXT NULL,
   costo_u_neto NUMERIC(12,2) NULL
 );
+
+-- Compat con schemas previos de quote_items
+ALTER TABLE quote_items ADD COLUMN IF NOT EXISTS repuesto_codigo TEXT;
+ALTER TABLE quote_items ADD COLUMN IF NOT EXISTS costo_u_neto NUMERIC(12,2);
 
 CREATE TABLE IF NOT EXISTS ingreso_events (
   id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -567,6 +776,97 @@ CREATE TABLE IF NOT EXISTS catalogo_repuestos (
   CONSTRAINT uq_catalogo_repuestos_codigo UNIQUE (codigo)
 );
 
+-- Compat con schemas previos de repuestos
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS costo_usd NUMERIC(12,2);
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC(12,2);
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS multiplicador NUMERIC(10,4);
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS stock_on_hand NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS stock_min NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS tipo_articulo TEXT;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS categoria TEXT;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS unidad_medida TEXT;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS marca_fabricante TEXT;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS nro_parte TEXT;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS ubicacion_deposito TEXT;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS estado TEXT;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS notas TEXT;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS fecha_ultima_compra DATE;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS fecha_ultimo_conteo DATE;
+ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS fecha_vencimiento DATE;
+
+CREATE TABLE IF NOT EXISTS repuestos_subrubros (
+  codigo TEXT PRIMARY KEY,
+  nombre TEXT NOT NULL,
+  activo BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO repuestos_subrubros(codigo, nombre, activo, updated_at) VALUES
+  ('1201','Mascara nasal',TRUE,NOW()),
+  ('1202','Mascara buconasal',TRUE,NOW()),
+  ('1203','Tubuladura',TRUE,NOW()),
+  ('1204','Jarra',TRUE,NOW()),
+  ('1205','Camaras',TRUE,NOW()),
+  ('1206','Canulas',TRUE,NOW()),
+  ('1207','Adaptador',TRUE,NOW()),
+  ('1208','Filtro',TRUE,NOW()),
+  ('1209','Kit',TRUE,NOW()),
+  ('1210','Modulo',TRUE,NOW()),
+  ('1211','Banda toracica',TRUE,NOW()),
+  ('1212','Sensor',TRUE,NOW()),
+  ('1213','Insumos varios',TRUE,NOW()),
+  ('1214','Pie de suero',TRUE,NOW()),
+  ('1215','Resucitador',TRUE,NOW()),
+  ('1216','Conector',TRUE,NOW()),
+  ('1217','Mascara total face',TRUE,NOW()),
+  ('1218','Prolongador',TRUE,NOW()),
+  ('1219','Bolso',TRUE,NOW()),
+  ('1220','Frasco',TRUE,NOW()),
+  ('1221','Circuito',TRUE,NOW()),
+  ('1222','Sonda',TRUE,NOW()),
+  ('1223','Acc. Monitor',TRUE,NOW()),
+  ('1224','Acc. Videolaring.',TRUE,NOW()),
+  ('1225','Lamparas',TRUE,NOW()),
+  ('1401','A-220',TRUE,NOW()),
+  ('1402','A-550',TRUE,NOW()),
+  ('1403','Generico',TRUE,NOW()),
+  ('1404','C-500',TRUE,NOW()),
+  ('1405','A-600',TRUE,NOW()),
+  ('1406','G3',TRUE,NOW()),
+  ('1407','G4',TRUE,NOW()),
+  ('1408','G5',TRUE,NOW()),
+  ('1409','INOGEN',TRUE,NOW()),
+  ('1410','324',TRUE,NOW()),
+  ('1501','Turbina',TRUE,NOW()),
+  ('1502','Placa',TRUE,NOW()),
+  ('1503','Zeolita',TRUE,NOW()),
+  ('1504','Canister',TRUE,NOW()),
+  ('1505','Ventilador',TRUE,NOW()),
+  ('1506','Teclado',TRUE,NOW()),
+  ('1507','Conector',TRUE,NOW()),
+  ('1508','Cable',TRUE,NOW()),
+  ('1509','Baterias',TRUE,NOW()),
+  ('1510','Compresor',TRUE,NOW()),
+  ('1511','Interfaz de usuario',TRUE,NOW()),
+  ('1512','Panel de acceso',TRUE,NOW()),
+  ('1513','Columnas',TRUE,NOW()),
+  ('1514','Compresor',TRUE,NOW()),
+  ('1515','Celda de O2',TRUE,NOW()),
+  ('1516','Acc. Magnamed',TRUE,NOW()),
+  ('1517','Repuesto generico',TRUE,NOW()),
+  ('1518','Labios',TRUE,NOW()),
+  ('1519','Valvulas',TRUE,NOW()),
+  ('1520','Transformador',TRUE,NOW()),
+  ('1521','Capacitor',TRUE,NOW()),
+  ('1522','Flowmeter',TRUE,NOW()),
+  ('1601','Instalaciones de equip.',TRUE,NOW()),
+  ('1602','Aspirador de uso continuo',TRUE,NOW())
+ON CONFLICT (codigo) DO UPDATE SET
+  nombre = EXCLUDED.nombre,
+  activo = TRUE,
+  updated_at = NOW();
+
 CREATE TABLE IF NOT EXISTS repuestos_config (
   id                    INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   dolar_ars             NUMERIC(12,4) NOT NULL DEFAULT 0,
@@ -595,6 +895,42 @@ CREATE TABLE IF NOT EXISTS repuestos_movimientos (
   nota       TEXT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by INTEGER NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS repuestos_cambios (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  repuesto_id INTEGER NULL REFERENCES catalogo_repuestos(id) ON DELETE SET NULL,
+  codigo TEXT NULL,
+  accion TEXT NOT NULL,
+  nombre_prev TEXT NULL,
+  nombre_new TEXT NULL,
+  nota TEXT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_by INTEGER NULL REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS repuestos_proveedores (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  repuesto_id INTEGER NOT NULL REFERENCES catalogo_repuestos(id) ON DELETE CASCADE,
+  proveedor_id INTEGER NOT NULL REFERENCES proveedores_externos(id) ON DELETE RESTRICT,
+  sku_proveedor TEXT NULL,
+  lead_time_dias INTEGER NULL,
+  prioridad INTEGER NULL,
+  ultima_compra DATE NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_repuestos_proveedores UNIQUE (repuesto_id, proveedor_id)
+);
+
+CREATE TABLE IF NOT EXISTS repuestos_stock_permisos (
+  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tecnico_id INTEGER NOT NULL REFERENCES users(id),
+  enabled_by INTEGER NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ NULL,
+  revoked_by INTEGER NULL REFERENCES users(id),
+  nota TEXT NULL
 );
 
 CREATE TABLE IF NOT EXISTS ingreso_accesorios (
@@ -727,8 +1063,15 @@ CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_ingreso ON ingreso_alquiler_acces
 
 CREATE INDEX IF NOT EXISTS idx_catalogo_repuestos_codigo_ci ON catalogo_repuestos ((LOWER(codigo)));
 CREATE INDEX IF NOT EXISTS idx_catalogo_repuestos_nombre_ci ON catalogo_repuestos ((LOWER(nombre)));
+CREATE INDEX IF NOT EXISTS idx_repuestos_subrubros_nombre_ci ON repuestos_subrubros ((LOWER(nombre)));
 CREATE INDEX IF NOT EXISTS idx_repuestos_movimientos_repuesto_id ON repuestos_movimientos(repuesto_id);
 CREATE INDEX IF NOT EXISTS idx_repuestos_movimientos_created_at ON repuestos_movimientos(created_at);
+CREATE INDEX IF NOT EXISTS idx_repuestos_cambios_created_at ON repuestos_cambios(created_at);
+CREATE INDEX IF NOT EXISTS idx_repuestos_cambios_codigo_ci ON repuestos_cambios ((LOWER(codigo)));
+CREATE INDEX IF NOT EXISTS idx_repuestos_proveedores_repuesto_id ON repuestos_proveedores(repuesto_id);
+CREATE INDEX IF NOT EXISTS idx_repuestos_proveedores_proveedor_id ON repuestos_proveedores(proveedor_id);
+CREATE INDEX IF NOT EXISTS idx_repuestos_stock_permisos_tecnico_id ON repuestos_stock_permisos(tecnico_id);
+CREATE INDEX IF NOT EXISTS idx_repuestos_stock_permisos_expires_at ON repuestos_stock_permisos(expires_at);
 CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_accesorio ON ingreso_alquiler_accesorios(accesorio_id);
 
 CREATE INDEX IF NOT EXISTS idx_mte_marca ON marca_tipos_equipo(marca_id);
@@ -832,6 +1175,31 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_quote_items') THEN
     CREATE TRIGGER trg_audit_quote_items
     AFTER INSERT OR UPDATE OR DELETE ON quote_items
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_marcas') THEN
+    CREATE TRIGGER trg_audit_marcas
+    AFTER INSERT OR UPDATE OR DELETE ON marcas
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_models') THEN
+    CREATE TRIGGER trg_audit_models
+    AFTER INSERT OR UPDATE OR DELETE ON models
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_customers') THEN
+    CREATE TRIGGER trg_audit_customers
+    AFTER INSERT OR UPDATE OR DELETE ON customers
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_users') THEN
+    CREATE TRIGGER trg_audit_users
+    AFTER INSERT OR UPDATE OR DELETE ON users
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_proveedores_externos') THEN
+    CREATE TRIGGER trg_audit_proveedores_externos
+    AFTER INSERT OR UPDATE OR DELETE ON proveedores_externos
     FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
   END IF;
 END $$;

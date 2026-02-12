@@ -201,8 +201,25 @@ export default function CatalogoMarcas() {
 
   // Técnicos / tipo de equipo
   async function guardarTecnicoMarcaYApli(){ if(!sel) return; if(!marcaTecId ? !confirm("Vas a dejar la marca sin técnico. ¿Continuar?") : !confirm("Aplicar este técnico a TODOS los modelos de la marca (sobrescribe). ¿Continuar?")) return; try{ setLoading(true); setErr(""); setMsg(""); await patchMarcaTecnico(sel.id, marcaTecId ? Number(marcaTecId) : null); await postMarcaAplicarTecnico(sel.id, true); setMsg("Técnico de marca guardado y aplicado a todos los modelos."); setSel(prev => prev ? { ...prev, tecnico_id: (marcaTecId || null) ? Number(marcaTecId) : null } : prev); await loadModelos(sel.id);} catch(e){ setErr(e.message || "No se pudo asignar/aplicar el técnico de la marca"); } finally{ setLoading(false);} }
-  async function guardarTecnicoModelo(modelId){ const tId = mdlTecSel[modelId] || null; try{ setLoading(true); setErr(""); setMsg(""); await patchModeloTecnico(sel.id, modelId, tId ? Number(tId) : null); setMsg("Técnico del modelo guardado."); setModelos(ms => ms.map(m => m.id === modelId ? { ...m, tecnico_id: tId ? Number(tId) : null } : m)); } catch(e){ setErr(e.message || "No se pudo guardar el técnico del modelo"); } finally{ setLoading(false);} }
-  async function guardarTipoEquipo(modelId){ const tipoText=(mdlTipoSel[modelId]||"").trim(); try{ setLoading(true); setErr(""); setMsg(""); await patchModeloTipoEquipo(sel.id, modelId, { tipo_equipo: tipoText }); setMsg("Tipo de equipo del modelo guardado."); setModelos(ms => ms.map(m => m.id === modelId ? { ...m, tipo_equipo: tipoText } : m)); const updated = modelos.find(m=>m.id===modelId); if(updated){ await ensureModelCatalogVariants({ ...updated, tipo_equipo: tipoText }); } } catch(e){ setErr(e.message || "No se pudo guardar el tipo de equipo"); } finally{ setLoading(false);} }
+  async function guardarModelo(modelId){
+    const tecnicoId = mdlTecSel[modelId] ? Number(mdlTecSel[modelId]) : null;
+    const tipoText = (mdlTipoSel[modelId] || "").trim();
+    try{
+      setLoading(true);
+      setErr("");
+      setMsg("");
+      await patchModeloTipoEquipo(sel.id, modelId, { tipo_equipo: tipoText });
+      await patchModeloTecnico(sel.id, modelId, tecnicoId);
+      setModelos(ms => ms.map(m => m.id === modelId ? { ...m, tipo_equipo: tipoText, tecnico_id: tecnicoId } : m));
+      const updated = modelos.find(m => m.id === modelId);
+      if (updated) await ensureModelCatalogVariants({ ...updated, tipo_equipo: tipoText });
+      setMsg("Modelo guardado.");
+    } catch(e){
+      setErr(e.message || "No se pudo guardar la configuración del modelo");
+    } finally{
+      setLoading(false);
+    }
+  }
 
   return (
     <div className="grid md:grid-cols-2 gap-6">
@@ -376,8 +393,7 @@ export default function CatalogoMarcas() {
                     </div>
 
                     <div className="md:col-span-12 flex gap-2 justify-end mt-3">
-                      <button className="px-3 py-2 border rounded disabled:opacity-60" onClick={() => guardarTipoEquipo(md.id)} type="button" disabled={loading} title="Guardar tipo de equipo">Guardar tipo</button>
-                      <button className="px-3 py-2 border rounded disabled:opacity-60" onClick={() => guardarTecnicoModelo(md.id)} type="button" disabled={loading}>Guardar tcnico</button>
+                      <button className="px-3 py-2 border rounded disabled:opacity-60" onClick={() => guardarModelo(md.id)} type="button" disabled={loading} title="Guardar tipo de equipo y técnico">Guardar</button>
                       <button className="px-3 py-2 border rounded" onClick={() => delModelo(md.id)} type="button">Eliminar</button>
                     </div>
                   </div>

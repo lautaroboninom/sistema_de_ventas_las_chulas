@@ -18,4 +18,3 @@ try {
     Write-Error ("Error sincronizando trazabilidad: " + $_.Exception.Message)
     exit 1
 }
-

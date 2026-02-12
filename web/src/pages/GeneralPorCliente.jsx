@@ -1,6 +1,6 @@
 // web/src/pages/GeneralPorCliente.jsx
 import { useEffect, useMemo, useState } from "react";
-import api, { getClientes, downloadAuth } from "../lib/api";
+import api, { getClientesBasico, downloadAuth } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { ingresoIdOf, formatOS, formatDateOnly, norm, tipoEquipoOf, resolveFechaIngreso, resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
 import useQueryState from "../hooks/useQueryState";
@@ -28,7 +28,7 @@ export default function GeneralPorCliente() {
       try {
         setErrClientes("");
         setLoadingClientes(true);
-        const data = await getClientes(); // /api/catalogos/clientes/
+        const data = await getClientesBasico(); // /api/clientes/
         setClientes(Array.isArray(data) ? data : []);
       } catch (e) {
         setErrClientes(e?.message || "No se pudieron cargar los clientes");

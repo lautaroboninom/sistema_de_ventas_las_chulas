@@ -18,7 +18,7 @@ const isStockAlquiler = (r) => {
 };
 
 const estadoValido = (r) => {
-  const estado = (r?.estado || '').toLowerCase();
+  const estado = (r?.estado || '').toString().trim().toLowerCase();
   return !ESTADOS_EXCLUIR.has(estado);
 };
 

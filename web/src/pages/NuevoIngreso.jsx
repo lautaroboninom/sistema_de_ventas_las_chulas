@@ -41,6 +41,7 @@ export default function NuevoIngreso() {
   const prefillModelAppliedRef = useRef(false);
   const prefillClienteAppliedRef = useRef(false);
   const prefillSkipTipoResetRef = useRef(false);
+  const prefillTipoAppliedRef = useRef(false);
 
   // Catálogos base
   const [marcas, setMarcas] = useState([]);
@@ -207,6 +208,7 @@ export default function NuevoIngreso() {
     prefillModelAppliedRef.current = false;
     prefillClienteAppliedRef.current = false;
     prefillSkipTipoResetRef.current = true;
+    prefillTipoAppliedRef.current = false;
     prefillRef.current = prefill;
 
     setForm((f0) => {
@@ -219,6 +221,11 @@ export default function NuevoIngreso() {
     });
     if (prefill.marca_id) setMarcaId(prefill.marca_id);
     if (prefill.marca) setMarcaTxt(prefill.marca);
+    if (prefill.tipo_equipo) {
+      prefillSkipTipoResetRef.current = true;
+      prefillTipoAppliedRef.current = true;
+      setTipoSel(prefill.tipo_equipo);
+    }
     const variantePrefill = prefill.variante || prefill.equipo_variante || "";
     if (variantePrefill) setVarianteTxt(variantePrefill);
     if (prefill.customer_nombre || prefill.alquiler_a) {
@@ -384,6 +391,18 @@ export default function NuevoIngreso() {
     const m = (modelos || []).find((x) => x.id === Number(form.equipo.modelo_id));
     return m?.tipo_equipo || "";
   }, [modelos, form.equipo.modelo_id]);
+
+  useEffect(() => {
+    if (!prefillAppliedRef.current || prefillTipoAppliedRef.current) return;
+    if (tipoSel) {
+      prefillTipoAppliedRef.current = true;
+      return;
+    }
+    if (!tipoEquipoSel) return;
+    prefillSkipTipoResetRef.current = true;
+    prefillTipoAppliedRef.current = true;
+    setTipoSel(tipoEquipoSel);
+  }, [tipoEquipoSel, tipoSel]);
 
   // Carga inicial por secciones (mensajes por sección)
   useEffect(() => {
@@ -571,9 +590,20 @@ export default function NuevoIngreso() {
 
   // Cambio de tipo => filtra marcas
   useEffect(() => {
-    if (prefillSkipTipoResetRef.current && !tipoSel) {
+    if (prefillSkipTipoResetRef.current) {
       prefillSkipTipoResetRef.current = false;
-      setMarcasPorTipo([]);
+      if (!tipoSel) {
+        setMarcasPorTipo([]);
+        return;
+      }
+      (async () => {
+        try {
+          const rows = await getMarcasPorTipo(tipoSel);
+          setMarcasPorTipo(rows || []);
+        } catch {
+          setMarcasPorTipo([]);
+        }
+      })();
       return;
     }
     setMarcaTxt("");

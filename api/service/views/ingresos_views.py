@@ -133,7 +133,7 @@ def _send_mail_with_fallback(subject, body, recipients):
         if port_cfg == 587:
             try:
                 conn = get_connection(
-                    backend="django.core.mail.backends.smtp.EmailBackend",
+                    backend=getattr(settings, "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"),
                     host=getattr(settings, "EMAIL_HOST", None),
                     port=465,
                     username=getattr(settings, "EMAIL_HOST_USER", None),
@@ -774,6 +774,8 @@ class EntregarIngresoView(APIView):
         factura = (data.get("factura_numero") or "").strip() or None
         fecha_entrega = data.get("fecha_entrega") or None
         retira_persona = (data.get("retira_persona") or "").strip()
+        estado_to = "entregado"
+        set_alquilado = False
         # Si es CAMBIO, verificar serie contra la cargada al cerrar
         serial_confirm = (data.get("serial_confirm") or "").strip()
         try:
@@ -806,6 +808,36 @@ class EntregarIngresoView(APIView):
         except Exception:
             # fallback: no bloquear la entrega por errores de verificacion
             pass
+        try:
+            info = q(
+                """
+                SELECT t.alquilado,
+                       COALESCE(d.numero_serie,'') AS numero_serie,
+                       COALESCE(d.numero_interno,'') AS numero_interno,
+                       COALESCE(loc.nombre,'') AS ubicacion_nombre
+                  FROM ingresos t
+                  LEFT JOIN devices d ON d.id = t.device_id
+                  LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                 WHERE t.id=%s
+                """,
+                [ingreso_id],
+                one=True,
+            ) or {}
+            ns = (info.get("numero_serie") or "").strip()
+            ni = (info.get("numero_interno") or "").strip()
+            import re
+            pat = re.compile(r"\bMG \d{4}\b", re.IGNORECASE)
+            is_mg = bool(pat.search(ns) or pat.search(ni)) or (
+                ns.strip().upper().startswith("MG ") or ni.strip().upper().startswith("MG ")
+            )
+            loc_norm = _norm_txt(info.get("ubicacion_nombre") or "")
+            target_loc_norm = _norm_txt("Estanteria de Alquiler")
+            if bool(info.get("alquilado")) or is_mg or loc_norm == target_loc_norm:
+                estado_to = "alquilado"
+                set_alquilado = True
+        except Exception:
+            # No bloquear la entrega por errores de deteccion
+            pass
         comentarios_update = None
         if retira_persona:
             try:
@@ -821,13 +853,15 @@ class EntregarIngresoView(APIView):
             with connection.cursor() as cur:
                 dash_id = _dash_location_id()
                 sets = [
-                    "estado='entregado'",
+                    "estado=%s",
                     "remito_salida=%s",
                     "factura_numero=%s",
                     "fecha_entrega=COALESCE(%s, now())",
                     "ubicacion_id = COALESCE(%s, ubicacion_id)",
                 ]
-                params = [remito, factura, fecha_entrega, dash_id]
+                params = [estado_to, remito, factura, fecha_entrega, dash_id]
+                if set_alquilado:
+                    sets.append("alquilado=true")
                 if comentarios_update is not None:
                     sets.append("comentarios=%s")
                     params.append(comentarios_update)
@@ -842,13 +876,20 @@ class EntregarIngresoView(APIView):
                 exec_void(
                     """
                     INSERT INTO ingreso_events (ticket_id, a_estado, usuario_id, comentario)
-                    SELECT %s, 'entregado', %s, 'Entrega registrada'
+                    SELECT %s, %s, %s, %s
                     WHERE NOT EXISTS (
                         SELECT 1 FROM ingreso_events
-                         WHERE ingreso_id=%s AND a_estado='entregado'
+                         WHERE ingreso_id=%s AND a_estado=%s
                     )
                     """,
-                    [ingreso_id, uid, ingreso_id],
+                    [
+                        ingreso_id,
+                        estado_to,
+                        uid,
+                        "Alquiler registrado" if estado_to == "alquilado" else "Entrega registrada",
+                        ingreso_id,
+                        estado_to,
+                    ],
                 )
         except Exception:
             # No bloquear la entrega si falla la auditoria de eventos
@@ -1469,8 +1510,8 @@ class GeneralEquiposView(APIView):
         page_raw = (request.GET.get("page") or "").strip()
         page_size_raw = (request.GET.get("page_size") or "").strip()
 
-        estados = [e.strip() for e in estado_raw.split(",") if e.strip()] if estado_raw else []
-        excluir_estados = [e.strip() for e in excluir_estados_raw.split(",") if e.strip()] if excluir_estados_raw else []
+        estados = [e.strip().lower() for e in estado_raw.split(",") if e.strip()] if estado_raw else []
+        excluir_estados = [e.strip().lower() for e in excluir_estados_raw.split(",") if e.strip()] if excluir_estados_raw else []
         solo_taller_param_present = ("solo_taller" in request.GET)
         solo_taller = solo_taller_raw in ("1", "true", "yes", "y", "t")
         delivered = delivered_raw in ("1", "true", "yes", "y", "t")
@@ -1531,11 +1572,11 @@ class GeneralEquiposView(APIView):
                     params.append("taller")
             if estados:
                 placeholders = ",".join(["%s"] * len(estados))
-                wh.append(f"t.estado IN ({placeholders})")
+                wh.append(f"LOWER(TRIM(COALESCE(t.estado::text,''))) IN ({placeholders})")
                 params.extend(estados)
             if excluir_estados:
                 placeholders = ",".join(["%s"] * len(excluir_estados))
-                wh.append(f"t.estado NOT IN ({placeholders})")
+                wh.append(f"LOWER(TRIM(COALESCE(t.estado::text,''))) NOT IN ({placeholders})")
                 params.extend(excluir_estados)
             # Busqueda flexible por varios campos (OS, cliente, equipo, estado, serie, interno, ubicacion).
             if q_raw:
@@ -1998,7 +2039,7 @@ class IngresoSolicitarAsignacionView(APIView):
 class PendientesGeneralView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
-        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        require_roles(request, ["jefe", "admin", "jefe_veedor", "tecnico"])
         tecnico_raw = (request.GET.get("tecnico_id") or "").strip()
 
         with connection.cursor() as cur:
@@ -3022,6 +3063,28 @@ class IngresoDetalleView(APIView):
                     row["serial_cambio"] = (sc[0] if sc else None)
         except Exception:
             pass
+        # Si está en garantía de reparación, traer trabajos realizados del último servicio entregado
+        if row.get("garantia_reparacion"):
+            try:
+                prev = q(
+                    """
+                    SELECT id, trabajos_realizados
+                      FROM ingresos
+                     WHERE device_id = %s
+                       AND fecha_entrega IS NOT NULL
+                       AND id <> %s
+                     ORDER BY fecha_entrega DESC, id DESC
+                     LIMIT 1
+                    """,
+                    [row.get("device_id"), row.get("id")],
+                    one=True,
+                )
+            except Exception:
+                prev = None
+            if prev:
+                row["garantia_reparacion_trabajos"] = prev.get("trabajos_realizados")
+            else:
+                row["garantia_reparacion_trabajos"] = None
         row["os"] = os_label(row["id"])
         if not row.get("fecha_creacion"):
             row["fecha_creacion"] = row.get("fecha_ingreso")
@@ -3301,9 +3364,9 @@ class IngresoDetalleView(APIView):
             try:
                 new_cid = int(d.get("customer_id") or d.get("cliente_id"))
             except Exception:
-                return Response({"detail": "customer_id inv�lido"}, status=400)
+                return Response({"detail": "customer_id invalido"}, status=400)
             if new_cid <= 0:
-                return Response({"detail": "customer_id inv�lido"}, status=400)
+                return Response({"detail": "customer_id invalido"}, status=400)
             c_row = q("SELECT id FROM customers WHERE id=%s", [new_cid], one=True)
             if not c_row:
                 return Response({"detail": "Cliente inexistente"}, status=404)
@@ -3401,7 +3464,7 @@ class IngresoDetalleView(APIView):
                     [ns, ingreso_id],
                 )
             # Si no vino 'garantia' explí­cito, auto-chequear por N/S
-            # removed: auto-chequeo de garantí­a por N/S (fuente: Último ingreso)
+            # removed: auto-chequeo de garantia por N/S (fuente: ultimo ingreso)
                 # (bloque removido)
         # Permitir actualizar variante de equipo (texto libre)
         if "equipo_variante" in d:
@@ -3419,7 +3482,32 @@ class IngresoDetalleView(APIView):
                 raise PermissionDenied("No autorizado para editar informe preliminar")
             sets_no_estado.append("informe_preliminar = NULLIF(%s,'')")
             params_no_estado.append((d.get("informe_preliminar") or "").strip())
-        # (actualización de garantÃ­a en devices removida)
+        if "motivo" in d:
+            if rol not in ROL_EDIT_BASICS:
+                raise PermissionDenied("No autorizado para editar motivo")
+            motivo_raw = (d.get("motivo") or "").strip()
+            if not motivo_raw:
+                raise ValidationError("motivo requerido")
+            motivo_label_raw = _map_motivo_to_db_label(motivo_raw)
+            if not motivo_label_raw:
+                valid_motivos = _get_motivo_enum_values()
+                return Response({"detail": "motivo invalido", "valid_values": valid_motivos}, status=400)
+            raw_vals = _get_motivo_enum_values_raw() or []
+            if raw_vals:
+                target = None
+                norm_target = _norm_txt(motivo_label_raw)
+                for rv in raw_vals:
+                    if _norm_txt(rv) == norm_target:
+                        target = rv
+                        break
+                if not target:
+                    target = next((x for x in raw_vals if _norm_txt(x) == _norm_txt("otros")), raw_vals[0])
+                motivo_db = target
+            else:
+                motivo_db = motivo_label_raw
+            sets_no_estado.append("motivo=%s")
+            params_no_estado.append(motivo_db)
+        # (actualizacion de garantia en devices removida)
             # bloque removido
 
 
@@ -3662,3 +3750,4 @@ __all__ = [
     'IngresoHistorialView',
     'CerrarReparacionView',
 ]
+
