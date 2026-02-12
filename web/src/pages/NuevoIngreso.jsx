@@ -1,4 +1,4 @@
-// web/src/pages/NuevoIngreso.jsx (UTF-8 authoring; will be re-encoded to Windows-1252)
+﻿// web/src/pages/NuevoIngreso.jsx (UTF-8 authoring; will be re-encoded to Windows-1252)
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -41,6 +41,7 @@ export default function NuevoIngreso() {
   const prefillModelAppliedRef = useRef(false);
   const prefillClienteAppliedRef = useRef(false);
   const prefillSkipTipoResetRef = useRef(false);
+  const prefillTipoAppliedRef = useRef(false);
 
   // Catálogos base
   const [marcas, setMarcas] = useState([]);
@@ -94,8 +95,8 @@ export default function NuevoIngreso() {
   const [propietario, setPropietario] = useState({ nombre: "", contacto: "", doc: "" });
   const [tecnicos, setTecnicos] = useState([]);
   const [tecnicoId, setTecnicoId] = useState(null);
-  // Empresa a facturar (SEPID por defecto)
-  const [empresaFact, setEmpresaFact] = useState("SEPID");
+  // Empresa a facturar (EQUILUX por defecto)
+  const [empresaFact, setEmpresaFact] = useState("EQUILUX");
 
   const [loading, setLoading] = useState(false);
   const [out, setOut] = useState(null);
@@ -181,7 +182,7 @@ export default function NuevoIngreso() {
     setAccItems([]);
     setPropietario({ nombre: "", contacto: "", doc: "" });
     setTecnicoId(null);
-    setEmpresaFact("SEPID");
+    setEmpresaFact("EQUILUX");
     setVarianteTxt("");
     setMgLookup({ loading: false, notFound: false, checkedNs: "" });
     setMgAutoFilled(false);
@@ -207,6 +208,7 @@ export default function NuevoIngreso() {
     prefillModelAppliedRef.current = false;
     prefillClienteAppliedRef.current = false;
     prefillSkipTipoResetRef.current = true;
+    prefillTipoAppliedRef.current = false;
     prefillRef.current = prefill;
 
     setForm((f0) => {
@@ -219,6 +221,11 @@ export default function NuevoIngreso() {
     });
     if (prefill.marca_id) setMarcaId(prefill.marca_id);
     if (prefill.marca) setMarcaTxt(prefill.marca);
+    if (prefill.tipo_equipo) {
+      prefillSkipTipoResetRef.current = true;
+      prefillTipoAppliedRef.current = true;
+      setTipoSel(prefill.tipo_equipo);
+    }
     const variantePrefill = prefill.variante || prefill.equipo_variante || "";
     if (variantePrefill) setVarianteTxt(variantePrefill);
     if (prefill.customer_nombre || prefill.alquiler_a) {
@@ -384,6 +391,18 @@ export default function NuevoIngreso() {
     const m = (modelos || []).find((x) => x.id === Number(form.equipo.modelo_id));
     return m?.tipo_equipo || "";
   }, [modelos, form.equipo.modelo_id]);
+
+  useEffect(() => {
+    if (!prefillAppliedRef.current || prefillTipoAppliedRef.current) return;
+    if (tipoSel) {
+      prefillTipoAppliedRef.current = true;
+      return;
+    }
+    if (!tipoEquipoSel) return;
+    prefillSkipTipoResetRef.current = true;
+    prefillTipoAppliedRef.current = true;
+    setTipoSel(tipoEquipoSel);
+  }, [tipoEquipoSel, tipoSel]);
 
   // Carga inicial por secciones (mensajes por sección)
   useEffect(() => {
@@ -571,9 +590,20 @@ export default function NuevoIngreso() {
 
   // Cambio de tipo => filtra marcas
   useEffect(() => {
-    if (prefillSkipTipoResetRef.current && !tipoSel) {
+    if (prefillSkipTipoResetRef.current) {
       prefillSkipTipoResetRef.current = false;
-      setMarcasPorTipo([]);
+      if (!tipoSel) {
+        setMarcasPorTipo([]);
+        return;
+      }
+      (async () => {
+        try {
+          const rows = await getMarcasPorTipo(tipoSel);
+          setMarcasPorTipo(rows || []);
+        } catch {
+          setMarcasPorTipo([]);
+        }
+      })();
       return;
     }
     setMarcaTxt("");
@@ -664,7 +694,7 @@ export default function NuevoIngreso() {
           contacto: propietario.contacto || "",
           doc: propietario.doc || "",
         },
-        empresa_facturar: (empresaFact || "SEPID").toUpperCase(),
+        empresa_facturar: (empresaFact || "EQUILUX").toUpperCase(),
         // Checkbox representa "fajas abiertas" => etiq_garantia_ok debe ser la negaci?n
         etiq_garantia_ok: !form.etiq_garantia_ok,
       };
@@ -760,7 +790,7 @@ export default function NuevoIngreso() {
                 list={clientesPerm ? "clientes_rs" : undefined}
                 value={clienteRsInput}
                 onChange={(e) => onClienteRsChange(e.target.value)}
-                placeholder="Escribí y elegí de la lista"
+                placeholder="Escriba y elija­ de la lista"
                 required
               />
               {clientesPerm && (
@@ -846,11 +876,10 @@ export default function NuevoIngreso() {
         {/* Empresa a facturar */}
         <div className="border rounded p-3">
           <label className="text-sm">Empresa a facturar</label>
-          <Select value={empresaFact} onChange={(e) => setEmpresaFact((e.target.value || "SEPID").toUpperCase())}>
-            <option value="SEPID">SEPID SA</option>
-            <option value="MGBIO">MG BIO</option>
+          <Select value={empresaFact} onChange={(e) => setEmpresaFact((e.target.value || "EQUILUX").toUpperCase())}>
+            <option value="EQUILUX">EQUILUX MD</option>
           </Select>
-          <div className="text-xs text-gray-500 mt-1">Por defecto: SEPID SA</div>
+          <div className="text-xs text-gray-500 mt-1">Por defecto: EQUILUX MD</div>
         </div>
 
         {/* Equipo */}
@@ -880,7 +909,7 @@ export default function NuevoIngreso() {
                 ))}
               </datalist>
               {marcaTxt && !marcaId && (
-                <div className="text-xs text-red-600 mt-1">Elegí una marca de las sugeridas.</div>
+                <div className="text-xs text-red-600 mt-1">Elija­ una marca de las sugeridas.</div>
               )}
             </div>
 
@@ -888,7 +917,7 @@ export default function NuevoIngreso() {
             <div className="md:col-span-2">
               <label className="text-sm">Modelo</label>
               <Select value={form.equipo.modelo_id} onChange={onChange("equipo.modelo_id")} disabled={!marcaId || !modelos.length}>
-                <option value="">{!marcaId ? "Elegí marca primero" : "Seleccioná modelo"}</option>
+                <option value="">{!marcaId ? "Elija­ marca primero" : "Seleccioná modelo"}</option>
                 {modelos.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.nombre}
@@ -1010,7 +1039,7 @@ export default function NuevoIngreso() {
               <div className="flex flex-wrap items-end gap-3 mb-2">
                 <div className="grow min-w-[260px]">
                   <label className="block text-sm text-gray-600 mb-1">Descripción</label>
-                  <input className="border rounded p-2 w-full" list="accesorios_catalogo" value={nuevoAcc.descripcion} onChange={(e) => setNuevoAcc((s) => ({ ...s, descripcion: e.target.value }))} placeholder="Escribí y elegí de la lista" />
+                  <input className="border rounded p-2 w-full" list="accesorios_catalogo" value={nuevoAcc.descripcion} onChange={(e) => setNuevoAcc((s) => ({ ...s, descripcion: e.target.value }))} placeholder="Escriba y elija­ de la lista" />
                   <datalist id="accesorios_catalogo">
                     {(Array.isArray(accesCatalogo) ? accesCatalogo : []).map((a) => (
                       <option key={a.id} value={a.nombre} />
@@ -1026,7 +1055,7 @@ export default function NuevoIngreso() {
                   if (!d) return;
                   const acc = (accesCatalogo || []).find((a) => (a.nombre || "").trim().toLowerCase() === d);
                   if (!acc) {
-                    setErr("Elegí una descripción válida de la lista");
+                    setErr("Elija­ una descripción válida de la lista");
                     return;
                   }
                   setAccItems((list) => [

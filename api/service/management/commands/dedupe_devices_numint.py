@@ -9,8 +9,8 @@ import re
 class Command(BaseCommand):
     help = (
         "Deduplica devices por numero_interno normalizado (MG|NM|NV|CE ####). "
-        "Mantiene el menor device.id como canónico, reasigna ingresos al canónico, "
-        "y consolida snapshot usando datos del último ingreso."
+        "Mantiene el menor device.id como canÃ³nico, reasigna ingresos al canÃ³nico, "
+        "y consolida snapshot usando datos del Ãºltimo ingreso."
     )
 
     def add_arguments(self, parser):
@@ -50,11 +50,11 @@ class Command(BaseCommand):
             w.writerow(headers)
             w.writerows(rows)
 
-    def _find_mgbio_id(self, cur) -> Optional[int]:
+    def _find_own_customer_id(self, cur) -> Optional[int]:
         cur.execute(
             """
             SELECT id FROM customers
-             WHERE LOWER(razon_social) LIKE '%mg%bio%'
+             WHERE LOWER(razon_social) LIKE '%equilux%'
              ORDER BY id ASC LIMIT 1
             """
         )
@@ -115,7 +115,7 @@ class Command(BaseCommand):
                 )
                 groups = cur.fetchall() or []
 
-                mgbio_id = self._find_mgbio_id(cur)
+                own_customer_id = self._find_own_customer_id(cur)
                 processed = 0
                 for numint_norm, device_ids, marca_ids, model_ids, customer_ids, internals in groups:
                     if limit and processed >= limit:
@@ -133,7 +133,7 @@ class Command(BaseCommand):
                     for row in cur.fetchall() or []:
                         backup_devices.append(list(row))
 
-                    # Último ingreso global
+                    # Ãšltimo ingreso global
                     cur.execute(
                         """
                         SELECT t.id, t.device_id, t.alquilado, t.alquiler_a,
@@ -178,8 +178,8 @@ class Command(BaseCommand):
                             break
 
                     chosen_customer = None
-                    if is_own and mgbio_id:
-                        chosen_customer = mgbio_id
+                    if is_own and own_customer_id:
+                        chosen_customer = own_customer_id
                     else:
                         chosen_customer = _majority(list(customer_ids)) or int(customer_ids[0])
 
@@ -198,7 +198,7 @@ class Command(BaseCommand):
                                 "UPDATE ingresos SET device_id=%s WHERE device_id = ANY(%s)",
                                 [canonical_id, removed_ids],
                             )
-                        # Consolidar canónico y setear numero_interno normalizado
+                        # Consolidar canÃ³nico y setear numero_interno normalizado
                         cur.execute(
                             """
                             UPDATE devices
@@ -264,4 +264,3 @@ class Command(BaseCommand):
         self._write_csv(backups_ingresos_csv, backup_ingresos[0], backup_ingresos[1:])
 
         self.stdout.write(("DRY-RUN " if dry else "APLICADO ") + "OK: Dedupe por numero_interno | Reportes en docs")
-

@@ -1,21 +1,27 @@
-﻿version: "3.9"
-
-
-name: sistemadereparaciones
+name: equilux-reparaciones
 services:
   reverse-proxy:
-    image: traefik:v3.0
-    container_name: sepid-traefik
-    command: []
-    environment:
-      - TRAEFIK_CERTIFICATESRESOLVERS_LE_ACME_EMAIL=${TRAEFIK_ACME_EMAIL:-ops@example.com}
+    image: traefik:v2.11
+    container_name: equilux-traefik
+    command:
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=traefik-proxy"
+      - "--certificatesresolvers.le.acme.email=${TRAEFIK_ACME_EMAIL:-ops@example.com}"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      - "--log.level=INFO"
+      - "--accesslog=true"
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./deploy/traefik/traefik.yml:/traefik.yml:ro
-      - ./deploy/traefik/acme.json:/letsencrypt/acme.json
+      - letsencrypt_data:/letsencrypt
     labels:
       - "traefik.enable=true"
       # Middlewares defined on this container for reuse
@@ -37,7 +43,7 @@ services:
 
   postgres:
     image: postgres:16
-    container_name: sistemadereparaciones-postgres
+    container_name: equilux-reparaciones-postgres
     env_file: .env.prod.internet
     volumes:
       - pg_data:/var/lib/postgresql/data
@@ -55,7 +61,7 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.prod
-    container_name: sistemadereparaciones-api
+    container_name: equilux-reparaciones-api
     env_file: .env.prod.internet
     environment:
       - DJANGO_SETTINGS_MODULE=app.settings_internet
@@ -65,6 +71,7 @@ services:
         condition: service_healthy
     command: >
       bash -lc "python manage.py migrate --noinput && \
+      python manage.py apply_repuestos_schema && \
       gunicorn app.wsgi:application -w 3 -k gthread --threads 8 -b 0.0.0.0:8000"
     volumes:
       - staticfiles:/app/staticfiles
@@ -78,7 +85,8 @@ services:
         read_only: true
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api-secure.rule=Host(`reparaciones.sepid.com.ar`) && PathPrefix(`/api`)"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.api-secure.rule=Host(`${PUBLIC_DOMAIN:-reparacionesequilux}`) && PathPrefix(`/api`)"
       - "traefik.http.routers.api-secure.entrypoints=websecure"
       - "traefik.http.routers.api-secure.tls=true"
       - "traefik.http.routers.api-secure.tls.certresolver=le"
@@ -92,10 +100,10 @@ services:
   web:
     build:
       context: ./web
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.prod.internet
       args:
         - VITE_API_URL=${VITE_API_URL}
-    container_name: sistemadereparaciones-web
+    container_name: equilux-reparaciones-web
     environment:
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
     depends_on:
@@ -105,7 +113,8 @@ services:
       - staticfiles:/static:ro
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.web-secure.rule=Host(`reparaciones.sepid.com.ar`) && PathPrefix(`/`)"
+      - "traefik.docker.network=traefik-proxy"
+      - "traefik.http.routers.web-secure.rule=Host(`${PUBLIC_DOMAIN:-reparacionesequilux}`) && PathPrefix(`/`)"
       - "traefik.http.routers.web-secure.entrypoints=websecure"
       - "traefik.http.routers.web-secure.tls=true"
       - "traefik.http.routers.web-secure.tls.certresolver=le"
@@ -128,5 +137,7 @@ volumes:
   pg_data:
   staticfiles:
   mediafiles:
+  letsencrypt_data:
+
 
 

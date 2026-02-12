@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getDevices, patchDeviceIdentificadores, postDevicesMerge } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -114,10 +114,15 @@ export default function Equipos() {
   const [params, setParams] = useState({}); // to trigger reload
   const nav = useNavigate();
   const [mergeOpen, setMergeOpen] = useState(false);
-  const [mergeTarget, setMergeTarget] = useState(null);
-  const [mergeSourceId, setMergeSourceId] = useState("");
-  const [mergeNs, setMergeNs] = useState("");
-  const [mergeCopyMg, setMergeCopyMg] = useState(false);
+  const [mergeEquipo1, setMergeEquipo1] = useState(null);
+  const [mergeEquipo2, setMergeEquipo2] = useState(null);
+  const [mergeStep, setMergeStep] = useState(1);
+  const [mergeSearch, setMergeSearch] = useState("");
+  const [mergeSearchResults, setMergeSearchResults] = useState([]);
+  const [mergeSearching, setMergeSearching] = useState(false);
+  const [mergeSearchErr, setMergeSearchErr] = useState("");
+  const [mergeNsChoice, setMergeNsChoice] = useState("equipo1");
+  const [mergeMgChoice, setMergeMgChoice] = useState("equipo1");
   const [mergeErr, setMergeErr] = useState("");
   const [mergeSaving, setMergeSaving] = useState(false);
   const [sort, setSort] = useState("-id");
@@ -206,6 +211,85 @@ export default function Equipos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasNext, page, loadingMore]);
 
+  const resetMergeState = () => {
+    setMergeOpen(false);
+    setMergeEquipo1(null);
+    setMergeEquipo2(null);
+    setMergeStep(1);
+    setMergeSearch("");
+    setMergeSearchResults([]);
+    setMergeSearching(false);
+    setMergeSearchErr("");
+    setMergeNsChoice("equipo1");
+    setMergeMgChoice("equipo1");
+    setMergeErr("");
+    setMergeSaving(false);
+  };
+
+  const openMergeFor = (row) => {
+    setMergeEquipo1(row);
+    setMergeEquipo2(null);
+    setMergeStep(1);
+    setMergeSearch("");
+    setMergeSearchResults([]);
+    setMergeSearching(false);
+    setMergeSearchErr("");
+    setMergeNsChoice("equipo1");
+    setMergeMgChoice("equipo1");
+    setMergeErr("");
+    setMergeSaving(false);
+    setMergeOpen(true);
+  };
+
+  const runMergeSearch = async () => {
+    const term = (mergeSearch || "").trim();
+    if (!term) {
+      setMergeSearchResults([]);
+      setMergeSearchErr("Ingresá un N/S o número interno para buscar.");
+      return;
+    }
+    try {
+      setMergeSearching(true);
+      setMergeSearchErr("");
+      const res = await getDevices({ q: term, page: 1, page_size: 20, sort: "id" });
+      const items = Array.isArray(res) ? res : (res.items || []);
+      const filtered = items.filter((item) => item.id !== mergeEquipo1?.id);
+      setMergeSearchResults(filtered);
+      if (!filtered.length) {
+        setMergeSearchErr("No hay resultados para esa búsqueda.");
+      }
+    } catch (e) {
+      setMergeSearchErr(e?.message || "No se pudo buscar el equipo.");
+      setMergeSearchResults([]);
+    } finally {
+      setMergeSearching(false);
+    }
+  };
+
+  const selectMergeEquipo2 = (row) => {
+    setMergeEquipo2(row);
+    const nsDefault = mergeEquipo1?.numero_serie
+      ? "equipo1"
+      : (row?.numero_serie ? "equipo2" : "equipo1");
+    const mgDefault = mergeEquipo1?.numero_interno
+      ? "equipo1"
+      : (row?.numero_interno ? "equipo2" : "equipo1");
+    setMergeNsChoice(nsDefault);
+    setMergeMgChoice(mgDefault);
+    setMergeStep(2);
+    setMergeErr("");
+  };
+
+  const mergeNsFinal = mergeNsChoice === "equipo1"
+    ? (mergeEquipo1?.numero_serie || "")
+    : (mergeEquipo2?.numero_serie || "");
+  const mergeMgFinal = mergeMgChoice === "equipo1"
+    ? (mergeEquipo1?.numero_interno || "")
+    : (mergeEquipo2?.numero_interno || "");
+  const mergeNsFinalValue = (mergeNsFinal || "").trim();
+  const mergeMgFinalValue = (mergeMgFinal || "").trim();
+  const canSubmitMerge = !!mergeEquipo1 && !!mergeEquipo2 && !!mergeNsFinalValue && !mergeSaving;
+
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
@@ -257,7 +341,7 @@ export default function Equipos() {
       ) : rows.length === 0 ? (
         <div className="text-sm text-gray-500">No hay resultados.</div>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto overflow-y-visible">
           <table className="min-w-full text-sm">
             <thead>
               <tr className="text-left">
@@ -350,12 +434,7 @@ export default function Equipos() {
                                   className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
                                   onClick={() => {
                                     close();
-                                    setMergeTarget(row);
-                                    setMergeSourceId("");
-                                    setMergeNs(row.numero_serie || "");
-                                    setMergeCopyMg(false);
-                                    setMergeErr("");
-                                    setMergeOpen(true);
+                                    openMergeFor(row);
                                   }}
                                 >
                                   Unificar
@@ -391,90 +470,250 @@ export default function Equipos() {
         />
       )}
 
-      {mergeOpen && mergeTarget && (
+      {mergeOpen && mergeEquipo1 && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded shadow-lg w-full max-w-xl p-4">
-            <div className="text-lg font-semibold mb-1">Unificar equipo</div>
-            <div className="text-sm text-gray-600 mb-3">
-              Se mantiene el equipo #{mergeTarget.id}. Mové ingresos del equipo fuente al destino y fijá N/S final.
+          <div className="bg-white rounded shadow-lg w-full max-w-4xl p-4">
+            <div className="flex items-start justify-between mb-3 gap-3">
+              <div>
+                <div className="text-lg font-semibold">Unificar equipos</div>
+                <div className="text-sm text-gray-600">Paso {mergeStep} de 2</div>
+              </div>
+              {mergeStep === 2 && (
+                <button
+                  className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                  onClick={() => setMergeStep(1)}
+                  disabled={mergeSaving}
+                >
+                  Cambiar equipo 2
+                </button>
+              )}
             </div>
+
             {mergeErr && (
               <div className="bg-red-100 text-red-800 border border-red-300 rounded p-2 mb-3">
                 {mergeErr}
               </div>
             )}
-            <div className="space-y-3">
-              <div className="text-sm">
-                <div className="text-gray-700">Destino</div>
-                <div className="text-gray-900 font-medium">
-                  #{mergeTarget.id} · NS: {mergeTarget.numero_serie || "-"} · MG: {mergeTarget.numero_interno || "-"}
+
+            {mergeStep === 1 ? (
+              <div className="space-y-3">
+                <div className="text-sm">
+                  <div className="text-gray-700">Equipo 1</div>
+                  <div className="text-gray-900 font-medium">
+                    #{mergeEquipo1.id} - NS: {mergeEquipo1.numero_serie || "-"} - MG: {mergeEquipo1.numero_interno || "-"}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {mergeEquipo1.marca || "-"} {mergeEquipo1.modelo || ""}
+                  </div>
+                </div>
+
+                <label className="block">
+                  <div className="text-sm text-gray-700 mb-1">Buscar equipo 2 (N/S o MG)</div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={mergeSearch}
+                      onChange={(e) => setMergeSearch(e.target.value)}
+                      className="border rounded p-2 w-full"
+                      placeholder="Ej: MG 1234 o NS 00123"
+                      disabled={mergeSearching}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") runMergeSearch();
+                      }}
+                    />
+                    <button
+                      className="btn"
+                      onClick={runMergeSearch}
+                      disabled={mergeSearching}
+                    >
+                      Buscar
+                    </button>
+                  </div>
+                </label>
+
+                {mergeSearchErr && (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                    {mergeSearchErr}
+                  </div>
+                )}
+
+                <div className="border rounded overflow-auto max-h-72">
+                  {mergeSearching ? (
+                    <div className="text-xs text-gray-500 p-3">Buscando...</div>
+                  ) : mergeSearchResults.length ? (
+                    <table className="min-w-full text-xs">
+                      <thead>
+                        <tr className="text-left bg-gray-50">
+                          <th className="p-2">ID</th>
+                          <th className="p-2">N/S</th>
+                          <th className="p-2">MG</th>
+                          <th className="p-2">Marca/Modelo</th>
+                          <th className="p-2 text-right">Accion</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mergeSearchResults.map((row) => (
+                          <tr key={row.id} className="border-t">
+                            <td className="p-2 font-mono">{row.id}</td>
+                            <td className="p-2">{row.numero_serie || "-"}</td>
+                            <td className="p-2">{row.numero_interno || "-"}</td>
+                            <td className="p-2">
+                              <div className="font-medium">{row.marca || "-"}</div>
+                              <div className="text-xs text-gray-500">{row.modelo || "-"}</div>
+                            </td>
+                            <td className="p-2 text-right">
+                              <button
+                                className="px-2 py-1 rounded border text-xs hover:bg-gray-50"
+                                onClick={() => selectMergeEquipo2(row)}
+                              >
+                                Seleccionar
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="text-xs text-gray-500 p-3">
+                      Busca por N/S o MG para ver resultados.
+                    </div>
+                  )}
                 </div>
               </div>
-              <label className="block">
-                <div className="text-sm text-gray-700 mb-1">Equipo fuente (ID)</div>
-                <input
-                  type="number"
-                  value={mergeSourceId}
-                  onChange={(e) => setMergeSourceId(e.target.value)}
-                  className="border rounded p-2 w-full"
-                  placeholder="ID del equipo a unificar (se eliminará)"
-                  disabled={mergeSaving}
-                />
-              </label>
-              <label className="block">
-                <div className="text-sm text-gray-700 mb-1">Número de serie final (destino)</div>
-                <input
-                  type="text"
-                  value={mergeNs}
-                  onChange={(e) => setMergeNs(e.target.value)}
-                  className="border rounded p-2 w-full"
-                  disabled={mergeSaving}
-                />
-              </label>
-              <label className="block flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={mergeCopyMg}
-                  onChange={(e) => setMergeCopyMg(e.target.checked)}
-                  disabled={mergeSaving}
-                />
-                Copiar MG del equipo fuente si el destino no tiene MG
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button className="px-3 py-1.5 rounded border" onClick={() => setMergeOpen(false)} disabled={mergeSaving}>
+            ) : (
+              <div className="space-y-4">
+                {mergeEquipo2 ? (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="border rounded p-3 bg-gray-50">
+                        <div className="text-xs uppercase text-gray-500">Equipo 1</div>
+                        <div className="text-sm font-medium">#{mergeEquipo1.id}</div>
+                        <div className="text-xs text-gray-600">NS: {mergeEquipo1.numero_serie || "-"}</div>
+                        <div className="text-xs text-gray-600">MG: {mergeEquipo1.numero_interno || "-"}</div>
+                        <div className="text-xs text-gray-500">
+                          {mergeEquipo1.marca || "-"} {mergeEquipo1.modelo || ""}
+                        </div>
+                      </div>
+                      <div className="border rounded p-3 bg-gray-50">
+                        <div className="text-xs uppercase text-gray-500">Equipo 2</div>
+                        <div className="text-sm font-medium">#{mergeEquipo2.id}</div>
+                        <div className="text-xs text-gray-600">NS: {mergeEquipo2.numero_serie || "-"}</div>
+                        <div className="text-xs text-gray-600">MG: {mergeEquipo2.numero_interno || "-"}</div>
+                        <div className="text-xs text-gray-500">
+                          {mergeEquipo2.marca || "-"} {mergeEquipo2.modelo || ""}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="border rounded p-3">
+                      <div className="text-sm font-medium mb-2">N/S final</div>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="radio"
+                          name="merge-ns"
+                          value="equipo1"
+                          checked={mergeNsChoice === "equipo1"}
+                          onChange={() => setMergeNsChoice("equipo1")}
+                          disabled={mergeSaving}
+                        />
+                        Equipo 1: {mergeEquipo1.numero_serie || "(vacio)"}
+                      </label>
+                      <label className="flex items-center gap-2 text-sm mt-2">
+                        <input
+                          type="radio"
+                          name="merge-ns"
+                          value="equipo2"
+                          checked={mergeNsChoice === "equipo2"}
+                          onChange={() => setMergeNsChoice("equipo2")}
+                          disabled={mergeSaving}
+                        />
+                        Equipo 2: {mergeEquipo2.numero_serie || "(vacio)"}
+                      </label>
+                      {!mergeNsFinalValue && (
+                        <div className="text-xs text-amber-700 mt-2">
+                          El N/S elegido esta vacio; no se puede unificar.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="border rounded p-3">
+                      <div className="text-sm font-medium mb-2">Numero interno final</div>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="radio"
+                          name="merge-mg"
+                          value="equipo1"
+                          checked={mergeMgChoice === "equipo1"}
+                          onChange={() => setMergeMgChoice("equipo1")}
+                          disabled={mergeSaving}
+                        />
+                        Equipo 1: {mergeEquipo1.numero_interno || "(vacio)"}
+                      </label>
+                      <label className="flex items-center gap-2 text-sm mt-2">
+                        <input
+                          type="radio"
+                          name="merge-mg"
+                          value="equipo2"
+                          checked={mergeMgChoice === "equipo2"}
+                          onChange={() => setMergeMgChoice("equipo2")}
+                          disabled={mergeSaving}
+                        />
+                        Equipo 2: {mergeEquipo2.numero_interno || "(vacio)"}
+                      </label>
+                      {!mergeMgFinalValue && (mergeEquipo1.numero_interno || mergeEquipo2.numero_interno) && (
+                        <div className="text-xs text-amber-700 mt-2">
+                          El equipo elegido no tiene MG; el MG final quedara vacio.
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-gray-600">Selecciona un equipo 2 para continuar.</div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-between items-center mt-4">
+              <button
+                className="px-3 py-1.5 rounded border"
+                onClick={resetMergeState}
+                disabled={mergeSaving}
+              >
                 Cancelar
               </button>
-              <button
-                className="px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
-                disabled={mergeSaving || !mergeSourceId || !mergeNs}
-                onClick={async () => {
-                  setMergeErr("");
-                  try {
-                    setMergeSaving(true);
-                    await postDevicesMerge({
-                      target_id: mergeTarget.id,
-                      source_id: Number(mergeSourceId),
-                      numero_serie: mergeNs,
-                      copy_mg_if_missing: mergeCopyMg,
-                    });
-                    setMergeOpen(false);
-                    setMergeTarget(null);
-                    setParams({ ts: Date.now() });
-                    load(1, { reset: true });
-                  } catch (e) {
-                    const ctype = e?.data?.conflict_type;
-                    if (ctype === "MG_MISMATCH") setMergeErr("Los equipos tienen MG distintos; no se puede unificar.");
-                    else if (ctype === "NS_DUPLICATE") setMergeErr("El N/S final ya está en uso por otro equipo.");
-                    else if (ctype === "MG_DUPLICATE") setMergeErr("El MG a copiar ya está en uso por otro equipo.");
-                    else setMergeErr(e?.message || "No se pudo unificar.");
-                  } finally {
-                    setMergeSaving(false);
-                  }
-                }}
-              >
-                Unificar
-              </button>
+              {mergeStep === 2 && (
+                <button
+                  className="px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                  disabled={!canSubmitMerge}
+                  onClick={async () => {
+                    if (!mergeEquipo1 || !mergeEquipo2 || !mergeNsFinalValue) return;
+                    setMergeErr("");
+                    try {
+                      setMergeSaving(true);
+                      await postDevicesMerge({
+                        target_id: mergeEquipo1.id,
+                        source_id: mergeEquipo2.id,
+                        numero_serie: mergeNsFinalValue,
+                        numero_interno: mergeMgFinalValue,
+                      });
+                      resetMergeState();
+                      setParams({ ts: Date.now() });
+                      load(1, { reset: true });
+                    } catch (e) {
+                      const ctype = e?.data?.conflict_type;
+                      if (ctype === "MG_MISMATCH") setMergeErr("Los equipos tienen MG distintos; no se puede unificar.");
+                      else if (ctype === "NS_DUPLICATE") setMergeErr("El N/S final ya esta en uso por otro equipo.");
+                      else if (ctype === "MG_DUPLICATE") setMergeErr("El MG elegido ya esta en uso por otro equipo.");
+                      else if (ctype === "MG_INVALID") setMergeErr("El MG elegido no es valido.");
+                      else setMergeErr(e?.message || "No se pudo unificar.");
+                    } finally {
+                      setMergeSaving(false);
+                    }
+                  }}
+                >
+                  Unificar
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -523,3 +762,4 @@ function SortableTh({ label, field, sort, setSort }) {
     </th>
   );
 }
+

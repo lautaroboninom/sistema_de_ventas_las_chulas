@@ -71,6 +71,97 @@ class Command(BaseCommand):
             with connection.cursor() as cur:
                 cur.execute(
                     """
+                    DO $$
+                    BEGIN
+                      -- Fix known broken labels caused by encoding mismatches during manual schema load.
+                      IF EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'reparaci??n'
+                      ) AND NOT EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'reparación'
+                      ) THEN
+                        ALTER TYPE motivo_ingreso RENAME VALUE 'reparaci??n' TO 'reparación';
+                      END IF;
+
+                      IF EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'reparaciÃ³n'
+                      ) AND NOT EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'reparación'
+                      ) THEN
+                        ALTER TYPE motivo_ingreso RENAME VALUE 'reparaciÃ³n' TO 'reparación';
+                      END IF;
+
+                      IF EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'reparaci??n alquiler'
+                      ) AND NOT EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'reparación alquiler'
+                      ) THEN
+                        ALTER TYPE motivo_ingreso RENAME VALUE 'reparaci??n alquiler' TO 'reparación alquiler';
+                      END IF;
+
+                      IF EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'reparaciÃ³n alquiler'
+                      ) AND NOT EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'reparación alquiler'
+                      ) THEN
+                        ALTER TYPE motivo_ingreso RENAME VALUE 'reparaciÃ³n alquiler' TO 'reparación alquiler';
+                      END IF;
+
+                      IF EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'devoluci??n demo'
+                      ) AND NOT EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'devolución demo'
+                      ) THEN
+                        ALTER TYPE motivo_ingreso RENAME VALUE 'devoluci??n demo' TO 'devolución demo';
+                      END IF;
+
+                      IF EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'devoluciÃ³n demo'
+                      ) AND NOT EXISTS (
+                        SELECT 1
+                        FROM pg_type t
+                        JOIN pg_enum e ON e.enumtypid = t.oid
+                        WHERE t.typname = 'motivo_ingreso' AND e.enumlabel = 'devolución demo'
+                      ) THEN
+                        ALTER TYPE motivo_ingreso RENAME VALUE 'devoluciÃ³n demo' TO 'devolución demo';
+                      END IF;
+                    END$$;
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS catalogo_repuestos (
                       id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                       codigo       TEXT NOT NULL,

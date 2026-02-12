@@ -8,8 +8,8 @@ import csv
 class Command(BaseCommand):
     help = (
         "Fase 1: Deduplica devices por numero_serie (normalizado). "
-        "Mantiene el menor device.id como canónico, reasigna ingresos al canónico, "
-        "y consolida snapshot usando datos del último ingreso."
+        "Mantiene el menor device.id como canÃƒÂ³nico, reasigna ingresos al canÃƒÂ³nico, "
+        "y consolida snapshot usando datos del ÃƒÂºltimo ingreso."
     )
 
     def add_arguments(self, parser):
@@ -39,13 +39,13 @@ class Command(BaseCommand):
             w.writerow(headers)
             w.writerows(rows)
 
-    def _find_mgbio_id(self, cur) -> Optional[int]:
-        # Heurística: buscar cliente MGBIO por nombre
+    def _find_own_customer_id(self, cur) -> Optional[int]:
+        # HeurÃƒÂ­stica: buscar cliente propio (Equilux) por nombre
         cur.execute(
             """
             SELECT id
               FROM customers
-             WHERE LOWER(razon_social) LIKE '%mg%bio%'
+             WHERE LOWER(razon_social) LIKE '%equilux%'
              ORDER BY id ASC
              LIMIT 1
             """
@@ -107,7 +107,7 @@ class Command(BaseCommand):
                 )
                 groups = cur.fetchall() or []
 
-                mgbio_id = self._find_mgbio_id(cur)
+                own_customer_id = self._find_own_customer_id(cur)
 
                 processed = 0
                 for ns_norm, device_ids, marca_ids, model_ids, customer_ids, series in groups:
@@ -126,7 +126,7 @@ class Command(BaseCommand):
                     for row in cur.fetchall() or []:
                         backup_devices.append(list(row))
 
-                    # 2) Recolectar último ingreso global entre todos los devices del grupo
+                    # 2) Recolectar ÃƒÂºltimo ingreso global entre todos los devices del grupo
                     cur.execute(
                         """
                         SELECT t.id, t.device_id, t.alquilado, t.alquiler_a,
@@ -149,7 +149,7 @@ class Command(BaseCommand):
                     snap_propietario = last_row[4] if last_row else None
                     snap_n_de_control = last_row[6] if last_row else None
 
-                    # 3) Elegir marca/modelo consistente: mayoría de valores no nulos
+                    # 3) Elegir marca/modelo consistente: mayorÃƒÂ­a de valores no nulos
                     def _majority(values: List[Optional[int]]) -> Optional[int]:
                         counts: Dict[int, int] = {}
                         for v in values:
@@ -174,12 +174,12 @@ class Command(BaseCommand):
 
                     # 5) customer_id a fijar
                     chosen_customer = None
-                    if is_own and mgbio_id:
-                        chosen_customer = mgbio_id
+                    if is_own and own_customer_id:
+                        chosen_customer = own_customer_id
                     else:
                         chosen_customer = _majority(list(customer_ids)) or int(customer_ids[0])
 
-                    # 6) Reasignar ingresos de duplicados y consolidar device canónico
+                    # 6) Reasignar ingresos de duplicados y consolidar device canÃƒÂ³nico
                     # Backups de ingresos a mover
                     if removed_ids:
                         cur.execute(
@@ -190,14 +190,14 @@ class Command(BaseCommand):
                             backup_ingresos.append(list(row))
 
                     if not dry:
-                        # Reasignar ingresos a canónico
+                        # Reasignar ingresos a canÃƒÂ³nico
                         if removed_ids:
                             cur.execute(
                                 "UPDATE ingresos SET device_id=%s WHERE device_id = ANY(%s)",
                                 [canonical_id, removed_ids],
                             )
 
-                        # Consolidar snapshot en device canónico
+                        # Consolidar snapshot en device canÃƒÂ³nico
                         cur.execute(
                             """
                             UPDATE devices
@@ -266,3 +266,4 @@ class Command(BaseCommand):
         self._write_csv(backups_ingresos_csv, backup_ingresos[0], backup_ingresos[1:])
 
         self.stdout.write(("DRY-RUN " if dry else "APLICADO ") + "OK: Fase 1 dedupe | Reportes en docs")
+

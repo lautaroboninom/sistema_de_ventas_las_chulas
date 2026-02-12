@@ -1,9 +1,9 @@
-name: sistemadereparaciones
+name: equilux-reparaciones
 
 services:
   postgres:
     image: postgres:16
-    container_name: sistemadereparaciones-postgres
+    container_name: equilux-reparaciones-postgres
     env_file: .env.prod
     ports:
       - "5432:5432"
@@ -21,7 +21,7 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.prod
-    container_name: sistemadereparaciones-api
+    container_name: equilux-reparaciones-api
     env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=app.settings_prod
@@ -31,6 +31,7 @@ services:
         condition: service_healthy
     command: >
       bash -lc "python manage.py migrate --noinput && \
+      python manage.py apply_repuestos_schema && \
       python manage.py collectstatic --noinput && \
       gunicorn app.wsgi:application -w 3 -k gthread --threads 8 -b 0.0.0.0:8000"
     ports:
@@ -46,7 +47,7 @@ services:
         target: /repuestos
         read_only: true
       - type: bind
-        source: "C:/trazabilidad_general"
+        source: "C:/trazabilidad_equilux"
         target: /trazabilidad
         read_only: true
     restart: unless-stopped
@@ -63,7 +64,7 @@ services:
         - VITE_API_URL=${VITE_API_URL:-}
         - VITE_SOURCEMAP=${VITE_SOURCEMAP:-1}
         - VITE_SW=${VITE_SW:-0}
-    container_name: sistemadereparaciones-web
+    container_name: equilux-reparaciones-web
     command: ["nginx", "-g", "daemon off;"]
     environment:
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
@@ -72,8 +73,10 @@ services:
         condition: service_started
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - staticfiles:/static:ro
+      - C:/equilux_certs:/etc/nginx/certs:ro
     restart: unless-stopped
 
   nginx:
@@ -82,8 +85,10 @@ services:
 
 volumes:
   pg_data:
+    name: equilux-reparaciones_pg_data
   staticfiles:
   mediafiles:
+
 
 
 

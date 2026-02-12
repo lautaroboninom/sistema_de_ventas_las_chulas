@@ -1,7 +1,5 @@
 -- schema/postgres.sql
 -- Esquema consolidado para PostgreSQL (12+)
--- Unifica DDL, índices, vistas y triggers necesarios para la app.
--- Objetivo: base “prolija” y mínima sin parches adicionales.
 
 SET TIME ZONE 'America/Argentina/Buenos_Aires';
 CREATE EXTENSION IF NOT EXISTS citext;
@@ -98,6 +96,26 @@ CREATE TABLE IF NOT EXISTS users (
     CHECK (NOT (rol = 'tecnico' AND perm_ingresar = TRUE))
 );
 
+-- Usuario operativo inicial (seed)
+INSERT INTO users (nombre, email, hash_pw, rol, activo, perm_ingresar)
+VALUES (
+  'Servicio Tecnico',
+  'serviciotecnico@equiluxmd.com',
+  'argon2$argon2id$v=19$m=102400,t=2,p=8$ZnJJbjhEY01qanNmZjhvSGxyVmhHQQ$M8A857V8fgEgdZSx6JfzCQPfp1WyNhWx8KRWAxGwDdo',
+  'jefe',
+  TRUE,
+  FALSE
+)
+ON CONFLICT (email) DO UPDATE
+SET nombre = EXCLUDED.nombre,
+    rol = EXCLUDED.rol,
+    activo = TRUE,
+    perm_ingresar = FALSE,
+    hash_pw = CASE
+      WHEN users.hash_pw IS NULL OR users.hash_pw = '' THEN EXCLUDED.hash_pw
+      ELSE users.hash_pw
+    END;
+
 CREATE TABLE IF NOT EXISTS marcas (
   id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   nombre      TEXT NOT NULL,
@@ -120,11 +138,10 @@ CREATE TABLE IF NOT EXISTS locations (
   nombre  TEXT NOT NULL UNIQUE
 );
 
--- Seed mínimo indispensable
+-- Seed mí­nimo indispensable
 INSERT INTO locations(nombre) VALUES
   ('Taller'),
-  ('Sarmiento'),
-  ('Estantería de Alquiler'),
+  ('Estanterí­a de Alquiler'),
   ('-')
 ON CONFLICT DO NOTHING;
 
@@ -155,12 +172,12 @@ CREATE TABLE IF NOT EXISTS devices (
   propietario_nombre   TEXT,
   propietario_contacto TEXT,
   propietario_doc      TEXT,
-  n_de_control     TEXT,    -- N° faja garantía (snapshot del último ingreso)
+  n_de_control     TEXT,    -- N° faja garantí­a (snapshot del último ingreso)
   alquilado        BOOLEAN NOT NULL DEFAULT FALSE,
   alquiler_a       TEXT
 );
 
--- Índices funcionales y unicidad (normalizados)
+-- índices funcionales y unicidad (normalizados)
 -- Unicidad por número de serie normalizado (UPPER, sin espacios ni guiones)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_ns_norm
   ON devices ((UPPER(REPLACE(REPLACE(numero_serie, ' ', ''), '-', ''))))
@@ -211,7 +228,7 @@ CREATE TABLE IF NOT EXISTS ingresos (
   resolucion           TEXT NULL
 );
 
--- Reglas de garantía (excepciones administrables) - Parte 2 editará, Parte 1 solo lectura
+-- Reglas de garantí­a (excepciones administrables) - Parte 2 editará, Parte 1 solo lectura
 CREATE TABLE IF NOT EXISTS warranty_rules (
   id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   brand_id      INTEGER NULL REFERENCES marcas(id) ON DELETE SET NULL,
@@ -243,7 +260,7 @@ DECLARE
   v_faja TEXT;
   v_ubic_id INTEGER;
   v_is_own BOOLEAN;
-  v_mgbio_id INTEGER;
+  v_own_customer_id INTEGER;
 BEGIN
   v_device_id := COALESCE(NEW.device_id, OLD.device_id);
 
@@ -261,10 +278,10 @@ BEGIN
     FROM devices d
    WHERE d.id = v_device_id;
 
-  -- Buscar id de MGBIO si aplica (heurístico por nombre)
+  -- Buscar id del cliente propio si aplica (heurí­stico por nombre)
   IF v_is_own THEN
-    SELECT id INTO v_mgbio_id FROM customers
-     WHERE LOWER(razon_social) LIKE '%mg%bio%'
+    SELECT id INTO v_own_customer_id FROM customers
+     WHERE LOWER(razon_social) LIKE '%equilux%'
      ORDER BY id ASC LIMIT 1;
   END IF;
 
@@ -275,7 +292,7 @@ BEGIN
          ubicacion_id = COALESCE(v_ubic_id, d.ubicacion_id),
          n_de_control = COALESCE(NULLIF(v_faja, ''), d.n_de_control),
          propietario = CASE WHEN v_is_own THEN COALESCE(v_propietario_nombre, d.propietario) ELSE d.propietario END,
-         customer_id = CASE WHEN v_is_own AND v_mgbio_id IS NOT NULL THEN v_mgbio_id ELSE d.customer_id END
+         customer_id = CASE WHEN v_is_own AND v_own_customer_id IS NOT NULL THEN v_own_customer_id ELSE d.customer_id END
    WHERE d.id = v_device_id;
 
   RETURN NULL;
@@ -465,7 +482,7 @@ CREATE INDEX IF NOT EXISTS ix_audit_change_log_ts ON audit.change_log(ts DESC);
 CREATE INDEX IF NOT EXISTS ix_audit_change_log_ingreso ON audit.change_log(ingreso_id, ts DESC);
 CREATE INDEX IF NOT EXISTS ix_audit_change_log_table ON audit.change_log(table_name, record_id, ts DESC);
 
--- Función genérica de auditoría por fila (INSERT/UPDATE/DELETE)
+-- Función genérica de auditorí­a por fila (INSERT/UPDATE/DELETE)
 CREATE OR REPLACE FUNCTION audit.log_row_change()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -541,7 +558,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Accesorios (catálogo y vínculo con ingreso)
+-- Accesorios (catálogo y ví­nculo con ingreso)
 CREATE TABLE IF NOT EXISTS catalogo_accesorios (
   id      INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   nombre  TEXT NOT NULL,
@@ -605,7 +622,7 @@ CREATE TABLE IF NOT EXISTS ingreso_accesorios (
   descripcion   TEXT NULL
 );
 
--- Accesorios asociados específicamente a alquileres de equipos
+-- Accesorios asociados especí­ficamente a alquileres de equipos
 CREATE TABLE IF NOT EXISTS ingreso_alquiler_accesorios (
   id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   ingreso_id    INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
@@ -697,7 +714,7 @@ CREATE TABLE IF NOT EXISTS feriados (
 );
 
 -- =============================
--- Índices
+-- índices
 -- =============================
 CREATE INDEX IF NOT EXISTS idx_models_marca ON models(marca_id);
 CREATE INDEX IF NOT EXISTS idx_models_tecnico ON models(tecnico_id);
@@ -739,7 +756,7 @@ CREATE INDEX IF NOT EXISTS idx_mh_tipo   ON model_hierarchy(tipo_id);
 CREATE INDEX IF NOT EXISTS idx_mh_serie  ON model_hierarchy(serie_id);
 CREATE INDEX IF NOT EXISTS idx_mh_var    ON model_hierarchy(variante_id);
 
--- Unicidad case-insensitive (nombres) mediante índices únicos funcionales
+-- Unicidad case-insensitive (nombres) mediante í­ndices únicos funcionales
 CREATE UNIQUE INDEX IF NOT EXISTS uq_marcas_nombre_ci ON marcas ((LOWER(nombre)));
 CREATE UNIQUE INDEX IF NOT EXISTS uq_models_marca_nombre_ci ON models (marca_id, (LOWER(nombre)));
 CREATE UNIQUE INDEX IF NOT EXISTS uq_catalogo_accesorios_nombre_ci ON catalogo_accesorios ((LOWER(nombre)));
@@ -802,7 +819,7 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- Activar triggers de auditoría por fila (si no existen)
+-- Activar triggers de auditorí­a por fila (si no existen)
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_ingresos') THEN
     CREATE TRIGGER trg_audit_ingresos
@@ -834,5 +851,31 @@ DO $$ BEGIN
     AFTER INSERT OR UPDATE OR DELETE ON quote_items
     FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_marcas') THEN
+    CREATE TRIGGER trg_audit_marcas
+    AFTER INSERT OR UPDATE OR DELETE ON marcas
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_models') THEN
+    CREATE TRIGGER trg_audit_models
+    AFTER INSERT OR UPDATE OR DELETE ON models
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_customers') THEN
+    CREATE TRIGGER trg_audit_customers
+    AFTER INSERT OR UPDATE OR DELETE ON customers
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_users') THEN
+    CREATE TRIGGER trg_audit_users
+    AFTER INSERT OR UPDATE OR DELETE ON users
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_proveedores_externos') THEN
+    CREATE TRIGGER trg_audit_proveedores_externos
+    AFTER INSERT OR UPDATE OR DELETE ON proveedores_externos
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
 END $$;
+
 

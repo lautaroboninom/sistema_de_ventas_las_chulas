@@ -36,7 +36,7 @@ export default function ForgotPassword() {
           ) : (
             <form onSubmit={submit} className="space-y-3">
               {err && <div className="bg-red-100 text-red-700 p-2 rounded">{err}</div>}
-              <input className="border rounded p-2 w-full" placeholder="tu@sepid.com.ar"
+              <input className="border rounded p-2 w-full" placeholder="tu@equiluxmd.com"
                      value={email} onChange={e=>setEmail(e.target.value)} />
               <button type="submit" disabled={sending || !email.trim()} className={`w-full p-2 rounded text-white ${sending ? "bg-blue-400 cursor-not-allowed" : "bg-blue-600"}`}>
                 {sending ? "Enviando..." : "Enviar enlace"}

@@ -28,7 +28,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--file", default="docs/Copia Para Consultar MADRE 2025.xlsx", help="Ruta del MADRE (Col G=NS, H=codigo)")
-        parser.add_argument("--sheet", default="MGBIO", help="Nombre de hoja (default: MGBIO; si no existe usa primera)")
+        parser.add_argument("--sheet", default="EQUILUX", help="Nombre de hoja (default: EQUILUX; si no existe usa primera)")
         parser.add_argument("--apply", action="store_true", help="Aplica cambios (default: dry-run)")
         parser.add_argument("--overwrite", action="store_true", help="Sobrescribe numero_serie aunque ya tenga valor")
         parser.add_argument("--steal", action="store_true", help="Si existe otro device con el mismo NS, limpia su numero_serie y asigna al actual")
@@ -90,7 +90,7 @@ class Command(BaseCommand):
             self.stdout.write("No se pudo cargar mapa codigo->NS desde el MADRE.")
             return
 
-        # Buscar devices con numero_interno (si --overwrite, incluir todos; si no, solo vacíos)
+        # Buscar devices con numero_interno (si --overwrite, incluir todos; si no, solo vacÃ­os)
         with connection.cursor() as cur:
             if opts.get("overwrite"):
                 cur.execute(
@@ -154,7 +154,7 @@ class Command(BaseCommand):
                 ns_new = bajas_map.get(code_key)
                 if not ns_new:
                     continue
-                # Obtener ns_current para comparación si no overwrite
+                # Obtener ns_current para comparaciÃ³n si no overwrite
                 ns_current = ""
                 if not opts.get("overwrite"):
                     with connection.cursor() as cur:

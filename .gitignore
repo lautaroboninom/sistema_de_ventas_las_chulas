@@ -42,5 +42,6 @@ api/**/*.pdf
 # --- Traefik ACME store and quotes mount
 deploy/traefik/acme.json
 quotes/
+deploy/tailscale-certs/
 
 .env.local

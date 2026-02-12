@@ -193,7 +193,7 @@ const router = createBrowserRouter([
       {
         path: "clientes",
         element: (
-          <ProtectedRoute roles={["admin","jefe","jefe_veedor","recepcion"]}>
+          <ProtectedRoute roles={["admin","jefe","jefe_veedor","recepcion","tecnico"]}>
             <GeneralPorCliente />
           </ProtectedRoute>
         ),
@@ -217,7 +217,7 @@ const router = createBrowserRouter([
       {
         path: "equipos",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+          <ProtectedRoute roles={["jefe","jefe_veedor","admin","tecnico"]}>
             <Equipos />
           </ProtectedRoute>
         ),

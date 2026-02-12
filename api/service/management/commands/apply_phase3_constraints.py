@@ -3,7 +3,7 @@ from django.db import connection, transaction
 
 
 class Command(BaseCommand):
-    help = "Aplica Fase 3: índices únicos normalizados y triggers de snapshot de devices."
+    help = "Aplica Fase 3: Ã­ndices Ãºnicos normalizados y triggers de snapshot de devices."
 
     def handle(self, *args, **opts):
         with transaction.atomic():
@@ -11,7 +11,7 @@ class Command(BaseCommand):
                 # Asegurar columna ubicacion_id en devices
                 cur.execute("ALTER TABLE devices ADD COLUMN IF NOT EXISTS ubicacion_id INTEGER NULL REFERENCES locations(id) ON DELETE SET NULL")
 
-                # Índices únicos (idempotentes)
+                # Ãndices Ãºnicos (idempotentes)
                 cur.execute(
                     """
                     CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_ns_norm
@@ -19,7 +19,7 @@ class Command(BaseCommand):
                       WHERE NULLIF(TRIM(numero_serie), '') IS NOT NULL;
                     """
                 )
-                # Intentar crear índice único sobre numero_interno normalizado. Si hay duplicados, degradar a índice normal
+                # Intentar crear Ã­ndice Ãºnico sobre numero_interno normalizado. Si hay duplicados, degradar a Ã­ndice normal
                 try:
                     cur.execute(
                         """
@@ -30,7 +30,7 @@ class Command(BaseCommand):
                         """
                     )
                 except Exception:
-                    # Generar reporte de duplicados y crear índice no-único
+                    # Generar reporte de duplicados y crear Ã­ndice no-Ãºnico
                     cur.execute(
                         """
                         SELECT UPPER(REGEXP_REPLACE(numero_interno,
@@ -58,7 +58,7 @@ class Command(BaseCommand):
                                     w.writerow([k, ",".join(map(str, ids))])
                         except Exception:
                             pass
-                    # Crear índice no único como fallback
+                    # Crear Ã­ndice no Ãºnico como fallback
                     cur.execute(
                         """
                         CREATE INDEX IF NOT EXISTS idx_devices_numint_norm
@@ -68,7 +68,7 @@ class Command(BaseCommand):
                         """
                     )
 
-                # Backfill ubicacion_id snapshot desde último ingreso
+                # Backfill ubicacion_id snapshot desde Ãºltimo ingreso
                 cur.execute(
                     """
                     WITH last_i AS (
@@ -89,7 +89,7 @@ class Command(BaseCommand):
                     """
                 )
 
-                # Función + triggers de snapshot
+                # FunciÃ³n + triggers de snapshot
                 cur.execute(
                     """
                     CREATE OR REPLACE FUNCTION sync_device_snapshot()
@@ -103,7 +103,7 @@ class Command(BaseCommand):
                       v_faja TEXT;
                       v_ubic_id INTEGER;
                       v_is_own BOOLEAN;
-                      v_mgbio_id INTEGER;
+                      v_own_customer_id INTEGER;
                     BEGIN
                       v_device_id := COALESCE(NEW.device_id, OLD.device_id);
 
@@ -120,8 +120,8 @@ class Command(BaseCommand):
                        WHERE d.id = v_device_id;
 
                       IF v_is_own THEN
-                        SELECT id INTO v_mgbio_id FROM customers
-                         WHERE LOWER(razon_social) LIKE '%mg%bio%'
+                        SELECT id INTO v_own_customer_id FROM customers
+                         WHERE LOWER(razon_social) LIKE '%equilux%'
                          ORDER BY id ASC LIMIT 1;
                       END IF;
 
@@ -131,7 +131,7 @@ class Command(BaseCommand):
                              ubicacion_id = COALESCE(v_ubic_id, d.ubicacion_id),
                              n_de_control = COALESCE(NULLIF(v_faja, ''), d.n_de_control),
                              propietario = CASE WHEN v_is_own THEN COALESCE(v_propietario_nombre, d.propietario) ELSE d.propietario END,
-                             customer_id = CASE WHEN v_is_own AND v_mgbio_id IS NOT NULL THEN v_mgbio_id ELSE d.customer_id END
+                             customer_id = CASE WHEN v_is_own AND v_own_customer_id IS NOT NULL THEN v_own_customer_id ELSE d.customer_id END
                        WHERE d.id = v_device_id;
 
                       RETURN NULL;
@@ -156,4 +156,4 @@ class Command(BaseCommand):
                     """
                 )
 
-        self.stdout.write("APLICADO OK: Fase 3 (índices y triggers)")
+        self.stdout.write("APLICADO OK: Fase 3 (Ã­ndices y triggers)")

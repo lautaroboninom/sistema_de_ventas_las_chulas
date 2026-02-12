@@ -16,7 +16,7 @@ class DeviceIdentificadoresView(APIView):
 
     @transaction.atomic
     def patch(self, request, device_id: int):
-        require_roles(request, ["jefe", "jefe_veedor", "admin"])
+        require_roles(request, ["jefe", "jefe_veedor", "admin", "tecnico"])
         _set_audit_user(request)
         data = request.data or {}
         numero_serie = (data.get("numero_serie") or "").strip()
@@ -136,13 +136,13 @@ class DevicesListView(APIView):
             page_size = min(page_size, 500)
 
         with connection.cursor() as cur:
-            # Identificar id de cliente propio (MG BIO) si existe
+            # Identificar id de cliente propio (Equilux) si existe
             cur.execute(
                 "SELECT id FROM customers WHERE LOWER(razon_social) LIKE %s ORDER BY id ASC LIMIT 1",
-                ["%mg%bio%"],
+                ["%equilux%"],
             )
-            row_mg_owner = cur.fetchone()
-            mg_owner_id = row_mg_owner[0] if row_mg_owner else None
+            row_owner = cur.fetchone()
+            own_customer_id = row_owner[0] if row_owner else None
 
             wh, params = [], []
             if q_raw:
@@ -250,7 +250,7 @@ class DevicesListView(APIView):
                 ORDER BY {order_sql}
                 {limit_sql}
             """
-            cur.execute(sql, [mg_owner_id, mg_owner_id] + params + limit_params)
+            cur.execute(sql, [own_customer_id, own_customer_id] + params + limit_params)
             rows = _fetchall_dicts(cur)
         # Conteo total (fuera del cursor anterior)
         with connection.cursor() as cur2:
@@ -294,9 +294,9 @@ class DevicesMergeView(APIView):
     Unificar dos devices en uno solo, moviendo sus ingresos al destino.
     - Se mantiene el device destino (target_id) y se elimina el source_id.
     - Se puede fijar un nuevo numero_serie para el destino.
-    - El numero_interno se mantiene del destino; si el destino no tiene MG y el source sí,
-      se copia si no hay conflicto.
-    - Si ambos MG existen y difieren, devuelve error.
+    - El numero_interno se mantiene del destino por defecto.
+    - Si se envia numero_interno, se aplica (debe coincidir con MG del target o source).
+    - Si no se envia numero_interno y ambos MG existen y difieren, devuelve error.
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -316,6 +316,8 @@ class DevicesMergeView(APIView):
 
         new_ns = (data.get("numero_serie") or "").strip()
         copy_mg_if_missing = bool(data.get("copy_mg_if_missing"))
+        has_mg_override = "numero_interno" in data
+        desired_mg_raw = (data.get("numero_interno") or "").strip() if has_mg_override else None
 
         target = q(
             "SELECT id, numero_serie, numero_interno FROM devices WHERE id=%s",
@@ -333,11 +335,32 @@ class DevicesMergeView(APIView):
         mg_target = _norm_mg(target.get("numero_interno") or "")
         mg_source = _norm_mg(source.get("numero_interno") or "")
 
+        desired_mg = None
+        if has_mg_override:
+            if desired_mg_raw:
+                desired_mg = _norm_mg(desired_mg_raw)
+                if not desired_mg:
+                    return Response(
+                        {
+                            "detail": "numero_interno invalido para unificar.",
+                            "conflict_type": "MG_INVALID",
+                        },
+                        status=400,
+                    )
+            if desired_mg not in (None, mg_target, mg_source):
+                return Response(
+                    {
+                        "detail": "numero_interno invalido para unificar.",
+                        "conflict_type": "MG_INVALID",
+                    },
+                    status=400,
+                )
+
         # MG conflict check
-        if mg_target and mg_source and mg_target != mg_source:
+        if (not has_mg_override) and mg_target and mg_source and mg_target != mg_source:
             return Response(
                 {
-                    "detail": "Los equipos a unificar tienen números internos distintos.",
+                    "detail": "Los equipos a unificar tienen numeros internos distintos.",
                     "conflict_type": "MG_MISMATCH",
                     "mg_target": mg_target,
                     "mg_source": mg_source,
@@ -362,27 +385,32 @@ class DevicesMergeView(APIView):
         if ns_conflict:
             return Response(
                 {
-                    "detail": "El número de serie ya está asignado a otro equipo.",
+                    "detail": "El numero de serie ya esta asignado a otro equipo.",
                     "conflict_type": "NS_DUPLICATE",
                     "conflict_device_id": ns_conflict["id"],
                 },
                 status=400,
             )
 
-        # Si vamos a copiar MG desde source, validar que no choque con otros
+        # Determinar MG final
         mg_to_apply = mg_target
-        if not mg_target and mg_source and copy_mg_if_missing:
+        if has_mg_override:
+            mg_to_apply = desired_mg
+        elif not mg_target and mg_source and copy_mg_if_missing:
             mg_to_apply = mg_source
+
+        # Si vamos a aplicar MG (nuevo o distinto), validar que no choque con otros
+        if mg_to_apply and mg_to_apply != mg_target:
             mg_conflict = q(
                 """
                 SELECT id
                   FROM devices
                  WHERE id NOT IN (%s,%s)
-                   AND numero_interno ~* '^(MG|NM|NV|CE)\\s*\\d{1,4}$'
+                   AND numero_interno ~* '^(MG|NM|NV|CE)\s*\d{1,4}$'
                    AND UPPER(REGEXP_REPLACE(numero_interno,
-                       '^(MG|NM|NV|CE)\\s*(\\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0'))) =
+                       '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0'))) =
                        UPPER(REGEXP_REPLACE(%s,
-                       '^(MG|NM|NV|CE)\\s*(\\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0')))
+                       '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))
                  LIMIT 1
                 """,
                 [target_id, source_id, mg_to_apply],
@@ -391,32 +419,35 @@ class DevicesMergeView(APIView):
             if mg_conflict:
                 return Response(
                     {
-                        "detail": "El número interno a copiar ya está asignado a otro equipo.",
+                        "detail": "El numero interno ya esta asignado a otro equipo.",
                         "conflict_type": "MG_DUPLICATE",
                         "conflict_device_id": mg_conflict["id"],
                     },
                     status=400,
                 )
 
-        # 1) Limpiar N/S del source para evitar choque de índice al setear en target
+        # 1) Limpiar N/S del source para evitar choque de indice al setear en target
         exec_void("UPDATE devices SET numero_serie = NULL WHERE id=%s", [source_id])
         # 2) Aplicar N/S en target
         exec_void("UPDATE devices SET numero_serie = NULLIF(%s,'') WHERE id=%s", [new_ns, target_id])
-        # 3) Copiar MG al target si corresponde (primero liberar MG en source para no violar índice)
-        if mg_to_apply and mg_to_apply != mg_target:
-            try:
-                exec_void("UPDATE devices SET numero_interno = NULL WHERE id=%s", [source_id])
-                exec_void("UPDATE devices SET numero_interno = %s WHERE id=%s", [mg_to_apply, target_id])
-            except Exception as e:
-                return Response(
-                    {
-                        "detail": "No se pudo asignar el número interno al destino (posible duplicado).",
-                        "conflict_type": "MG_UNIQUE_CONSTRAINT",
-                        "numero_interno_input": mg_to_apply,
-                        "error": str(e),
-                    },
-                    status=400,
-                )
+        # 3) Aplicar MG al target si corresponde (liberar source si necesitamos moverlo)
+        if mg_to_apply != mg_target:
+            if mg_to_apply:
+                try:
+                    exec_void("UPDATE devices SET numero_interno = NULL WHERE id=%s", [source_id])
+                    exec_void("UPDATE devices SET numero_interno = %s WHERE id=%s", [mg_to_apply, target_id])
+                except Exception as e:
+                    return Response(
+                        {
+                            "detail": "No se pudo asignar el numero interno al destino (posible duplicado).",
+                            "conflict_type": "MG_UNIQUE_CONSTRAINT",
+                            "numero_interno_input": mg_to_apply,
+                            "error": str(e),
+                        },
+                        status=400,
+                    )
+            else:
+                exec_void("UPDATE devices SET numero_interno = NULL WHERE id=%s", [target_id])
         # 4) Mover ingresos al target
         exec_void("UPDATE ingresos SET device_id=%s WHERE device_id=%s", [target_id, source_id])
         # 5) Eliminar el source

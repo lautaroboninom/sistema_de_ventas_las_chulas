@@ -32,6 +32,7 @@ export default function PrincipalTab(props) {
     tipoSel,
     setTipoSel,
     variantes,
+    motivos,
     // ubicacion/tecnico
     ubicaciones,
     ubicacionId,
@@ -82,6 +83,22 @@ export default function PrincipalTab(props) {
     if (!tipoSel) return all;
     return all.filter((m) => norm(m?.tipo_equipo) === norm(tipoSel));
   }, [modelos, tipoSel]);
+  const motivosOptions = useMemo(() => {
+    const base = Array.isArray(motivos) ? motivos : [];
+    return base
+      .map((item) => {
+        if (typeof item === "string") return { value: item, label: item };
+        const value = (item?.value ?? "").toString();
+        const label = (item?.label ?? item?.value ?? "").toString();
+        return { value, label };
+      })
+      .filter((opt) => opt.value);
+  }, [motivos]);
+  const motivoValue = (formBasics?.motivo ?? data?.motivo ?? "").toString();
+  const motivoHasCurrent = useMemo(
+    () => motivosOptions.some((opt) => opt.value === motivoValue),
+    [motivosOptions, motivoValue]
+  );
 
   // Estados/dirty locales (encapsulados en el tab)
   const [savingTech, setSavingTech] = useState(false);
@@ -154,6 +171,11 @@ export default function PrincipalTab(props) {
   const clienteMismatch = useMemo(() => {
     return !!(rsMatch && codMatch && rsMatch.id !== codMatch.id);
   }, [rsMatch, codMatch]);
+  const alquilerMatch = useMemo(() => {
+    const val = (data?.alquiler_a || "").trim().toLowerCase();
+    if (!val) return null;
+    return (clientes || []).find((c) => (c?.razon_social || "").trim().toLowerCase() === val) || null;
+  }, [data?.alquiler_a, clientes]);
 
   // Catálogo de accesorios (para alquiler)
   const [accesCatalogo, setAccesCatalogo] = useState([]);
@@ -287,7 +309,7 @@ export default function PrincipalTab(props) {
                         setClienteCodInput(c.cod_empresa || "");
                       }
                     }}
-                    placeholder="Eleg? de la lista"
+                    placeholder="Elegi de la lista"
                   />
                   {clientesPerm && (
                     <datalist id="service_clientes_rs">
@@ -319,7 +341,7 @@ export default function PrincipalTab(props) {
                         setClienteRsInput(c.razon_social || "");
                       }
                     }}
-                    placeholder="Eleg? de la lista"
+                    placeholder="Elegi de la lista"
                   />
                   {clientesPerm && (
                     <datalist id="service_clientes_cod">
@@ -557,7 +579,27 @@ export default function PrincipalTab(props) {
         <div className="border rounded p-4">
           <h2 className="font-semibold mb-2">Estado</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
-            <Row label="Motivo">{data.motivo}</Row>
+            <Row label="Motivo">
+              {editBasics ? (
+                <select
+                  className="border rounded p-1 w-60"
+                  value={motivoValue}
+                  onChange={(e) => setFormBasics((s) => ({ ...(s || {}), motivo: e.target.value }))}
+                >
+                  <option value="">Seleccionar motivo</option>
+                  {!motivoHasCurrent && motivoValue && (
+                    <option value={motivoValue}>{motivoValue}</option>
+                  )}
+                  {motivosOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                data.motivo || "-"
+              )}
+            </Row>
             <Row label="Estado">{estadoLabel(data.estado) || "-"}</Row>
             <Row label="Presupuesto">
               {(() => {
@@ -950,8 +992,26 @@ export default function PrincipalTab(props) {
             }}
           />
         </Row>
-        <Row label="¿A quién?">
-          <input className="border rounded p-1 w-80" value={data.alquiler_a || ""} onChange={(e) => patch({ alquiler_a: e.target.value })} />
+        <Row label="A quien?">
+          <div>
+            <input
+              className="border rounded p-1 w-80"
+              list={clientesPerm ? "alquiler_clientes_rs" : undefined}
+              value={data.alquiler_a || ""}
+              onChange={(e) => patch({ alquiler_a: e.target.value })}
+              placeholder="Elegi de la lista"
+            />
+            {clientesPerm && (
+              <datalist id="alquiler_clientes_rs">
+                {(clientes || []).map((c) => (
+                  <option key={c.id} value={c.razon_social} />
+                ))}
+              </datalist>
+            )}
+            {clientesPerm && (data.alquiler_a || "").trim() && !alquilerMatch && (
+              <div className="text-xs text-amber-700 mt-1">Selecciona un cliente valido de la lista.</div>
+            )}
+          </div>
         </Row>
         <Row label="Remito">
           <input className="border rounded p-1 w-60" value={data.alquiler_remito || ""} onChange={(e) => patch({ alquiler_remito: e.target.value })} />
