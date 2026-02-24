@@ -301,6 +301,32 @@ def _sync_repuesto_proveedores(repuesto_id: int, proveedores: list[dict]):
         )
 
 
+def _as_date(val):
+    if val is None:
+        return None
+    if isinstance(val, dt.datetime):
+        return val.date()
+    if isinstance(val, dt.date):
+        return val
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        return dt.date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+
+
+def _max_date(curr: dt.date | None, candidate: dt.date | None) -> dt.date | None:
+    curr_date = _as_date(curr)
+    cand_date = _as_date(candidate)
+    if curr_date is None:
+        return cand_date
+    if cand_date is None:
+        return curr_date
+    return cand_date if cand_date > curr_date else curr_date
+
+
 def _log_repuesto_cambio(repuesto_id, codigo, accion, nombre_prev, nombre_new, user_id, nota=None):
     exec_void(
         """
@@ -396,6 +422,174 @@ class RepuestosSubrubrosView(APIView):
             [],
         ) or []
         return Response(rows)
+
+    def post(self, request):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        d = request.data or {}
+        codigo = _parse_subrubro_codigo(d.get("codigo") or d.get("subrubro_codigo"))
+        nombre = _clean_text(d.get("nombre"))
+        if not nombre:
+            raise ValidationError("nombre requerido")
+
+        with transaction.atomic():
+            row = q(
+                """
+                SELECT codigo, activo
+                FROM repuestos_subrubros
+                WHERE codigo=%s
+                FOR UPDATE
+                """,
+                [codigo],
+                one=True,
+            )
+            dup_name = q(
+                """
+                SELECT codigo
+                FROM repuestos_subrubros
+                WHERE activo
+                  AND LOWER(nombre) = LOWER(%s)
+                  AND codigo <> %s
+                LIMIT 1
+                """,
+                [nombre, codigo],
+                one=True,
+            )
+            if dup_name:
+                raise ValidationError("nombre ya existe")
+
+            if row and row.get("activo"):
+                raise ValidationError("codigo ya existe")
+            if row:
+                exec_void(
+                    """
+                    UPDATE repuestos_subrubros
+                       SET nombre=%s,
+                           activo=TRUE,
+                           updated_at=NOW()
+                     WHERE codigo=%s
+                    """,
+                    [nombre, codigo],
+                )
+            else:
+                exec_void(
+                    """
+                    INSERT INTO repuestos_subrubros
+                      (codigo, nombre, activo, updated_at)
+                    VALUES (%s, %s, TRUE, NOW())
+                    """,
+                    [codigo, nombre],
+                )
+
+        created = q(
+            """
+            SELECT codigo, nombre
+            FROM repuestos_subrubros
+            WHERE codigo=%s AND activo
+            """,
+            [codigo],
+            one=True,
+        )
+        return Response(created or {"codigo": codigo, "nombre": nombre}, status=201)
+
+
+class RepuestosSubrubroDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, subrubro_codigo: str):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        codigo = _parse_subrubro_codigo(subrubro_codigo)
+        nombre = _clean_text((request.data or {}).get("nombre"))
+        if not nombre:
+            raise ValidationError("nombre requerido")
+
+        with transaction.atomic():
+            row = q(
+                """
+                SELECT codigo
+                FROM repuestos_subrubros
+                WHERE codigo=%s AND activo
+                FOR UPDATE
+                """,
+                [codigo],
+                one=True,
+            )
+            if not row:
+                raise ValidationError("subrubro no encontrado")
+            dup_name = q(
+                """
+                SELECT codigo
+                FROM repuestos_subrubros
+                WHERE activo
+                  AND LOWER(nombre)=LOWER(%s)
+                  AND codigo<>%s
+                LIMIT 1
+                """,
+                [nombre, codigo],
+                one=True,
+            )
+            if dup_name:
+                raise ValidationError("nombre ya existe")
+            exec_void(
+                """
+                UPDATE repuestos_subrubros
+                   SET nombre=%s,
+                       updated_at=NOW()
+                 WHERE codigo=%s
+                """,
+                [nombre, codigo],
+            )
+
+        updated = q(
+            """
+            SELECT codigo, nombre
+            FROM repuestos_subrubros
+            WHERE codigo=%s AND activo
+            """,
+            [codigo],
+            one=True,
+        )
+        return Response(updated or {"codigo": codigo, "nombre": nombre})
+
+    def delete(self, request, subrubro_codigo: str):
+        require_roles(request, ["jefe", "admin", "jefe_veedor"])
+        codigo = _parse_subrubro_codigo(subrubro_codigo)
+        with transaction.atomic():
+            row = q(
+                """
+                SELECT codigo
+                FROM repuestos_subrubros
+                WHERE codigo=%s AND activo
+                FOR UPDATE
+                """,
+                [codigo],
+                one=True,
+            )
+            if not row:
+                raise ValidationError("subrubro no encontrado")
+            used = q(
+                """
+                SELECT id
+                FROM catalogo_repuestos
+                WHERE activo
+                  AND codigo ~ '^[0-9]{7}$'
+                  AND LEFT(codigo,4)=%s
+                LIMIT 1
+                """,
+                [codigo],
+                one=True,
+            )
+            if used:
+                raise ValidationError("No se puede eliminar: hay repuestos activos asociados")
+            exec_void(
+                """
+                UPDATE repuestos_subrubros
+                   SET activo=FALSE,
+                       updated_at=NOW()
+                 WHERE codigo=%s
+                """,
+                [codigo],
+            )
+        return Response({"ok": True})
 
 
 class CatalogoRepuestosView(APIView):
@@ -1094,6 +1288,169 @@ class RepuestosStockPermisoDetailView(APIView):
         return Response({"ok": True})
 
 
+class RepuestosCompraMovimientoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        require_roles(request, ["jefe", "jefe_veedor", "tecnico"])
+        if not _can_edit_stock(request.user):
+            raise PermissionDenied("No autorizado para editar stock")
+
+        d = request.data or {}
+        repuesto_id = _parse_int_field(d.get("repuesto_id"), "repuesto_id")
+        if not repuesto_id:
+            raise ValidationError("repuesto_id requerido")
+        if repuesto_id <= 0:
+            raise ValidationError("repuesto_id invalido")
+
+        cantidad = _parse_int_decimal_field(d.get("cantidad"), "cantidad")
+        if cantidad <= 0:
+            raise ValidationError("cantidad debe ser mayor a 0")
+
+        fecha_compra = _parse_date_field(d.get("fecha_compra"), "fecha_compra")
+        if not fecha_compra:
+            raise ValidationError("fecha_compra requerido")
+
+        proveedor_raw = d.get("proveedor_id")
+        proveedor_id = _parse_int_field(proveedor_raw, "proveedor_id")
+        if proveedor_raw not in (None, "") and (not proveedor_id or proveedor_id <= 0):
+            raise ValidationError("proveedor_id invalido")
+        proveedor_nombre = _clean_text(d.get("proveedor_nombre"))
+        if proveedor_id and proveedor_nombre:
+            raise ValidationError("proveedor_id y proveedor_nombre son excluyentes")
+
+        nota = _clean_text(d.get("nota"))
+        ref_tipo = None
+        ref_id = None
+        proveedor_row = None
+
+        with transaction.atomic():
+            repuesto_row = q(
+                """
+                SELECT id, stock_on_hand, fecha_ultima_compra
+                FROM catalogo_repuestos
+                WHERE id=%s
+                FOR UPDATE
+                """,
+                [repuesto_id],
+                one=True,
+            )
+            if not repuesto_row:
+                raise ValidationError("Repuesto no encontrado")
+
+            if proveedor_id:
+                proveedor_row = q(
+                    "SELECT id, nombre FROM proveedores_externos WHERE id=%s",
+                    [proveedor_id],
+                    one=True,
+                )
+                if not proveedor_row:
+                    raise ValidationError("proveedor_id invalido")
+            elif proveedor_nombre:
+                proveedor_id = _get_or_create_proveedor(proveedor_nombre)
+                proveedor_row = q(
+                    "SELECT id, nombre FROM proveedores_externos WHERE id=%s",
+                    [proveedor_id],
+                    one=True,
+                )
+                if not proveedor_row:
+                    raise ValidationError("No se pudo resolver proveedor")
+
+            stock_prev = _as_int_decimal(repuesto_row.get("stock_on_hand") or 0)
+            stock_new = _as_int_decimal(stock_prev + cantidad)
+            fecha_ultima_compra_new = _max_date(
+                repuesto_row.get("fecha_ultima_compra"),
+                fecha_compra,
+            )
+
+            exec_void(
+                """
+                UPDATE catalogo_repuestos
+                   SET stock_on_hand=%s,
+                       fecha_ultima_compra=%s,
+                       updated_at=NOW()
+                 WHERE id=%s
+                """,
+                [stock_new, fecha_ultima_compra_new, repuesto_id],
+            )
+
+            if proveedor_row and proveedor_row.get("id"):
+                ref_tipo = "proveedor_externo"
+                ref_id = int(proveedor_row.get("id"))
+                rel = q(
+                    """
+                    SELECT id, ultima_compra
+                    FROM repuestos_proveedores
+                    WHERE repuesto_id=%s AND proveedor_id=%s
+                    """,
+                    [repuesto_id, ref_id],
+                    one=True,
+                )
+                if rel and rel.get("id"):
+                    ultima_compra_new = _max_date(rel.get("ultima_compra"), fecha_compra)
+                    exec_void(
+                        """
+                        UPDATE repuestos_proveedores
+                           SET ultima_compra=%s,
+                               updated_at=NOW()
+                         WHERE id=%s
+                        """,
+                        [ultima_compra_new, rel.get("id")],
+                    )
+                else:
+                    exec_void(
+                        """
+                        INSERT INTO repuestos_proveedores
+                          (repuesto_id, proveedor_id, ultima_compra, created_at, updated_at)
+                        VALUES (%s,%s,%s,NOW(),NOW())
+                        """,
+                        [repuesto_id, ref_id, fecha_compra],
+                    )
+
+            mov_id = exec_returning(
+                """
+                INSERT INTO repuestos_movimientos
+                  (repuesto_id, tipo, qty, stock_prev, stock_new, ref_tipo, ref_id, nota, fecha_compra, created_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+                """,
+                [
+                    repuesto_id,
+                    "ingreso_compra",
+                    cantidad,
+                    stock_prev,
+                    stock_new,
+                    ref_tipo,
+                    ref_id,
+                    nota,
+                    fecha_compra,
+                    getattr(request.user, "id", None),
+                ],
+            )
+
+        repuesto = _load_repuesto_detail(repuesto_id, request.user)
+        movimiento = q(
+            """
+            SELECT
+              m.id, m.repuesto_id, cr.codigo, cr.nombre,
+              m.tipo, m.qty, m.stock_prev, m.stock_new, m.ref_tipo, m.ref_id,
+              m.nota, m.fecha_compra, m.created_at, m.created_by,
+              u.nombre AS created_by_nombre,
+              pe.nombre AS proveedor_nombre
+            FROM repuestos_movimientos m
+            JOIN catalogo_repuestos cr ON cr.id = m.repuesto_id
+            LEFT JOIN users u ON u.id = m.created_by
+            LEFT JOIN proveedores_externos pe
+              ON m.ref_tipo = 'proveedor_externo'
+             AND pe.id = m.ref_id
+            WHERE m.id=%s
+            """,
+            [mov_id],
+            one=True,
+        )
+        return Response({"ok": True, "repuesto": repuesto, "movimiento": movimiento}, status=201)
+
+
 class RepuestosMovimientosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -1123,11 +1480,15 @@ class RepuestosMovimientosView(APIView):
             SELECT
               m.id, m.repuesto_id, cr.codigo, cr.nombre,
               m.tipo, m.qty, m.stock_prev, m.stock_new, m.ref_tipo, m.ref_id,
-              m.nota, m.created_at, m.created_by,
-              u.nombre AS created_by_nombre
+              m.nota, m.fecha_compra, m.created_at, m.created_by,
+              u.nombre AS created_by_nombre,
+              pe.nombre AS proveedor_nombre
             FROM repuestos_movimientos m
             JOIN catalogo_repuestos cr ON cr.id = m.repuesto_id
             LEFT JOIN users u ON u.id = m.created_by
+            LEFT JOIN proveedores_externos pe
+              ON m.ref_tipo = 'proveedor_externo'
+             AND pe.id = m.ref_id
             {where_sql}
             ORDER BY m.created_at DESC, m.id DESC
             LIMIT %s

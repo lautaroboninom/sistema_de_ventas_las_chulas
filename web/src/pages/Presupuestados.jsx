@@ -1,15 +1,19 @@
 // web/src/pages/JefePresupuestos.jsx
 import { useEffect, useMemo, useState } from "react";
-import api, { getBlob, downloadAuth } from "../lib/api";
+import api, { downloadAuth, getBlob } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { ingresoIdOf,
-  formatOS,
+import {
+  catalogEquipmentLabel,
   formatDateOnly,
-  norm,
-  tipoEquipoOf,
   formatMoney,
-  resolveFechaCreacion, catalogEquipmentLabel, nsPreferInternoOf } from "../lib/ui-helpers";
+  formatOS,
+  ingresoIdOf,
+  norm,
+  nsPreferInternoOf,
+  resolveFechaCreacion,
+  tipoEquipoOf,
+} from "../lib/ui-helpers";
 import useQueryState from "../hooks/useQueryState";
 
 // ENDPOINT para "presupuestados" (ya emitidos/enviados)
@@ -20,8 +24,10 @@ export default function JefePresupuestos() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  const [bulkResultMsg, setBulkResultMsg] = useState("");
   const [q, setQ] = useQueryState("q", "");
   const [busyId, setBusyId] = useState(null);
+  const [bulkApproving, setBulkApproving] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [exporting, setExporting] = useState(false);
 
@@ -34,10 +40,14 @@ export default function JefePresupuestos() {
       setLoading(true);
       const data = await api.get(ENDPOINT);
       const list = Array.isArray(data) ? data : [];
-      // Orden sugerido: ms recientes primero por fecha de emisin/envo o ingreso
+      // Orden sugerido: mas recientes primero por fecha de emision/envio o ingreso
       list.sort((a, b) => {
-        const da = new Date(a?.presupuesto_fecha_envio ?? a?.presupuesto_fecha_emision ?? resolveFechaCreacion(a) ?? 0).getTime();
-        const db = new Date(b?.presupuesto_fecha_envio ?? b?.presupuesto_fecha_emision ?? resolveFechaCreacion(b) ?? 0).getTime();
+        const da = new Date(
+          a?.presupuesto_fecha_envio ?? a?.presupuesto_fecha_emision ?? resolveFechaCreacion(a) ?? 0
+        ).getTime();
+        const db = new Date(
+          b?.presupuesto_fecha_envio ?? b?.presupuesto_fecha_emision ?? resolveFechaCreacion(b) ?? 0
+        ).getTime();
         return db - da;
       });
       setRows(list);
@@ -72,6 +82,16 @@ export default function JefePresupuestos() {
     });
   }, [rows, q]);
 
+  const rowById = useMemo(() => {
+    const map = new Map();
+    for (const row of rows) {
+      const id = ingresoIdOf(row);
+      if (id == null || id === "") continue;
+      map.set(id, row);
+    }
+    return map;
+  }, [rows]);
+
   const visibleIds = useMemo(() => new Set(filtered.map((r) => ingresoIdOf(r))), [filtered]);
   const allVisibleSelected = useMemo(() => {
     if (visibleIds.size === 0) return false;
@@ -80,6 +100,7 @@ export default function JefePresupuestos() {
   }, [visibleIds, selectedIds]);
 
   const toggleSelectAllVisible = () => {
+    if (bulkApproving) return;
     const next = new Set(selectedIds);
     if (allVisibleSelected) {
       for (const id of visibleIds) next.delete(id);
@@ -91,9 +112,11 @@ export default function JefePresupuestos() {
 
   const toggleRow = (e, row) => {
     e.stopPropagation();
+    if (bulkApproving) return;
     const id = ingresoIdOf(row);
     const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id); else next.add(id);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
     setSelectedIds(next);
   };
 
@@ -123,37 +146,203 @@ export default function JefePresupuestos() {
     }
   };
 
-  // Accin: Aprobar presupuesto (por ingreso_id)
+  function isReparado(row) {
+    return norm(row?.estado) === "reparado";
+  }
+
+  function closeIfOpen(win) {
+    if (!win) return;
+    try {
+      if (!win.closed) win.close();
+    } catch (_) {
+      // noop
+    }
+  }
+
+  async function approveRows(rowsToApprove, { askPrint = true, confirmPrintMessage = "" } = {}) {
+    const validRows = [];
+    const approvalFailures = [];
+    for (const row of rowsToApprove || []) {
+      const ingresoId = ingresoIdOf(row);
+      if (!ingresoId) {
+        approvalFailures.push({
+          ingresoId,
+          error: new Error("No se encontro el ID de ingreso para aprobar."),
+        });
+        continue;
+      }
+      validRows.push(row);
+    }
+
+    const reparadoRows = validRows.filter(isReparado);
+    const reparadoIds = new Set(reparadoRows.map((row) => ingresoIdOf(row)));
+    let shouldPrint = false;
+    if (askPrint && reparadoRows.length > 0) {
+      shouldPrint = window.confirm(
+        confirmPrintMessage || "Este equipo ya esta reparado, imprimir remito de salida?"
+      );
+    }
+
+    const preopenedWindows = new Map();
+    if (shouldPrint) {
+      for (const row of reparadoRows) {
+        const ingresoId = ingresoIdOf(row);
+        let win = null;
+        try {
+          win = window.open("", "_blank");
+        } catch (_) {
+          win = null;
+        }
+        preopenedWindows.set(ingresoId, win);
+      }
+    }
+
+    const approvedIds = [];
+    const printFailures = [];
+    const preopenedUsed = new Set();
+
+    for (const row of validRows) {
+      const ingresoId = ingresoIdOf(row);
+      try {
+        await api.post(`/api/quotes/${ingresoId}/aprobar/`);
+        approvedIds.push(ingresoId);
+      } catch (e) {
+        approvalFailures.push({ ingresoId, error: e });
+        closeIfOpen(preopenedWindows.get(ingresoId));
+        continue;
+      }
+
+      if (!shouldPrint || !reparadoIds.has(ingresoId)) continue;
+
+      const win = preopenedWindows.get(ingresoId);
+      try {
+        const blob = await getBlob(`/api/ingresos/${ingresoId}/remito/`);
+        if (!(blob instanceof Blob)) throw new Error("La respuesta no fue un PDF");
+        const url = URL.createObjectURL(blob);
+
+        let opened = false;
+        if (win && !win.closed) {
+          try {
+            win.location = url;
+            opened = true;
+            preopenedUsed.add(ingresoId);
+          } catch (_) {
+            opened = false;
+          }
+        }
+
+        if (!opened) {
+          closeIfOpen(win);
+          const fallback = window.open(url, "_blank", "noopener");
+          if (!fallback) throw new Error("El navegador bloqueo la apertura del remito.");
+        }
+
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch (e) {
+        printFailures.push({ ingresoId, error: e });
+        closeIfOpen(win);
+      }
+    }
+
+    for (const [ingresoId, win] of preopenedWindows.entries()) {
+      if (preopenedUsed.has(ingresoId)) continue;
+      closeIfOpen(win);
+    }
+
+    return {
+      approvedIds,
+      approvalFailures,
+      printFailures,
+      shouldPrint,
+    };
+  }
+
+  // Accion individual: se mantiene, reutilizando la logica comun.
   async function aprobar(row) {
-    if (!canApprove) return;
+    if (!canApprove || bulkApproving || busyId !== null) return;
     const ingresoId = ingresoIdOf(row);
     if (!ingresoId) {
-      setErr("No se encontr el ID de ingreso para aprobar.");
+      setErr("No se encontro el ID de ingreso para aprobar.");
       return;
     }
     try {
       setBusyId(ingresoId);
-      const shouldPrint = (row?.estado || "").toLowerCase() === "reparado" &&
-        window.confirm("Este equipo ya está reparado, imprimir remito de salida?");
-      await api.post(`/api/quotes/${ingresoId}/aprobar/`);
-      if (shouldPrint) {
-        try {
-          const blob = await getBlob(`/api/ingresos/${ingresoId}/remito/`);
-          if (!(blob instanceof Blob)) throw new Error("La respuesta no fue un PDF");
-          const url = URL.createObjectURL(blob);
-          window.open(url, "_blank", "noopener");
-          setTimeout(() => URL.revokeObjectURL(url), 60_000);
-        } catch (e) {
-          setErr(e?.message || "No se pudo imprimir el remito de salida");
-        }
-      }
+      setErr("");
+      setBulkResultMsg("");
+      const result = await approveRows([row], {
+        askPrint: true,
+        confirmPrintMessage: "Este equipo ya esta reparado, imprimir remito de salida?",
+      });
       await load();
+
+      if (result.approvalFailures.length > 0) {
+        const detail = result.approvalFailures[0]?.error?.message;
+        setErr(detail || "No se pudo aprobar el presupuesto");
+        return;
+      }
+      if (result.printFailures.length > 0) {
+        const detail = result.printFailures[0]?.error?.message;
+        setErr(detail || "No se pudo imprimir el remito de salida");
+      }
     } catch (e) {
       setErr(e?.message || "No se pudo aprobar el presupuesto");
     } finally {
       setBusyId(null);
     }
   }
+
+  async function aprobarSeleccion() {
+    if (!canApprove || bulkApproving || busyId !== null || selectedIds.size === 0) return;
+    const selectedSnapshot = Array.from(selectedIds);
+    setErr("");
+    setBulkResultMsg("");
+    setBulkApproving(true);
+    try {
+      const selectedRows = [];
+      const missingIds = [];
+      for (const id of selectedSnapshot) {
+        const row = rowById.get(id);
+        if (!row) {
+          missingIds.push(id);
+          continue;
+        }
+        selectedRows.push(row);
+      }
+
+      const reparadosCount = selectedRows.filter(isReparado).length;
+      const result = await approveRows(selectedRows, {
+        askPrint: true,
+        confirmPrintMessage: `Hay ${reparadosCount} equipos reparados. Imprimir todas las ordenes de salida juntas?`,
+      });
+      const totalApprovalFailures = missingIds.length + result.approvalFailures.length;
+
+      await load();
+
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of result.approvedIds) next.delete(id);
+        for (const id of missingIds) next.delete(id);
+        return next;
+      });
+
+      const summary = [
+        `Total: ${selectedSnapshot.length}.`,
+        `Aprobados OK: ${result.approvedIds.length}.`,
+        `Fallos de aprobacion: ${totalApprovalFailures}.`,
+        `Fallos de impresion: ${result.printFailures.length}.`,
+      ];
+      if (reparadosCount > 0 && !result.shouldPrint) {
+        summary.push("Impresion cancelada por el usuario.");
+      }
+      setBulkResultMsg(summary.join(" "));
+    } catch (e) {
+      setErr(e?.message || "No se pudo aprobar la seleccion");
+    } finally {
+      setBulkApproving(false);
+    }
+  }
+
+  const approvingBusy = bulkApproving || busyId !== null;
 
   return (
     <div className="card">
@@ -162,6 +351,12 @@ export default function JefePresupuestos() {
       {err && (
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">
           {err}
+        </div>
+      )}
+
+      {bulkResultMsg && (
+        <div className="bg-blue-100 border border-blue-300 text-blue-800 p-2 rounded mb-3">
+          {bulkResultMsg}
         </div>
       )}
 
@@ -178,7 +373,7 @@ export default function JefePresupuestos() {
           className="btn"
           onClick={load}
           title="Recargar lista"
-          disabled={loading}
+          disabled={loading || bulkApproving}
           aria-busy={loading ? "true" : "false"}
         >
           Recargar
@@ -187,7 +382,7 @@ export default function JefePresupuestos() {
           <button
             className="btn"
             onClick={() => exportByIds(filtered.map(ingresoIdOf), `presupuestados_filtrados_${filtered.length}`)}
-            disabled={exporting || filtered.length === 0}
+            disabled={exporting || bulkApproving || filtered.length === 0}
             aria-busy={exporting ? "true" : "false"}
             title="Exportar todos los filtrados a Excel"
           >
@@ -196,12 +391,23 @@ export default function JefePresupuestos() {
           <button
             className="btn"
             onClick={() => exportByIds(Array.from(selectedIds), `presupuestados_seleccion_${selectedIds.size}`)}
-            disabled={exporting || selectedIds.size === 0}
+            disabled={exporting || bulkApproving || selectedIds.size === 0}
             aria-busy={exporting ? "true" : "false"}
-            title="Exportar seleccin a Excel"
+            title="Exportar seleccion a Excel"
           >
-            Exportar seleccin
+            Exportar seleccion
           </button>
+          {canApprove ? (
+            <button
+              className="btn"
+              onClick={aprobarSeleccion}
+              disabled={approvingBusy || selectedIds.size === 0}
+              aria-busy={bulkApproving ? "true" : "false"}
+              title="Aprobar seleccion"
+            >
+              {bulkApproving ? "Aprobando..." : "Aprobar seleccion"}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -219,6 +425,7 @@ export default function JefePresupuestos() {
                     type="checkbox"
                     checked={allVisibleSelected}
                     onChange={toggleSelectAllVisible}
+                    disabled={bulkApproving}
                     aria-label="Seleccionar todos los visibles"
                   />
                 </th>
@@ -228,7 +435,7 @@ export default function JefePresupuestos() {
                 <th scope="col" className="p-2">Serie</th>
                 <th scope="col" className="p-2">Estado</th>
                 <th scope="col" className="p-2">Monto</th>
-                <th scope="col" className="p-2">Fecha emisin</th>
+                <th scope="col" className="p-2">Fecha emision</th>
                 <th scope="col" className="p-2 text-right">Acciones</th>
               </tr>
             </thead>
@@ -254,6 +461,7 @@ export default function JefePresupuestos() {
                         type="checkbox"
                         checked={selectedIds.has(ingresoId)}
                         onChange={(e) => toggleRow(e, row)}
+                        disabled={bulkApproving}
                         aria-label={`Seleccionar ${formatOS(row)}`}
                       />
                     </td>
@@ -277,14 +485,14 @@ export default function JefePresupuestos() {
                               e.stopPropagation();
                               aprobar(row);
                             }}
-                            disabled={busyId === ingresoId}
-                            aria-busy={busyId === ingresoId ? "true" : "false"}
+                            disabled={approvingBusy}
+                            aria-busy={approvingBusy ? "true" : "false"}
                             title="Aprobar presupuesto"
                           >
                             Aprobar
                           </button>
                         ) : null}
-                        {/* Si tu backend permite rechazar / anular, pods agregar ac otro botn */}
+                        {/* Si tu backend permite rechazar / anular, podes agregar aca otro boton */}
                       </div>
                     </td>
                   </tr>

@@ -8,7 +8,7 @@ export default function Footer() {
         <span>
           &copy; {new Date().getFullYear()} Sepid S.A. Reparaciones. Todos los derechos reservados.
         </span>
-        <span>Creado por Lautaro Bonino Montepaone</span>
+        <span>NEXORA - Gestor de Reparaciones | Creado por Lautaro Bonino Montepaone</span>
       </div>
     </footer>
   );

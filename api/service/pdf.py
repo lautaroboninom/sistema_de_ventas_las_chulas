@@ -26,6 +26,12 @@ RESOLUTION_LABELS = {
     "cambio": "Cambio",
 }
 
+DEFAULT_AUTORIZADO_POR = "Cliente"
+DEFAULT_FORMA_PAGO = "30 F.F."
+DEFAULT_PLAZO_ENTREGA_TXT = "< 5 D\u00cdAS H\u00c1BILES"
+DEFAULT_GARANTIA_TXT = "90 D\u00cdAS"
+DEFAULT_MANT_OFERTA_TXT = "7 D\u00cdAS"
+
 def resolution_label(value: str) -> str:
     v = (value or "").strip()
     if not v:
@@ -89,8 +95,11 @@ def _get_data(ingreso_id: int):
             COALESCE(q.subtotal,0) AS subtotal,
             COALESCE(q.iva_21,0) AS iva_21,
             COALESCE(q.total,0) AS total,
-            COALESCE(q.autorizado_por, 'Cliente') AS autorizado_por,
-            COALESCE(q.forma_pago, '30 F.F.') AS forma_pago,
+            COALESCE(NULLIF(q.autorizado_por, ''), %s) AS autorizado_por,
+            COALESCE(NULLIF(q.forma_pago, ''), %s) AS forma_pago,
+            COALESCE(NULLIF(q.plazo_entrega_txt, ''), %s) AS plazo_entrega_txt,
+            COALESCE(NULLIF(q.garantia_txt, ''), %s) AS garantia_txt,
+            COALESCE(NULLIF(q.mant_oferta_txt, ''), %s) AS mant_oferta_txt,
             COALESCE(q.fecha_emitido, NOW()) AS fecha_emitido
         FROM ingresos t
         JOIN devices d ON d.id=t.device_id
@@ -99,7 +108,14 @@ def _get_data(ingreso_id: int):
         LEFT JOIN models m ON m.id=d.model_id
         LEFT JOIN quotes q ON q.ingreso_id=t.id
         WHERE t.id=%s
-    """, [ingreso_id], one=True)
+    """, [
+        DEFAULT_AUTORIZADO_POR,
+        DEFAULT_FORMA_PAGO,
+        DEFAULT_PLAZO_ENTREGA_TXT,
+        DEFAULT_GARANTIA_TXT,
+        DEFAULT_MANT_OFERTA_TXT,
+        ingreso_id,
+    ], one=True)
 
     # Agregar serial_cambio si existe la columna
     try:
@@ -841,11 +857,14 @@ def render_quote_pdf(ingreso_id: int):
     y -= 50
 
     c.setFont("Helvetica", 10)
-    forma_pago = head.get("forma_pago") or "30 F.F."
-    c.drawString(ml, y, "PlazoEntrega: < 5 DÍAS HÁBILES")
+    forma_pago = head.get("forma_pago") or DEFAULT_FORMA_PAGO
+    plazo_entrega_txt = head.get("plazo_entrega_txt") or DEFAULT_PLAZO_ENTREGA_TXT
+    garantia_txt = head.get("garantia_txt") or DEFAULT_GARANTIA_TXT
+    mant_oferta_txt = head.get("mant_oferta_txt") or DEFAULT_MANT_OFERTA_TXT
+    c.drawString(ml, y, f"PlazoEntrega: {plazo_entrega_txt}")
     c.drawRightString(W - ml, y, f"FormaPago: {forma_pago}"); y -= 12
-    c.drawString(ml, y, "Garantía: 90 DÍAS")
-    c.drawRightString(W - ml, y, "Mant. de Oferta: 7 DÍAS"); y -= 18
+    c.drawString(ml, y, f"Garantía: {garantia_txt}")
+    c.drawRightString(W - ml, y, f"Mant. de Oferta: {mant_oferta_txt}"); y -= 18
 
     y -= 25
     c.drawString(ml, y, "Atte. Serv.Técnico"); y -= 14

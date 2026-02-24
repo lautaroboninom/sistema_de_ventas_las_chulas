@@ -171,11 +171,13 @@ class Command(BaseCommand):
                       ref_tipo   TEXT NULL,
                       ref_id     INTEGER NULL,
                       nota       TEXT NULL,
+                      fecha_compra DATE NULL,
                       created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                       created_by INTEGER NULL REFERENCES users(id)
                     );
                     """
                 )
+                cur.execute("ALTER TABLE repuestos_movimientos ADD COLUMN IF NOT EXISTS fecha_compra DATE")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_repuestos_movimientos_repuesto_id ON repuestos_movimientos(repuesto_id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_repuestos_movimientos_created_at ON repuestos_movimientos(created_at)")
                 cur.execute(

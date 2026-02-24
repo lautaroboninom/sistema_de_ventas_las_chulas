@@ -133,3 +133,12 @@ flowchart TD
   I --> J[estado='ingresado' + notificar técnico (best-effort)]
 ```
 
+### Baja / Alta desde Hoja de Servicio
+- Baja: `POST /api/ingresos/:id/baja/`.
+  - Cambia a estado `baja`.
+  - Setea ubicacion `-`.
+  - Envia email a `BAJA_NOTIFY_RECIPIENTS` (best-effort).
+- Alta: `POST /api/ingresos/:id/alta/` (solo si el estado actual es `baja`).
+  - Cambia a estado `ingresado`.
+  - Setea ubicacion `Taller`.
+  - Envia email a `BAJA_NOTIFY_RECIPIENTS` (best-effort).

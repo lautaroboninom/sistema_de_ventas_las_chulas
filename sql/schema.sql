@@ -514,11 +514,19 @@ CREATE TABLE IF NOT EXISTS quotes (
   total           NUMERIC(12,2) GENERATED ALWAYS AS (round((subtotal * 1.21), 2)) STORED,
   autorizado_por  TEXT,
   forma_pago      TEXT,
+  plazo_entrega_txt TEXT,
+  garantia_txt    TEXT,
+  mant_oferta_txt TEXT,
   fecha_emitido   TIMESTAMPTZ NULL,
   fecha_aprobado  TIMESTAMPTZ NULL,
   pdf_url         TEXT,
   CONSTRAINT uq_quotes_ingreso UNIQUE (ingreso_id)
 );
+
+-- Compat con schemas previos de quotes
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS plazo_entrega_txt TEXT;
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS garantia_txt TEXT;
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS mant_oferta_txt TEXT;
 
 CREATE TABLE IF NOT EXISTS quote_items (
   id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -893,6 +901,7 @@ CREATE TABLE IF NOT EXISTS repuestos_movimientos (
   ref_tipo   TEXT NULL,
   ref_id     INTEGER NULL,
   nota       TEXT NULL,
+  fecha_compra DATE NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_by INTEGER NULL REFERENCES users(id)
 );

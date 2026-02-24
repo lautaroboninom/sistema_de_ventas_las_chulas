@@ -41,6 +41,18 @@ def _mask_costs(payload: dict, allow_costs: bool) -> dict:
     return payload
 
 
+DEFAULT_AUTORIZADO_POR = "Cliente"
+DEFAULT_FORMA_PAGO = "30 F.F."
+DEFAULT_PLAZO_ENTREGA_TXT = "< 5 D\u00cdAS H\u00c1BILES"
+DEFAULT_GARANTIA_TXT = "90 D\u00cdAS"
+DEFAULT_MANT_OFERTA_TXT = "7 D\u00cdAS"
+
+
+def _clean_text_or_default(value, default: str) -> str:
+    cleaned = (value or "").strip()
+    return cleaned or default
+
+
 def _get_stock_alert_recipients():
     rows = q(
         """
@@ -164,11 +176,29 @@ def _ensure_quote(ingreso_id: int):
 def _load_quote_payload(ingreso_id: int):
     head = q(
         """
-        SELECT q.id AS quote_id, q.estado, q.moneda, q.subtotal, q.iva_21, q.total
+        SELECT
+          q.id AS quote_id,
+          q.estado,
+          q.moneda,
+          q.subtotal,
+          q.iva_21,
+          q.total,
+          COALESCE(NULLIF(q.autorizado_por, ''), %s) AS autorizado_por,
+          COALESCE(NULLIF(q.forma_pago, ''), %s) AS forma_pago,
+          COALESCE(NULLIF(q.plazo_entrega_txt, ''), %s) AS plazo_entrega_txt,
+          COALESCE(NULLIF(q.garantia_txt, ''), %s) AS garantia_txt,
+          COALESCE(NULLIF(q.mant_oferta_txt, ''), %s) AS mant_oferta_txt
         FROM quotes q
         WHERE q.ingreso_id=%s
         """,
-        [ingreso_id],
+        [
+            DEFAULT_AUTORIZADO_POR,
+            DEFAULT_FORMA_PAGO,
+            DEFAULT_PLAZO_ENTREGA_TXT,
+            DEFAULT_GARANTIA_TXT,
+            DEFAULT_MANT_OFERTA_TXT,
+            ingreso_id,
+        ],
         one=True,
     )
 
@@ -176,10 +206,28 @@ def _load_quote_payload(ingreso_id: int):
         qid = _ensure_quote(ingreso_id)
         head = q(
             """
-            SELECT q.id AS quote_id, q.estado, q.moneda, q.subtotal, q.iva_21, q.total
+            SELECT
+              q.id AS quote_id,
+              q.estado,
+              q.moneda,
+              q.subtotal,
+              q.iva_21,
+              q.total,
+              COALESCE(NULLIF(q.autorizado_por, ''), %s) AS autorizado_por,
+              COALESCE(NULLIF(q.forma_pago, ''), %s) AS forma_pago,
+              COALESCE(NULLIF(q.plazo_entrega_txt, ''), %s) AS plazo_entrega_txt,
+              COALESCE(NULLIF(q.garantia_txt, ''), %s) AS garantia_txt,
+              COALESCE(NULLIF(q.mant_oferta_txt, ''), %s) AS mant_oferta_txt
             FROM quotes q WHERE q.id=%s
             """,
-            [qid],
+            [
+                DEFAULT_AUTORIZADO_POR,
+                DEFAULT_FORMA_PAGO,
+                DEFAULT_PLAZO_ENTREGA_TXT,
+                DEFAULT_GARANTIA_TXT,
+                DEFAULT_MANT_OFERTA_TXT,
+                qid,
+            ],
             one=True,
         )
 
@@ -232,6 +280,11 @@ def _load_quote_payload(ingreso_id: int):
         "quote_id": head["quote_id"],
         "estado": head["estado"],
         "moneda": head["moneda"],
+        "autorizado_por": head["autorizado_por"],
+        "forma_pago": head["forma_pago"],
+        "plazo_entrega_txt": head["plazo_entrega_txt"],
+        "garantia_txt": head["garantia_txt"],
+        "mant_oferta_txt": head["mant_oferta_txt"],
         "items": items,
         "tot_repuestos": tot_rep,
         "mano_obra": mano_obra,
@@ -451,8 +504,11 @@ class EmitirPresupuestoView(APIView):
 
     def post(self, request, ingreso_id: int):
         require_roles_strict(request, ["jefe", "admin"])
-        autorizado_por = (request.data.get("autorizado_por") or "Cliente").strip()
-        forma_pago = (request.data.get("forma_pago") or "A definir").strip()
+        autorizado_por = _clean_text_or_default(request.data.get("autorizado_por"), DEFAULT_AUTORIZADO_POR)
+        forma_pago = _clean_text_or_default(request.data.get("forma_pago"), "A definir")
+        plazo_entrega_txt = _clean_text_or_default(request.data.get("plazo_entrega_txt"), DEFAULT_PLAZO_ENTREGA_TXT)
+        garantia_txt = _clean_text_or_default(request.data.get("garantia_txt"), DEFAULT_GARANTIA_TXT)
+        mant_oferta_txt = _clean_text_or_default(request.data.get("mant_oferta_txt"), DEFAULT_MANT_OFERTA_TXT)
         qid = _ensure_quote(ingreso_id)
         _set_audit_user(request)
         exec_void(
@@ -461,10 +517,13 @@ class EmitirPresupuestoView(APIView):
                SET estado='presupuestado',
                    autorizado_por=%s,
                    forma_pago=%s,
+                   plazo_entrega_txt=%s,
+                   garantia_txt=%s,
+                   mant_oferta_txt=%s,
                    fecha_emitido=now()
              WHERE id=%s
             """,
-            [autorizado_por, forma_pago, qid],
+            [autorizado_por, forma_pago, plazo_entrega_txt, garantia_txt, mant_oferta_txt, qid],
         )
         exec_void("UPDATE ingresos SET presupuesto_estado='presupuestado' WHERE id=%s", [ingreso_id])
 

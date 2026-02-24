@@ -5,6 +5,7 @@ import { useAuth } from "./context/AuthContext";
 //import Sidebar from "web\src\components\Sidebar.jsx"; //  nuevo
 import Sidebar from "./components/Sidebar.jsx";
 import Footer from "./components/Footer.jsx";
+import useRouteUiState from "./hooks/useRouteUiState";
 
 
 export default function App() {
@@ -17,6 +18,8 @@ export default function App() {
   const isJefeVeedor = rol === "jefe_veedor";
   const isAdmin = rol === "admin";
   const isTecnico = rol === "tecnico";
+
+  useRouteUiState();
 
   useEffect(() => {
     setMobileMenuOpen(false);

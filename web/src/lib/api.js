@@ -340,6 +340,12 @@ export const postModelo = (brandId, payloadOrNombre) => {
   };
   export const getRepuestosSubrubros = () =>
     api.get("/api/repuestos/subrubros/");
+  export const postRepuestosSubrubro = (payload) =>
+    api.post("/api/repuestos/subrubros/", payload);
+  export const patchRepuestosSubrubro = (subrubroCodigo, payload) =>
+    api.patch(`/api/repuestos/subrubros/${subrubroCodigo}/`, payload);
+  export const deleteRepuestosSubrubro = (subrubroCodigo) =>
+    api.del(`/api/repuestos/subrubros/${subrubroCodigo}/`);
   export const getRepuestosConfig = () => api.get("/api/repuestos/config/");
   export const patchRepuestosConfig = (payload) =>
     api.patch("/api/repuestos/config/", payload);
@@ -349,6 +355,8 @@ export const postModelo = (brandId, payloadOrNombre) => {
     api.post("/api/repuestos/", payload);
   export const patchRepuesto = (repuestoId, payload) =>
     api.patch(`/api/repuestos/${repuestoId}/`, payload);
+  export const postRepuestosMovimientoCompra = (payload) =>
+    api.post("/api/repuestos/movimientos/compra/", payload);
   export const getRepuestosMovimientos = (params = {}) => {
     const qs = new URLSearchParams();
     if (params.repuesto_id) qs.set("repuesto_id", params.repuesto_id);
@@ -514,6 +522,9 @@ export const postModelo = (brandId, payloadOrNombre) => {
   // Marcar baja
   export const postBajaIngreso = (ingresoId) =>
     api.post(`/api/ingresos/${ingresoId}/baja/`, {});
+  // Marcar alta (reactivar desde baja)
+  export const postAltaIngreso = (ingresoId) =>
+    api.post(`/api/ingresos/${ingresoId}/alta/`, {});
   export const getPendientesGeneral = () => api.get("/api/ingresos/pendientes/");
   export const getPendientesPresupuesto = () =>
     api.get("/api/presupuestos/pendientes/");
@@ -623,7 +634,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   export const patchQuoteResumen = (ingresoId, payload /* {mano_obra} */) =>
     api.patch(`/api/quotes/${ingresoId}/resumen/`, payload);
 
-  export const postQuoteEmitir = (ingresoId, payload /* {autorizado_por, forma_pago} */) =>
+  export const postQuoteEmitir = (ingresoId, payload /* {autorizado_por, forma_pago, plazo_entrega_txt, garantia_txt, mant_oferta_txt} */) =>
     api.post(`/api/quotes/${ingresoId}/emitir/`, payload);
 
   export const postQuoteAprobar = (ingresoId) =>

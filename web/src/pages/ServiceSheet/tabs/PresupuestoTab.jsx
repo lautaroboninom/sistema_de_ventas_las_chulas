@@ -14,6 +14,11 @@ import {
   getRepuestosCatalogo,
 } from "../../../lib/api";
 
+const DEFAULT_FORMA_PAGO = "30 F.F.";
+const DEFAULT_PLAZO_ENTREGA_TXT = "< 5 D\u00cdAS H\u00c1BILES";
+const DEFAULT_GARANTIA_TXT = "90 D\u00cdAS";
+const DEFAULT_MANT_OFERTA_TXT = "7 D\u00cdAS";
+
 export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeCosts, money, refreshIngreso, setErr }) {
   const isAprobado = data.presupuesto_estado === "aprobado";
   const garantiaTrabajos = (data?.garantia_reparacion_trabajos || "").trim();
@@ -31,7 +36,10 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeC
   const repItemRefs = useRef([]);
 
   const [autorizadoPor, setAutorizadoPor] = useState("Cliente");
-  const [formaPago, setFormaPago] = useState("30 F.F.");
+  const [formaPago, setFormaPago] = useState(DEFAULT_FORMA_PAGO);
+  const [plazoEntregaTxt, setPlazoEntregaTxt] = useState(DEFAULT_PLAZO_ENTREGA_TXT);
+  const [garantiaTxt, setGarantiaTxt] = useState(DEFAULT_GARANTIA_TXT);
+  const [mantOfertaTxt, setMantOfertaTxt] = useState(DEFAULT_MANT_OFERTA_TXT);
   const [emitiendo, setEmitiendo] = useState(false);
   const [aprobando, setAprobando] = useState(false);
   const [anulando, setAnulando] = useState(false);
@@ -46,7 +54,11 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeC
       const q = await getQuote(id);
       setQuote(q);
       setManoObraStr(String(q?.mano_obra ?? "0"));
-      setFormaPago(q?.forma_pago ?? "30 F.F.");
+      setAutorizadoPor(q?.autorizado_por ?? "Cliente");
+      setFormaPago(q?.forma_pago ?? DEFAULT_FORMA_PAGO);
+      setPlazoEntregaTxt(q?.plazo_entrega_txt ?? DEFAULT_PLAZO_ENTREGA_TXT);
+      setGarantiaTxt(q?.garantia_txt ?? DEFAULT_GARANTIA_TXT);
+      setMantOfertaTxt(q?.mant_oferta_txt ?? DEFAULT_MANT_OFERTA_TXT);
     } catch (e) {
       setQErr(e?.message || "No se pudo cargar el presupuesto");
       setQuote(null);
@@ -239,7 +251,13 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeC
   async function emitirPresupuesto() {
     try {
       setEmitiendo(true);
-      const r = await postQuoteEmitir(id, { autorizado_por: autorizadoPor, forma_pago: formaPago });
+      const r = await postQuoteEmitir(id, {
+        autorizado_por: autorizadoPor,
+        forma_pago: formaPago,
+        plazo_entrega_txt: plazoEntregaTxt,
+        garantia_txt: garantiaTxt,
+        mant_oferta_txt: mantOfertaTxt,
+      });
       setQuote(r);
       if (typeof refreshIngreso === "function") await refreshIngreso();
       if (r?.pdf_url) await abrirPdf();
@@ -394,7 +412,7 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeC
         <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded mb-3">{qErr}</div>
       )}
 
-      <div className="flex gap-3 items-end mb-4">
+      <div className="flex flex-wrap gap-3 items-end mb-4">
         <label className="block">
           <div className="text-sm text-gray-600">Autorizado por</div>
           <input className="border rounded p-2" value={autorizadoPor} onChange={(e) => setAutorizadoPor(e.target.value)} />
@@ -402,6 +420,18 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeC
         <label className="block">
           <div className="text-sm text-gray-600">Forma de pago</div>
           <input className="border rounded p-2" value={formaPago} onChange={(e) => setFormaPago(e.target.value)} />
+        </label>
+        <label className="block">
+          <div className="text-sm text-gray-600">Plazo de entrega</div>
+          <input className="border rounded p-2" value={plazoEntregaTxt} onChange={(e) => setPlazoEntregaTxt(e.target.value)} />
+        </label>
+        <label className="block">
+          <div className="text-sm text-gray-600">Garantía</div>
+          <input className="border rounded p-2" value={garantiaTxt} onChange={(e) => setGarantiaTxt(e.target.value)} />
+        </label>
+        <label className="block">
+          <div className="text-sm text-gray-600">Mant. de oferta</div>
+          <input className="border rounded p-2" value={mantOfertaTxt} onChange={(e) => setMantOfertaTxt(e.target.value)} />
         </label>
         {canManagePresupuesto && data.presupuesto_estado === "pendiente" && (
           <button className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-60" onClick={emitirPresupuesto} disabled={emitiendo}>

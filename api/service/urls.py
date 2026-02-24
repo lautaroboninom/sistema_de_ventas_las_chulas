@@ -10,7 +10,7 @@ from .views import (
     NoAplicaPresupuestoView, QuitarNoAplicaPresupuestoView,
     PendientesPresupuestoView, PresupuestadosView, PresupuestadosExportView,
     MarcarReparadoView, MarcarParaRepararView, MarcarControladoSinDefectoView, EntregarIngresoView, GarantiaReparacionCheckView, GarantiaFabricaCheckView,
-    DarBajaIngresoView,
+    DarBajaIngresoView, DarAltaIngresoView,
     ListosParaRetiroView,
     ScanLookupView,
 
@@ -28,8 +28,8 @@ from .views import (
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
     IngresoAlquilerAccesoriosView, IngresoAlquilerAccesorioDetailView,
-    CatalogoRepuestosView, RepuestosView, RepuestoDetailView, RepuestosConfigView, RepuestosMovimientosView,
-    RepuestosSubrubrosView,
+    CatalogoRepuestosView, RepuestosView, RepuestoDetailView, RepuestosConfigView, RepuestosMovimientosView, RepuestosCompraMovimientoView,
+    RepuestosSubrubrosView, RepuestosSubrubroDetailView,
     RepuestosCambiosView,
     RepuestosStockPermisosView, RepuestosStockPermisoDetailView,
     CatalogoMarcasView, CatalogoModelosView,
@@ -88,6 +88,7 @@ urlpatterns = [
     path("ingresos/<int:ingreso_id>/controlado-sin-defecto/", MarcarControladoSinDefectoView.as_view()),
     path("ingresos/<int:ingreso_id>/entregar/", EntregarIngresoView.as_view()),
     path("ingresos/<int:ingreso_id>/baja/", DarBajaIngresoView.as_view()),
+    path("ingresos/<int:ingreso_id>/alta/", DarAltaIngresoView.as_view()),
 
     # presupuestos
     path("quotes/<int:ingreso_id>/emitir/", EmitirPresupuestoView.as_view()),
@@ -143,7 +144,9 @@ urlpatterns = [
     path("catalogos/repuestos/", CatalogoRepuestosView.as_view()),
     path("repuestos/", RepuestosView.as_view()),
     path("repuestos/subrubros/", RepuestosSubrubrosView.as_view()),
+    path("repuestos/subrubros/<str:subrubro_codigo>/", RepuestosSubrubroDetailView.as_view()),
     path("repuestos/config/", RepuestosConfigView.as_view()),
+    path("repuestos/movimientos/compra/", RepuestosCompraMovimientoView.as_view()),
     path("repuestos/movimientos/", RepuestosMovimientosView.as_view()),
     path("repuestos/cambios/", RepuestosCambiosView.as_view()),
     path("repuestos/stock-permisos/", RepuestosStockPermisosView.as_view()),

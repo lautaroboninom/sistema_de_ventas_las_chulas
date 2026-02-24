@@ -204,6 +204,11 @@ class QuoteDetailSerializer(serializers.Serializer):
     quote_id = serializers.IntegerField()
     estado = serializers.CharField()
     moneda = serializers.CharField()
+    autorizado_por = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    forma_pago = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    plazo_entrega_txt = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    garantia_txt = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    mant_oferta_txt = serializers.CharField(allow_blank=True, allow_null=True, required=False)
     items = QuoteItemSerializer(many=True)
     pdf_url = serializers.CharField(required=False, allow_blank=True)
     

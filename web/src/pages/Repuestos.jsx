@@ -10,9 +10,13 @@ import {
   postRepuesto,
   patchRepuesto,
   patchRepuestosConfig,
+  postRepuestosMovimientoCompra,
   getRepuestosMovimientos,
   getRepuestosCambios,
   getRepuestosSubrubros,
+  postRepuestosSubrubro,
+  patchRepuestosSubrubro,
+  deleteRepuestosSubrubro,
   getRepuestosStockPermisos,
   postRepuestosStockPermiso,
   patchRepuestosStockPermiso,
@@ -60,6 +64,17 @@ const Tabs = ({ value, onChange, items }) => (
 );
 
 const formatTs = (s) => (s ? new Date(s).toLocaleString("es-AR") : "-");
+const formatDate = (s) => {
+  if (!s) return "-";
+  const parts = String(s).split("-");
+  if (parts.length !== 3) return String(s);
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
+};
+const todayLocalISO = () => {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+};
 
 const normalizeEquipoToken = (value) =>
   norm(value).replace(/\s+/g, " ").trim();
@@ -141,6 +156,20 @@ const EMPTY_ADD_FORM = {
   costo_usd: "",
 };
 
+const EMPTY_SUBRUBRO_FORM = {
+  codigo: "",
+  nombre: "",
+};
+
+const buildEmptyCompraForm = () => ({
+  repuesto_input: "",
+  repuesto_id: "",
+  cantidad: "1",
+  fecha_compra: todayLocalISO(),
+  proveedor_input: "",
+  nota: "",
+});
+
 
 /**
  * Repuestos component - Manages spare parts inventory system
@@ -189,9 +218,12 @@ const EMPTY_ADD_FORM = {
 export default function Repuestos() {
   const { user } = useAuth();
   const canManage = isJefe(user) || isJefeVeedor(user);
+  const userIsAdmin = isAdmin(user);
   const isTech = isTecnico(user);
-  const canSeeCosts = canManage || isAdmin(user);
+  const canSeeCosts = canManage || userIsAdmin;
   const canEditCost = canSeeCosts;
+  const canManageSubrubros = canManage || userIsAdmin;
+  const canViewCambios = canManage || userIsAdmin;
 
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
@@ -225,13 +257,22 @@ export default function Repuestos() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [cfgLoading, setCfgLoading] = useState(false);
-  const [actionsOpen, setActionsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [compraOpen, setCompraOpen] = useState(false);
+  const [compraSaving, setCompraSaving] = useState(false);
+  const [compraForm, setCompraForm] = useState(() => buildEmptyCompraForm());
+  const [compraRepuestoOpen, setCompraRepuestoOpen] = useState(false);
+  const [subrubrosOpen, setSubrubrosOpen] = useState(false);
+  const [subrubroForm, setSubrubroForm] = useState(() => ({ ...EMPTY_SUBRUBRO_FORM }));
+  const [subrubroEditCodigo, setSubrubroEditCodigo] = useState("");
+  const [subrubroSaving, setSubrubroSaving] = useState(false);
+  const [subrubroDeletingCodigo, setSubrubroDeletingCodigo] = useState("");
   const [addSaving, setAddSaving] = useState(false);
   const [addForm, setAddForm] = useState(() => ({ ...EMPTY_ADD_FORM }));
   const [addEquipoInput, setAddEquipoInput] = useState("");
   const [addEquipoErr, setAddEquipoErr] = useState("");
-  const actionsMenuRef = useRef(null);
+  const menuRef = useRef(null);
   const [equipOptionsAll, setEquipOptionsAll] = useState([]);
   const [equipOptionsLoading, setEquipOptionsLoading] = useState(false);
   const [equipOptionsErr, setEquipOptionsErr] = useState("");
@@ -305,6 +346,26 @@ export default function Repuestos() {
   const canDelete = canEditStock;
   const canAdd = canManage || (isTech && !!activePerm);
   const colCount = 6;
+  const compraSelectedRepuesto = useMemo(() => {
+    const byInput = findRepuestoCompraMatch(compraForm.repuesto_input);
+    if (byInput?.id) return byInput;
+    const repId = Number(compraForm.repuesto_id || 0);
+    if (!repId) return null;
+    return (items || []).find((it) => Number(it?.id || 0) === repId) || null;
+  }, [compraForm.repuesto_input, compraForm.repuesto_id, items]);
+  const compraRepuestoSuggestions = useMemo(() => {
+    if (!compraRepuestoOpen) return [];
+    const needle = norm(compraForm.repuesto_input || "");
+    const rows = (items || []).filter((it) => {
+      if (!needle) return true;
+      return (
+        norm(it?.codigo || "").includes(needle) ||
+        norm(it?.nombre || "").includes(needle) ||
+        norm(repuestoOptionLabel(it)).includes(needle)
+      );
+    });
+    return rows.slice(0, 200);
+  }, [compraRepuestoOpen, compraForm.repuesto_input, items]);
 
   async function loadConfig() {
     try {
@@ -378,7 +439,7 @@ export default function Repuestos() {
   }
 
   async function loadProveedores() {
-    if (!canManage) return;
+    if (!canEditStock) return;
     try {
       const rows = await getProveedoresExternos();
       setProveedores(rows || []);
@@ -388,7 +449,7 @@ export default function Repuestos() {
   }
 
   async function loadSubrubros() {
-    if (!canAdd) return;
+    if (!canAdd && !canManageSubrubros) return;
     try {
       setSubrubrosErr("");
       setSubrubrosLoading(true);
@@ -716,27 +777,29 @@ export default function Repuestos() {
     loadPermisos();
     if (canManage) {
       loadTecnicos();
+    }
+    if (canEditStock) {
       loadProveedores();
     }
-  }, [canManage, user?.id]);
+  }, [canManage, canEditStock, user?.id]);
 
   useEffect(() => {
-    if (canAdd) {
+    if (canAdd || canManageSubrubros) {
       loadSubrubros();
     }
-  }, [canAdd]);
+  }, [canAdd, canManageSubrubros]);
 
   useEffect(() => {
-    if (!actionsOpen) return;
+    if (!menuOpen) return;
     const onClick = (event) => {
-      if (!actionsMenuRef.current) return;
-      if (!actionsMenuRef.current.contains(event.target)) {
-        setActionsOpen(false);
+      if (!menuRef.current) return;
+      if (!menuRef.current.contains(event.target)) {
+        setMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
-  }, [actionsOpen]);
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!equipOpenId) return;
@@ -748,6 +811,70 @@ export default function Repuestos() {
     setAddEquipoInput("");
     setAddEquipoErr("");
     setEquipOpenId(null);
+  }
+
+  function resetCompraForm() {
+    setCompraForm(buildEmptyCompraForm());
+    setCompraRepuestoOpen(false);
+  }
+
+  function resetSubrubroForm() {
+    setSubrubroForm({ ...EMPTY_SUBRUBRO_FORM });
+    setSubrubroEditCodigo("");
+  }
+
+  function repuestoOptionLabel(it) {
+    const code = String(it?.codigo || "").trim();
+    const name = String(it?.nombre || "").trim();
+    if (code && name) return `${code} - ${name}`;
+    return code || name || "";
+  }
+
+  function findRepuestoCompraMatch(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const needle = norm(raw);
+    let byCode = null;
+    let byLabel = null;
+    let byName = null;
+    for (const it of items || []) {
+      if (!byCode && norm(it?.codigo || "") === needle) {
+        byCode = it;
+      }
+      if (!byLabel && norm(repuestoOptionLabel(it)) === needle) {
+        byLabel = it;
+      }
+      if (!byName && norm(it?.nombre || "") === needle) {
+        byName = it;
+      }
+      if (byCode || byLabel || byName) {
+        return byCode || byLabel || byName;
+      }
+    }
+    return null;
+  }
+
+  function updateCompraRepuestoInput(value) {
+    const match = findRepuestoCompraMatch(value);
+    setCompraForm((prev) => ({
+      ...prev,
+      repuesto_input: value,
+      repuesto_id: match?.id ? String(match.id) : "",
+    }));
+  }
+
+  function selectCompraRepuesto(item) {
+    if (!item?.id) return;
+    setCompraForm((prev) => ({
+      ...prev,
+      repuesto_input: repuestoOptionLabel(item),
+      repuesto_id: String(item.id),
+    }));
+    setCompraRepuestoOpen(false);
+  }
+
+  function normalizeSubrubroCodeInput(value) {
+    return String(value ?? "").replace(/\D/g, "").slice(0, 4);
   }
 
   function normalizeIntInput(value) {
@@ -1077,7 +1204,7 @@ export default function Repuestos() {
       const created = await postRepuesto(payload);
       resetAddForm();
       setAddOpen(false);
-      setActionsOpen(false);
+      setMenuOpen(false);
       await loadRepuestos();
       if (created?.id) {
         setOpenId(created.id);
@@ -1101,6 +1228,172 @@ export default function Repuestos() {
     }
   }
 
+  function startEditSubrubro(subrubro) {
+    setSubrubroEditCodigo(subrubro.codigo || "");
+    setSubrubroForm({
+      codigo: subrubro.codigo || "",
+      nombre: subrubro.nombre || "",
+    });
+    setSubrubrosErr("");
+  }
+
+  async function saveSubrubro() {
+    if (!canManageSubrubros) return;
+    const code = normalizeSubrubroCodeInput(subrubroForm.codigo);
+    const nombre = (subrubroForm.nombre || "").trim();
+    if (!nombre) {
+      setSubrubrosErr("Nombre de subrubro requerido");
+      return;
+    }
+    if (!subrubroEditCodigo && code.length !== 4) {
+      setSubrubrosErr("El codigo del subrubro debe tener 4 digitos");
+      return;
+    }
+    try {
+      setSubrubroSaving(true);
+      setSubrubrosErr("");
+      if (subrubroEditCodigo) {
+        await patchRepuestosSubrubro(subrubroEditCodigo, { nombre });
+        setMsg("Subrubro actualizado");
+      } else {
+        await postRepuestosSubrubro({ codigo: code, nombre });
+        setMsg("Subrubro creado");
+      }
+      await loadSubrubros();
+      resetSubrubroForm();
+    } catch (e) {
+      setSubrubrosErr(e?.message || "No se pudo guardar subrubro");
+    } finally {
+      setSubrubroSaving(false);
+    }
+  }
+
+  async function handleDeleteSubrubro(codigo) {
+    if (!canManageSubrubros) return;
+    const row = (subrubros || []).find((s) => s.codigo === codigo);
+    const ok = window.confirm(
+      `¿Eliminar subrubro ${codigo}${row?.nombre ? ` - ${row.nombre}` : ""}?`
+    );
+    if (!ok) return;
+    try {
+      setSubrubroDeletingCodigo(codigo);
+      setSubrubrosErr("");
+      await deleteRepuestosSubrubro(codigo);
+      await loadSubrubros();
+      if (addForm.subrubro_codigo === codigo) {
+        setAddForm((prev) => ({ ...prev, subrubro_codigo: "" }));
+      }
+      if (subrubroEditCodigo === codigo) {
+        resetSubrubroForm();
+      }
+      setMsg("Subrubro eliminado");
+    } catch (e) {
+      setSubrubrosErr(e?.message || "No se pudo eliminar subrubro");
+    } finally {
+      setSubrubroDeletingCodigo("");
+    }
+  }
+
+  async function saveCompra() {
+    if (!canEditStock) return;
+    const repuestoInput = (compraForm.repuesto_input || "").trim();
+    const repuestoMatch = findRepuestoCompraMatch(repuestoInput);
+    const repuestoId = repuestoMatch?.id
+      ? Number(repuestoMatch.id)
+      : Number(compraForm.repuesto_id || 0);
+    if (!repuestoId) {
+      setErr("Selecciona un repuesto valido");
+      return;
+    }
+
+    const qtyRaw = String(compraForm.cantidad ?? "").trim();
+    if (!/^\d+$/.test(qtyRaw)) {
+      setErr("La cantidad debe ser un entero mayor a 0");
+      return;
+    }
+    const cantidad = Number(qtyRaw);
+    if (!Number.isInteger(cantidad) || cantidad <= 0) {
+      setErr("La cantidad debe ser un entero mayor a 0");
+      return;
+    }
+
+    const fechaCompra = (compraForm.fecha_compra || "").trim();
+    if (!fechaCompra) {
+      setErr("Fecha de compra requerida");
+      return;
+    }
+
+    const payload = {
+      repuesto_id: repuestoId,
+      cantidad,
+      fecha_compra: fechaCompra,
+    };
+    const proveedorInput = (compraForm.proveedor_input || "").trim();
+    if (proveedorInput) {
+      const provMatch = (proveedores || []).find(
+        (p) => norm(p?.nombre || "") === norm(proveedorInput)
+      );
+      if (provMatch?.id) {
+        payload.proveedor_id = Number(provMatch.id);
+      } else {
+        payload.proveedor_nombre = proveedorInput;
+      }
+    }
+    const nota = (compraForm.nota || "").trim();
+    if (nota) payload.nota = nota;
+
+    try {
+      setCompraSaving(true);
+      setErr("");
+      setMsg("");
+      const res = await postRepuestosMovimientoCompra(payload);
+      const repuestoUpdated = res?.repuesto || null;
+      const movimiento = res?.movimiento || null;
+
+      if (repuestoUpdated?.id) {
+        applyItemUpdate(repuestoUpdated);
+        setDetalles((prev) => {
+          const st = prev[repuestoUpdated.id];
+          if (!st) return prev;
+          const next = {
+            ...st,
+            data: repuestoUpdated,
+            draft: buildDetalleDraft(repuestoUpdated),
+            proveedoresDraft: buildProveedoresDraft(repuestoUpdated),
+          };
+          if (movimiento) {
+            const current = Array.isArray(st.movs) ? st.movs : [];
+            const merged = [movimiento, ...current.filter((m) => m?.id !== movimiento.id)];
+            next.movs = merged.slice(0, 50);
+          }
+          return { ...prev, [repuestoUpdated.id]: next };
+        });
+      } else {
+        await loadRepuestos();
+      }
+
+      if (movimiento) {
+        setMovimientos((prev) => {
+          const current = Array.isArray(prev) ? prev : [];
+          const merged = [movimiento, ...current.filter((m) => m?.id !== movimiento.id)];
+          return merged.slice(0, 100);
+        });
+      }
+
+      if (payload.proveedor_nombre) {
+        await loadProveedores();
+      }
+
+      setCompraOpen(false);
+      resetCompraForm();
+      setMsg("Compra registrada");
+    } catch (e) {
+      setErr(e?.message || "No se pudo registrar compra");
+    } finally {
+      setCompraSaving(false);
+    }
+  }
+
   async function loadMovimientos() {
     try {
       setErr("");
@@ -1117,7 +1410,7 @@ export default function Repuestos() {
   }
 
   async function loadCambios() {
-    if (!canManage) return;
+    if (!canViewCambios) return;
     try {
       setCambiosErr("");
       setCambiosLoading(true);
@@ -1152,7 +1445,90 @@ export default function Repuestos() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-2">Repuestos</h1>
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <h1 className="text-2xl font-bold">Repuestos</h1>
+        <div className="relative" ref={menuRef}>
+          <button
+            className="px-3 py-2 border rounded text-sm"
+            type="button"
+            onClick={() => setMenuOpen((prev) => !prev)}
+          >
+            Menu
+          </button>
+          {menuOpen && (
+            <div className="absolute right-0 mt-2 w-56 bg-white border rounded shadow z-10">
+              <button
+                className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  loadMovimientos();
+                }}
+              >
+                Movimientos
+              </button>
+              {canEditStock && (
+                <button
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                  type="button"
+                  onClick={() => {
+                    resetCompraForm();
+                    setCompraOpen(true);
+                    setAddOpen(false);
+                    setSubrubrosOpen(false);
+                    setMenuOpen(false);
+                  }}
+                >
+                  Registrar compra
+                </button>
+              )}
+              {canAdd && (
+                <button
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                  type="button"
+                  onClick={() => {
+                    setAddOpen(true);
+                    setCompraOpen(false);
+                    setSubrubrosOpen(false);
+                    setMenuOpen(false);
+                  }}
+                >
+                  Agregar repuesto
+                </button>
+              )}
+              {canManageSubrubros && (
+                <button
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                  type="button"
+                  onClick={() => {
+                    setSubrubrosOpen(true);
+                    resetSubrubroForm();
+                    setAddOpen(false);
+                    setCompraOpen(false);
+                    setSubrubrosErr("");
+                    setMenuOpen(false);
+                    loadSubrubros();
+                  }}
+                >
+                  Gestionar subrubros
+                </button>
+              )}
+              {canViewCambios && (
+                <button
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    loadCambios();
+                  }}
+                >
+                  Cambios
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
       <p className="text-sm text-gray-600 mb-4">
         Stock con alerta y precios de venta basados en costo USD * dolar *
         multiplicador. El stock puede quedar negativo.
@@ -1336,14 +1712,7 @@ export default function Repuestos() {
           <div className="text-xs text-gray-500">
             {loading ? "Cargando..." : `${filtered.length} repuestos`}
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              className="px-3 py-2 border rounded text-sm"
-              type="button"
-              onClick={loadMovimientos}
-            >
-              Movimientos
-            </button>
+          <div className="flex items-center gap-2 md:ml-auto">
             <button
               className="px-3 py-2 border rounded text-sm"
               type="button"
@@ -1352,42 +1721,135 @@ export default function Repuestos() {
             >
               Exportar Excel
             </button>
-            {canManage && (
+          </div>
+        </div>
+
+        {canManageSubrubros && subrubrosOpen && (
+          <div className="border rounded p-3 bg-gray-50 mb-3">
+            <div className="flex items-center justify-between mb-3">
+              <div className="font-medium text-sm">Gestionar subrubros</div>
               <button
-                className="px-3 py-2 border rounded text-sm"
+                className="text-xs text-gray-500 underline"
                 type="button"
-                onClick={loadCambios}
+                onClick={() => {
+                  setSubrubrosOpen(false);
+                  resetSubrubroForm();
+                }}
               >
-                Cambios
+                Cerrar
               </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+              <div>
+                <label className="text-xs text-gray-500">Codigo *</label>
+                <Input
+                  placeholder="4 digitos"
+                  value={subrubroForm.codigo}
+                  onChange={(e) =>
+                    setSubrubroForm((prev) => ({
+                      ...prev,
+                      codigo: normalizeSubrubroCodeInput(e.target.value),
+                    }))
+                  }
+                  disabled={!!subrubroEditCodigo}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-xs text-gray-500">Nombre *</label>
+                <Input
+                  value={subrubroForm.nombre}
+                  onChange={(e) =>
+                    setSubrubroForm((prev) => ({ ...prev, nombre: e.target.value }))
+                  }
+                />
+              </div>
+            </div>
+
+            {subrubrosErr && (
+              <div className="bg-red-100 text-red-700 p-2 rounded mb-2">{subrubrosErr}</div>
             )}
-            {canAdd && (
-              <div className="relative" ref={actionsMenuRef}>
+
+            <div className="flex justify-end gap-2 mb-3">
+              {subrubroEditCodigo && (
                 <button
                   className="px-3 py-2 border rounded text-sm"
                   type="button"
-                  onClick={() => setActionsOpen((prev) => !prev)}
+                  onClick={resetSubrubroForm}
+                  disabled={subrubroSaving}
                 >
-                  Acciones
+                  Cancelar edicion
                 </button>
-                {actionsOpen && (
-                  <div className="absolute right-0 mt-2 w-48 bg-white border rounded shadow z-10">
-                    <button
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                      type="button"
-                      onClick={() => {
-                        setAddOpen(true);
-                        setActionsOpen(false);
-                      }}
-                    >
-                      Agregar repuesto
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
+              )}
+              <button
+                className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-60"
+                type="button"
+                onClick={saveSubrubro}
+                disabled={subrubroSaving}
+              >
+                {subrubroSaving
+                  ? "Guardando..."
+                  : subrubroEditCodigo
+                  ? "Guardar cambios"
+                  : "Agregar subrubro"}
+              </button>
+            </div>
+
+            <div className="overflow-auto">
+              <table className="min-w-full text-xs">
+                <thead>
+                  <tr className="text-left">
+                    <th className="p-2">Codigo</th>
+                    <th className="p-2">Nombre</th>
+                    <th className="p-2 text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subrubros.map((s) => (
+                    <tr key={s.codigo} className="border-t bg-white">
+                      <td className="p-2">{s.codigo}</td>
+                      <td className="p-2">{s.nombre}</td>
+                      <td className="p-2">
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            className="text-blue-700 underline disabled:opacity-60"
+                            type="button"
+                            onClick={() => startEditSubrubro(s)}
+                            disabled={subrubroSaving || subrubroDeletingCodigo === s.codigo}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            className="text-red-600 underline disabled:opacity-60"
+                            type="button"
+                            onClick={() => handleDeleteSubrubro(s.codigo)}
+                            disabled={subrubroSaving || subrubroDeletingCodigo === s.codigo}
+                          >
+                            {subrubroDeletingCodigo === s.codigo ? "Eliminando..." : "Borrar"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {!subrubrosLoading && !subrubros.length && (
+                    <tr>
+                      <td className="p-2 text-gray-500" colSpan={3}>
+                        Sin subrubros
+                      </td>
+                    </tr>
+                  )}
+                  {subrubrosLoading && (
+                    <tr>
+                      <td className="p-2 text-gray-500" colSpan={3}>
+                        Cargando subrubros...
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        )}
 
         {canAdd && addOpen && (
           <div className="border rounded p-3 bg-gray-50 mb-3">
@@ -2353,7 +2815,9 @@ export default function Repuestos() {
                                         <thead>
                                           <tr className="text-left">
                                             <th className="p-2">Fecha</th>
+                                            <th className="p-2">Fecha compra</th>
                                             <th className="p-2">Usuario</th>
+                                            <th className="p-2">Proveedor</th>
                                             <th className="p-2">Tipo</th>
                                             <th className="p-2">Qty</th>
                                             <th className="p-2">Stock prev</th>
@@ -2365,7 +2829,9 @@ export default function Repuestos() {
                                           {(detail.movs || []).map((m) => (
                                             <tr key={m.id} className="border-t">
                                               <td className="p-2">{formatTs(m.created_at)}</td>
+                                              <td className="p-2">{formatDate(m.fecha_compra)}</td>
                                               <td className="p-2">{m.created_by_nombre || "-"}</td>
+                                              <td className="p-2">{m.proveedor_nombre || "-"}</td>
                                               <td className="p-2">{m.tipo}</td>
                                               <td className="p-2">{m.qty}</td>
                                               <td className="p-2">{m.stock_prev}</td>
@@ -2375,7 +2841,7 @@ export default function Repuestos() {
                                           ))}
                                           {!detail.movs?.length && (
                                             <tr>
-                                              <td className="p-3 text-gray-500" colSpan={7}>
+                                              <td className="p-3 text-gray-500" colSpan={9}>
                                                 Sin movimientos
                                               </td>
                                             </tr>
@@ -2407,6 +2873,162 @@ export default function Repuestos() {
           </table>
         </div>
       </div>
+
+      {compraOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => {
+            setCompraOpen(false);
+            resetCompraForm();
+          }}
+        >
+          <div
+            className="bg-white rounded shadow-xl w-full max-w-2xl max-h-[85vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b p-3">
+              <div className="font-medium">Registrar compra</div>
+              <button
+                className="text-xs text-gray-500 underline"
+                type="button"
+                onClick={() => {
+                  setCompraOpen(false);
+                  resetCompraForm();
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="p-3 space-y-3 overflow-auto max-h-[75vh]">
+              <div>
+                <label className="text-xs text-gray-500">Repuesto *</label>
+                <div className="relative">
+                  <input
+                    className="border rounded p-2 w-full text-sm"
+                    placeholder="Codigo o nombre"
+                    value={compraForm.repuesto_input}
+                    onFocus={() => setCompraRepuestoOpen(true)}
+                    onBlur={() => {
+                      setTimeout(() => setCompraRepuestoOpen(false), 150);
+                    }}
+                    onChange={(e) => updateCompraRepuestoInput(e.target.value)}
+                  />
+                  {compraRepuestoOpen && (
+                    <div
+                      className="absolute left-0 right-0 mt-1 bg-white border rounded shadow-lg z-20 max-h-56 overflow-auto"
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      {!compraRepuestoSuggestions.length && (
+                        <div className="px-3 py-2 text-xs text-gray-500">Sin resultados</div>
+                      )}
+                      {compraRepuestoSuggestions.map((it) => (
+                        <button
+                          key={it.id}
+                          type="button"
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-gray-100"
+                          onClick={() => selectCompraRepuesto(it)}
+                        >
+                          {repuestoOptionLabel(it)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {compraSelectedRepuesto
+                    ? `Seleccionado: ${repuestoOptionLabel(compraSelectedRepuesto)} | Stock actual: ${
+                        compraSelectedRepuesto.stock_on_hand ?? "-"
+                      }`
+                    : "Selecciona un repuesto del listado"}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-500">Cantidad *</label>
+                  <input
+                    className="border rounded p-2 w-full"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={compraForm.cantidad}
+                    onChange={(e) =>
+                      setCompraForm((prev) => ({
+                        ...prev,
+                        cantidad: normalizeIntInput(e.target.value).replace("-", ""),
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500">Fecha compra *</label>
+                  <input
+                    className="border rounded p-2 w-full"
+                    type="date"
+                    value={compraForm.fecha_compra}
+                    onChange={(e) =>
+                      setCompraForm((prev) => ({ ...prev, fecha_compra: e.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500">Proveedor (opcional)</label>
+                <input
+                  className="border rounded p-2 w-full"
+                  list="proveedores-compra-list"
+                  placeholder="Seleccionar o escribir proveedor nuevo"
+                  value={compraForm.proveedor_input}
+                  onChange={(e) =>
+                    setCompraForm((prev) => ({ ...prev, proveedor_input: e.target.value }))
+                  }
+                />
+                <datalist id="proveedores-compra-list">
+                  {(proveedores || []).map((p) => (
+                    <option key={p.id} value={p.nombre || ""} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500">Nota (opcional)</label>
+                <textarea
+                  className="border rounded p-2 w-full min-h-[90px]"
+                  value={compraForm.nota}
+                  onChange={(e) =>
+                    setCompraForm((prev) => ({ ...prev, nota: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm"
+                  type="button"
+                  onClick={() => {
+                    setCompraOpen(false);
+                    resetCompraForm();
+                  }}
+                  disabled={compraSaving}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-60"
+                  type="button"
+                  onClick={saveCompra}
+                  disabled={compraSaving}
+                >
+                  {compraSaving ? "Guardando..." : "Registrar compra"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {movimientosOpen && (
         <div
@@ -2441,7 +3063,9 @@ export default function Repuestos() {
                   <tr className="text-left">
                     <th className="p-2">Repuesto</th>
                     <th className="p-2">Fecha</th>
+                    <th className="p-2">Fecha compra</th>
                     <th className="p-2">Usuario</th>
+                    <th className="p-2">Proveedor</th>
                     <th className="p-2">Tipo</th>
                     <th className="p-2">Qty</th>
                     <th className="p-2">Stock prev</th>
@@ -2457,7 +3081,9 @@ export default function Repuestos() {
                         <div className="text-gray-500">{m.nombre || "-"}</div>
                       </td>
                       <td className="p-2">{formatTs(m.created_at)}</td>
+                      <td className="p-2">{formatDate(m.fecha_compra)}</td>
                       <td className="p-2">{m.created_by_nombre || "-"}</td>
+                      <td className="p-2">{m.proveedor_nombre || "-"}</td>
                       <td className="p-2">{m.tipo}</td>
                       <td className="p-2">{m.qty}</td>
                       <td className="p-2">{m.stock_prev}</td>
@@ -2467,14 +3093,14 @@ export default function Repuestos() {
                   ))}
                   {movimientosLoading && (
                     <tr>
-                      <td className="p-3 text-gray-500" colSpan={8}>
+                      <td className="p-3 text-gray-500" colSpan={10}>
                         Cargando...
                       </td>
                     </tr>
                   )}
                   {!movimientosLoading && !movimientos.length && (
                     <tr>
-                      <td className="p-3 text-gray-500" colSpan={8}>
+                      <td className="p-3 text-gray-500" colSpan={10}>
                         Sin movimientos
                       </td>
                     </tr>

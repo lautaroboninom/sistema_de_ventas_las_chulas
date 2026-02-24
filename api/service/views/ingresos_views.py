@@ -168,6 +168,22 @@ def _dash_location_id():
         return None
 
 
+def _taller_location_id():
+    try:
+        ensure_default_locations()
+    except Exception:
+        pass
+    try:
+        row = q(
+            "SELECT id FROM locations WHERE LOWER(nombre)=LOWER(%s) LIMIT 1",
+            ["Taller"],
+            one=True,
+        )
+        return row and row.get("id")
+    except Exception:
+        return None
+
+
 class MisPendientesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
@@ -947,6 +963,7 @@ class DarBajaIngresoView(APIView):
                            COALESCE(t.informe_preliminar,'') AS informe_preliminar,
                            COALESCE(t.descripcion_problema,'') AS descripcion_problema,
                            COALESCE(t.trabajos_realizados,'') AS trabajos_realizados,
+                           COALESCE(t.comentarios,'') AS comentarios,
                            COALESCE(t.resolucion,'') AS resolucion,
                            COALESCE(CAST(t.motivo AS TEXT), '') AS motivo,
                            COALESCE(loc.nombre,'') AS ubicacion_nombre
@@ -969,6 +986,7 @@ class DarBajaIngresoView(APIView):
                 informe_preliminar = (info.get("informe_preliminar") or "").strip()
                 descripcion_problema = (info.get("descripcion_problema") or "").strip()
                 trabajos_realizados = (info.get("trabajos_realizados") or "").strip()
+                comentarios = (info.get("comentarios") or "").strip()
                 resolucion = (info.get("resolucion") or "").strip()
                 motivo = (info.get("motivo") or "").strip()
                 ubicacion = info.get("ubicacion_nombre") or ""
@@ -1004,22 +1022,18 @@ class DarBajaIngresoView(APIView):
                     f"- Registrado por: {actor_line or '-'}",
                 ]
                 diag_lines = []
+                diag_lines.append(f"- Diagnóstico / descripción del problema: {descripcion_problema or '-'}")
+                diag_lines.append(f"- Trabajos realizados: {trabajos_realizados or '-'}")
+                diag_lines.append(f"- Comentarios: {comentarios or '-'}")
                 if informe_preliminar:
                     diag_lines.append(f"- Informe preliminar: {informe_preliminar}")
-                if descripcion_problema:
-                    diag_lines.append(f"- Diagnóstico / descripción del problema: {descripcion_problema}")
-                if trabajos_realizados:
-                    diag_lines.append(f"- Trabajos realizados: {trabajos_realizados}")
                 if resolucion_label:
                     diag_lines.append(f"- Resolución: {resolucion_label}")
                 if motivo:
                     diag_lines.append(f"- Motivo de ingreso: {motivo}")
                 lines.append("")
                 lines.append("Diagnóstico / motivo de baja:")
-                if diag_lines:
-                    lines.extend(diag_lines)
-                else:
-                    lines.append("- Sin diagnóstico cargado")
+                lines.extend(diag_lines)
                 try:
                     url = _frontend_url(request, f"/ingresos/{ingreso_id}") + "?tab=principal"
                     lines.append("")
@@ -1072,6 +1086,181 @@ class DarBajaIngresoView(APIView):
                     extra={"ingreso_id": ingreso_id},
                 )
         return Response({"ok": True, "estado": "baja"})
+
+
+class DarAltaIngresoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def post(self, request, ingreso_id: int):
+        require_roles(request, ["jefe", "jefe_veedor", "admin", "recepcion"])
+        _set_audit_user(request)
+        marked_alta = False
+        with transaction.atomic():
+            with connection.cursor() as cur:
+                taller_id = _taller_location_id()
+                cur.execute("SELECT estado FROM ingresos WHERE id=%s", [ingreso_id])
+                row = cur.fetchone()
+                if not row:
+                    return Response({"detail": "Ingreso no encontrado"}, status=404)
+                estado_actual = (row[0] or "").lower()
+                if estado_actual != "baja":
+                    return Response({"detail": "Solo se puede dar de alta un ingreso en estado baja"}, status=400)
+                cur.execute(
+                    """
+                    UPDATE ingresos
+                       SET estado='ingresado',
+                           ubicacion_id = COALESCE(%s, ubicacion_id)
+                     WHERE id=%s
+                    """,
+                    [taller_id, ingreso_id],
+                )
+                marked_alta = True
+        try:
+            exec_void(
+                """
+                INSERT INTO ingreso_events (ticket_id, a_estado, comentario)
+                VALUES (%s, 'ingresado', 'Marcado como alta desde la hoja de servicio')
+                """,
+                [ingreso_id],
+            )
+        except Exception:
+            # No bloquear si la tabla o insercion falla
+            pass
+        if marked_alta:
+            try:
+                info = q(
+                    """
+                    SELECT c.razon_social AS cliente,
+                           COALESCE(m.tipo_equipo,'') AS tipo_equipo,
+                           COALESCE(b.nombre,'') AS marca,
+                           COALESCE(m.nombre,'') AS modelo,
+                           COALESCE(d.numero_serie,'') AS numero_serie,
+                           COALESCE(d.numero_interno,'') AS numero_interno,
+                           COALESCE(t.informe_preliminar,'') AS informe_preliminar,
+                           COALESCE(t.descripcion_problema,'') AS descripcion_problema,
+                           COALESCE(t.trabajos_realizados,'') AS trabajos_realizados,
+                           COALESCE(t.comentarios,'') AS comentarios,
+                           COALESCE(t.resolucion,'') AS resolucion,
+                           COALESCE(CAST(t.motivo AS TEXT), '') AS motivo,
+                           COALESCE(loc.nombre,'') AS ubicacion_nombre
+                      FROM ingresos t
+                      JOIN devices d   ON d.id = t.device_id
+                      JOIN customers c ON c.id = d.customer_id
+                      LEFT JOIN marcas b ON b.id = d.marca_id
+                      LEFT JOIN models m ON m.id = d.model_id
+                      LEFT JOIN locations loc ON loc.id = t.ubicacion_id
+                     WHERE t.id=%s
+                    """,
+                    [ingreso_id],
+                    one=True,
+                ) or {}
+                os_txt = os_label(ingreso_id)
+                cliente = info.get("cliente") or ""
+                equipo = " | ".join([p for p in [info.get("tipo_equipo") or "", info.get("marca") or "", info.get("modelo") or ""] if p])
+                numero_serie = info.get("numero_serie") or ""
+                numero_interno = info.get("numero_interno") or ""
+                informe_preliminar = (info.get("informe_preliminar") or "").strip()
+                descripcion_problema = (info.get("descripcion_problema") or "").strip()
+                trabajos_realizados = (info.get("trabajos_realizados") or "").strip()
+                comentarios = (info.get("comentarios") or "").strip()
+                resolucion = (info.get("resolucion") or "").strip()
+                motivo = (info.get("motivo") or "").strip()
+                ubicacion = info.get("ubicacion_nombre") or ""
+                actor_nombre = getattr(request.user, "nombre", None) or getattr(request.user, "username", "") or ""
+                actor_email = getattr(request.user, "email", "") or ""
+                fecha_alta = timezone.localtime().strftime("%Y-%m-%d %H:%M")
+                actor_line = actor_nombre or "-"
+                if actor_email:
+                    actor_line = f"{actor_line} ({actor_email})" if actor_line else actor_email
+                resolucion_labels = {
+                    "reparado": "Reparado",
+                    "no_reparado": "No reparado",
+                    "no_se_encontro_falla": "No se encontro falla",
+                    "presupuesto_rechazado": "Presupuesto rechazado",
+                    "cambio": "Cambio",
+                }
+                resolucion_label = resolucion_labels.get(
+                    resolucion,
+                    resolucion.replace("_", " ").capitalize() if resolucion else "",
+                )
+                subject = f"Notificacion de alta de equipo - {os_txt} - {cliente or 'Sin cliente'}"
+                lines = [
+                    "Se registro el alta de un equipo en el sistema de reparaciones. Por favor reflejar el alta en el sistema patrimonial.",
+                    "",
+                    "Detalle del ingreso:",
+                    f"- OS: {os_txt}",
+                    f"- Cliente: {cliente or '-'}",
+                    f"- Equipo: {equipo or '-'}",
+                    f"- Numero de serie: {numero_serie or '-'}",
+                    f"- Numero interno: {numero_interno or '-'}",
+                    f"- Ubicacion actual: {ubicacion or '-'}",
+                    f"- Fecha de alta: {fecha_alta}",
+                    f"- Registrado por: {actor_line or '-'}",
+                ]
+                diag_lines = []
+                diag_lines.append(f"- Diagnostico / descripcion del problema: {descripcion_problema or '-'}")
+                diag_lines.append(f"- Trabajos realizados: {trabajos_realizados or '-'}")
+                diag_lines.append(f"- Comentarios: {comentarios or '-'}")
+                if informe_preliminar:
+                    diag_lines.append(f"- Informe preliminar: {informe_preliminar}")
+                if resolucion_label:
+                    diag_lines.append(f"- Resolucion: {resolucion_label}")
+                if motivo:
+                    diag_lines.append(f"- Motivo de ingreso: {motivo}")
+                lines.append("")
+                lines.append("Diagnostico / estado actual:")
+                lines.extend(diag_lines)
+                try:
+                    url = _frontend_url(request, f"/ingresos/{ingreso_id}") + "?tab=principal"
+                    lines.append("")
+                    lines.append(f"Hoja de servicio: {url}")
+                except Exception:
+                    pass
+                body = "\n".join(lines)
+                try:
+                    body = _email_append_footer_text(body)
+                except Exception:
+                    pass
+                recips = getattr(settings, "BAJA_NOTIFY_RECIPIENTS", []) or []
+                if not isinstance(recips, (list, tuple)):
+                    recips = [str(recips)] if recips else []
+                recips = [r for r in recips if r]
+
+                def _send_alta_email():
+                    if not recips:
+                        logger.warning(
+                            "alta_notify_email no recipients configured",
+                            extra={"ingreso_id": ingreso_id},
+                        )
+                        return
+                    try:
+                        _sent, _dbg = _send_mail_with_fallback(subject, body, recips)
+                        logger.info(
+                            "alta_notify_email sent=%s ingreso_id=%s recipients=%s backend=%s",
+                            bool(_sent),
+                            ingreso_id,
+                            recips,
+                            getattr(settings, "EMAIL_BACKEND", ""),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "alta_notify_email failed",
+                            extra={"ingreso_id": ingreso_id, "recipients": recips},
+                        )
+
+                try:
+                    conn = transaction.get_connection()
+                    if getattr(conn, "in_atomic_block", False):
+                        transaction.on_commit(_send_alta_email)
+                    else:
+                        _send_alta_email()
+                except Exception:
+                    _send_alta_email()
+            except Exception:
+                logger.exception(
+                    "alta_notify_email prepare failed",
+                    extra={"ingreso_id": ingreso_id},
+                )
+        return Response({"ok": True, "estado": "ingresado"})
 
 
 class ListosParaRetiroView(APIView):
@@ -3745,6 +3934,8 @@ __all__ = [
     'MarcarParaRepararView',
     'MarcarReparadoView',
     'EntregarIngresoView',
+    'DarBajaIngresoView',
+    'DarAltaIngresoView',
     'IngresoAsignarTecnicoView',
     'PendientesGeneralView',
     'IngresoHistorialView',

@@ -8,6 +8,7 @@ import {
   getIngresoHistorial,
   getGeneralEquipos,
   postBajaIngreso,
+  postAltaIngreso,
   getClientes,
   getMotivos,
 } from "../lib/api";
@@ -168,6 +169,7 @@ export default function ServiceSheet() {
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsMenuRef = useRef(null);
   const [savingBaja, setSavingBaja] = useState(false);
+  const [savingAlta, setSavingAlta] = useState(false);
 
   // Helpers de clientes (validación de selección)
   const findClienteByRS = useCallback(
@@ -501,7 +503,7 @@ export default function ServiceSheet() {
   }
 
   async function marcarBaja() {
-    if (savingBaja) return;
+    if (savingBaja || savingAlta) return;
     const ok = window.confirm("Dar BAJA al equipo? Esta accion marcara el ingreso como baja.");
     if (!ok) return;
     try {
@@ -515,6 +517,24 @@ export default function ServiceSheet() {
       setErr(e?.message || "No se pudo marcar la baja");
     } finally {
       setSavingBaja(false);
+    }
+  }
+
+  async function marcarAlta() {
+    if (savingAlta || savingBaja) return;
+    const ok = window.confirm("Dar ALTA al equipo? Esta accion cambiara el ingreso a estado ingresado.");
+    if (!ok) return;
+    try {
+      setSavingAlta(true);
+      await postAltaIngreso(id);
+      setActionsOpen(false);
+      await refreshIngreso({ strong: 1 });
+      setTab("principal");
+      setErr("");
+    } catch (e) {
+      setErr(e?.message || "No se pudo marcar el alta");
+    } finally {
+      setSavingAlta(false);
     }
   }
 
@@ -693,14 +713,25 @@ export default function ServiceSheet() {
                     </button>
                   )}
                   {canDarBaja && (
-                    <button
-                      type="button"
-                      onClick={marcarBaja}
-                      disabled={savingBaja}
-                      className="w-full text-left px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {savingBaja ? "Marcando baja..." : "Dar BAJA al equipo"}
-                    </button>
+                    estadoLower === "baja" ? (
+                      <button
+                        type="button"
+                        onClick={marcarAlta}
+                        disabled={savingAlta}
+                        className="w-full text-left px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {savingAlta ? "Marcando alta..." : "Dar ALTA al equipo"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={marcarBaja}
+                        disabled={savingBaja}
+                        className="w-full text-left px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {savingBaja ? "Marcando baja..." : "Dar BAJA al equipo"}
+                      </button>
+                    )
                   )}
                 </div>
               </div>
