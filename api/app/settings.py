@@ -88,6 +88,9 @@ PRESUPUESTO_ALERT_ENABLED = os.getenv("PRESUPUESTO_ALERT_ENABLED", "1").lower() 
 PRESUPUESTO_ALERT_FIRST_DAYS = int(os.getenv("PRESUPUESTO_ALERT_FIRST_DAYS", "7"))
 PRESUPUESTO_ALERT_REPEAT_DAYS = int(os.getenv("PRESUPUESTO_ALERT_REPEAT_DAYS", "3"))
 PRESUPUESTO_ALERT_LOCATION = os.getenv("PRESUPUESTO_ALERT_LOCATION", "taller")
+# Notificaciones: mantenimientos preventivos (solo rol jefe)
+PREVENTIVO_ALERT_ENABLED = os.getenv("PREVENTIVO_ALERT_ENABLED", "1").lower() in ("1", "true", "yes")
+PREVENTIVO_DEFAULT_LEAD_DAYS = int(os.getenv("PREVENTIVO_DEFAULT_LEAD_DAYS", "30"))
 
 # Zona horaria
 TIME_ZONE = os.getenv("TZ", "America/Argentina/Buenos_Aires")

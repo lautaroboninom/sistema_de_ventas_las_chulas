@@ -56,6 +56,7 @@ from .views import (
 
     # detalle de ingreso
     IngresoDetalleView, IngresoAsignarTecnicoView, CatalogoTecnicosView,
+    IngresoTestView, IngresoTestPdfView,
     IngresoSolicitarAsignacionView,
     MarcaTecnicoView,MarcaAplicarTecnicoAModelosView,ModeloTecnicoView,
     EquiposDerivadosView,
@@ -68,7 +69,19 @@ from .views import (
     WarrantyRulesView, WarrantyRuleDetailView, DevicesMergeView,
 )
 
-from .views.devices_views import DeviceIdentificadoresView, DevicesListView
+from .views.devices_views import DeviceDirectCreateView, DeviceIdentificadoresView, DevicesListView
+from .views.preventivos_views import (
+    DevicePreventivoPlanView,
+    DevicePreventivoRevisionCreateView,
+    PreventivoAgendaView,
+    PreventivoClientesListView,
+    CustomerPreventivoPlanView,
+    CustomerPreventivoRevisionesView,
+    PreventivoRevisionDetailView,
+    PreventivoRevisionItemsView,
+    PreventivoRevisionItemDetailView,
+    PreventivoRevisionCerrarView,
+)
 
 
 urlpatterns = [
@@ -119,7 +132,18 @@ urlpatterns = [
     path("ingresos/historico/", GeneralEquiposView.as_view()),
     # Equipos (tabla devices)
     path("equipos/", DevicesListView.as_view()),
+    path("devices/alta-directa/", DeviceDirectCreateView.as_view()),
+    path("equipos/<int:device_id>/preventivo-plan/", DevicePreventivoPlanView.as_view()),
+    path("equipos/<int:device_id>/preventivo-revisiones/", DevicePreventivoRevisionCreateView.as_view()),
     path("devices/merge/", DevicesMergeView.as_view()),
+    path("preventivos/agenda/", PreventivoAgendaView.as_view()),
+    path("preventivos/clientes/", PreventivoClientesListView.as_view()),
+    path("clientes/<int:customer_id>/preventivo-plan/", CustomerPreventivoPlanView.as_view()),
+    path("clientes/<int:customer_id>/preventivo-revisiones/", CustomerPreventivoRevisionesView.as_view()),
+    path("preventivos/revisiones/<int:revision_id>/", PreventivoRevisionDetailView.as_view()),
+    path("preventivos/revisiones/<int:revision_id>/items/", PreventivoRevisionItemsView.as_view()),
+    path("preventivos/revisiones/<int:revision_id>/items/<int:item_id>/", PreventivoRevisionItemDetailView.as_view()),
+    path("preventivos/revisiones/<int:revision_id>/cerrar/", PreventivoRevisionCerrarView.as_view()),
     path("clientes/<int:customer_id>/general/", GeneralPorClienteView.as_view()),
     path("clientes/<int:customer_id>/general/export/", GeneralPorClienteExportView.as_view()),
     # utilidades
@@ -178,6 +202,8 @@ urlpatterns = [
 
     # detalle de ingreso (GET, PATCH)
     path("ingresos/<int:ingreso_id>/", IngresoDetalleView.as_view()),
+    path("ingresos/<int:ingreso_id>/test/", IngresoTestView.as_view()),
+    path("ingresos/<int:ingreso_id>/test/pdf/", IngresoTestPdfView.as_view()),
     path("ingresos/<int:ingreso_id>/solicitar-asignacion/", IngresoSolicitarAsignacionView.as_view()),
     # accesorios por ingreso
     path("ingresos/<int:ingreso_id>/accesorios/", IngresoAccesoriosView.as_view()),

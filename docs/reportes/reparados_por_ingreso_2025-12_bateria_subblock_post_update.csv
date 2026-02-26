@@ -1,0 +1,10 @@
+﻿os,quote_id,quote_item_id,tipo,descripcion,qty,precio_u,repuesto_id,repuesto_codigo,costo_u_neto
+28896,8506,3665,repuesto,Vacuómetro diámetro 52MM Fij. Frontal,1.00,52852.50,2194,IN-001,39420.00
+28896,8506,3666,repuesto,BATERÍA GEL 6V 4AH,2.00,58725.00,2185,ME-041,9490.00
+28909,8510,3674,repuesto,BATERÍA GEL 6V 4AH,2.00,58725.00,2185,ME-041,9490.00
+28909,8510,3675,repuesto,Vacuómetro diámetro 52MM Fij. Frontal,1.00,52852.50,2194,IN-001,39420.00
+28909,8510,3676,mano_obra,Mano de obra,1.00,18588.00,,,
+28911,8511,3677,repuesto,Vacuómetro diámetro 52MM Fij. Frontal,1.00,52852.50,2194,IN-001,39420.00
+28911,8511,3678,mano_obra,Mano de obra,1.00,10000.00,,,
+28921,8521,3685,repuesto,Vacuómetro diámetro 52MM Fij. Frontal,1.00,52852.50,2194,IN-001,39420.00
+28921,8521,3686,mano_obra,Mano de obra,1.00,18588.00,,,

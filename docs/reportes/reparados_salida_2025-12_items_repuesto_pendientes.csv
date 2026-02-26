@@ -1,0 +1,66 @@
+﻿os,fecha_entrega,cliente,tipo_equipo,marca,modelo,quote_item_id,item_descripcion,qty,precio_u,costo_u_neto,repuesto_codigo,keyword_hint,descripcion_problema,trabajos_realizados
+28472,2025-12-01 11:32:00,OXIGENOTERAPIA LOMAS S.A,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5,3236,Ceolitas,1.00,0.00,,"",zeolita/tamiz,"",cambio de labios - cambio de filtros - cambio de ceolita - cambio de tapa - control de funcionamiento ok
+28615,2025-12-01 14:38:13,SIED,AUTO CPAP,BMC,AUTO CPAP G2S,3258,Placa,1.00,261000.00,,"",placa,equipo no muestra imagen,"placa dañada muy probable por ingreso de liquido en interior del equipo - se encontraron pequeñas gotas ya secas de agua - turbina ok - requiere cambio de placa
+
+Descuento aplicado del 12%"
+28615,2025-12-01 14:38:13,SIED,AUTO CPAP,BMC,AUTO CPAP G2S,3553,Descuento,-0.12,261000.00,,"","",equipo no muestra imagen,"placa dañada muy probable por ingreso de liquido en interior del equipo - se encontraron pequeñas gotas ya secas de agua - turbina ok - requiere cambio de placa
+
+Descuento aplicado del 12%"
+26362,2025-12-05 00:00:00,TMD,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5Q,2508,Repuestos,1.00,1.00,,"","","reemplazo de tamiz ciolita, filtros nuevos, control de funcionamiento.","Piezas reemplazadas: 
+"
+28673,2025-12-09 06:14:00,TMD,CONCENTRADOR DE OXÍGENO,Konsung,KSOC-5,3566,Ce0olitas,1.00,190000.00,,"","","ingreso por problemas con el ciclado de la válvula y un error E05 que indica que el equipo tiene alta presión, esto debido a que tenia la zeolita tapada y evitaba el correcto funcionamiento del equipo",cambio de zeolita - cambio de filtros - cambio de carcasa frontal
+28670,2025-12-09 06:15:00,TMD,CONCENTRADOR DE OXÍGENO,Konsung,KSOC-5,3565,Ceolitas,1.00,190000.00,,"",zeolita/tamiz,ingreso con un supuesto ruido en el motor el cual no esta presentando y por baja concentración,cambio zeolita - cambio de filtros - control de funcionamiento
+28672,2025-12-09 06:16:00,TMD,CONCENTRADOR DE OXÍGENO,Konsung,KSOC-5,3559,Cambio de ceolitas,1.00,190312.00,,"",zeolita/tamiz,"vino con el error E31 el cual es una falla en la conexión con el sensor de oxigeno, además no trabaja satisfactoriamente en 5L pero si lo hace en 4.5L","cambio de zeolita - cambio de pila i3,6V - cambio de filtro - control de funcionamiento 5L 87-88%, 4.5L 91-2%"
+28667,2025-12-09 09:11:00,TMD,CONCENTRADOR DE OXÍGENO,Konsung,KSOC-5,3567,Ceolitas,1.00,190000.00,,"",zeolita/tamiz,los tamices que tiene ya están degradados provocando la baja concentración,cambio de zeolita - cambio de filtros - control de funcionamiento 
+28638,2025-12-09 12:30:00,TMD,ASPIRADOR A BATERÍAS,Movi-vac,A-550,3341,Baterías,1.00,58725.00,,"",bateria/pila,"CAMBIO DE BATERIAS , CAMBIO DE VACUOMETRO DESARME LIMPIEZA Y LUBRICACION DE BOMBA (YA REALIZADO)","CAMBIO DE 2 BATERIAS DE 6V 4 AMP., LOTE 9868 CAMBIO DE VACUOMETRO LOTE 26912 DESARME LIMPIEZA Y LUBRICACION DE MOTOR ."
+28638,2025-12-09 12:30:00,TMD,ASPIRADOR A BATERÍAS,Movi-vac,A-550,3342,Vacuómetro,1.00,52852.50,,"",vacuometro,"CAMBIO DE BATERIAS , CAMBIO DE VACUOMETRO DESARME LIMPIEZA Y LUBRICACION DE BOMBA (YA REALIZADO)","CAMBIO DE 2 BATERIAS DE 6V 4 AMP., LOTE 9868 CAMBIO DE VACUOMETRO LOTE 26912 DESARME LIMPIEZA Y LUBRICACION DE MOTOR ."
+28676,2025-12-09 15:29:00,TMD,CONCENTRADOR DE OXÍGENO,Konsung,KSOC-5,3570,Compresor,1.00,145000.00,,"",compresor,"- zeolitas tapadas impidiendo el correcto funcionamiento
+- compresor esta fallando 
+- rueda trasera faltante",cambio de zeolita  - cambio de compresor - cambio de filtros - colocación de rueda trasera - cambio de electroválvula - control de funcionamiento 
+28676,2025-12-09 15:29:00,TMD,CONCENTRADOR DE OXÍGENO,Konsung,KSOC-5,3571,Canister,1.00,163125.00,,"",zeolita/tamiz,"- zeolitas tapadas impidiendo el correcto funcionamiento
+- compresor esta fallando 
+- rueda trasera faltante",cambio de zeolita  - cambio de compresor - cambio de filtros - colocación de rueda trasera - cambio de electroválvula - control de funcionamiento 
+28790,2025-12-09 16:34:11,DIAGNOSTIC MEDIC,POLÍGRAFO,BMC,PolyWatch YH-600B,3629,Cable kit,1.00,100201.00,,"",cable,"equipo no sensa bien el flujo de aire y la respiración toracoabdominal por cable de kit de respiracion desgastado, esto es por mal cuidado del equipo.","cambio de cable del kit de respiracion - control de funcionamiento ok
+
+Accesorios: bolso + kit respiratorio + Sensor SpO2 + latiguillos"
+28711,2025-12-09 16:36:20,DIAGNOSTIC MEDIC,AUTO CPAP,BMC,AUTO CPAP G2S,3554,Botón plástico,1.00,20000.00,,"",tecla/boton/llave,equipo sin boton plastico de alarma en carcaza,control de funcionamiento ok - colocacion de boton plastico de alarma en carcaza
+28766,2025-12-10 08:01:00,NOVAMED S.A.,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5,3639,Ceolitas,1.00,176175.00,,"",zeolita/tamiz,"fuga en Flow meter
+zeolita desgastada",cambio de Flow meter - cambio de zeolita - cambio de filtros - control y limpieza del equipo
+28757,2025-12-11 12:30:00,SOENSA,AUTO CPAP,BMC,MINI M1,3617,pila,1.00,10000.00,,"",bateria/pila,no funciona bluetooth y se queda el led de iniciar parpadeando,falla causada por pila interna de 3v obsoleta - se realizo el cambio de la misma pila y se soluciono el error - control de funcionamiento ok - cambio de filtro
+28603,2025-12-12 12:28:00,ARGENTINA DE GASES S.A.,ASPIRADOR A BATERÍAS,Konsung,9E,3276,BAterías,0.00,58725.00,,"",bateria/pila,NO FUNCIONA A BATERIAS,"MODIFICACION PLACA ELECTRONICA, CAMBIO DE BATERIAS 12V 2,6 AMP LOTE 9868
+
+
+
+
+ 
+"
+28781,2025-12-15 10:40:00,ACUDIR,ASPIRADOR A BATERÍAS,Fiorino,7E-D,3623,Bate´rias,1.00,58725.00,,"","",NO FUNCIONA A BATERIA,"CAMBIO DE BATERIA 12 V 2,9 AMP LOTE 9868"
+28782,2025-12-15 10:40:00,ACUDIR,ASPIRADOR A BATERÍAS,Movi-vac,A-550,3625,baterísa,1.00,58725.00,,"",bateria/pila,NO FUNCIONA A BATERIAS.,"CAMBIO DE BATERIAS DE 6V. 4 AMP. LOTER 9868, AJUSTE VALVULA AGUJA, REPARACION Y AJUSTE SOPORTE DE BATERIAS, PEGADO SOPORTE PLASTICO TAPA POSTERIOR,"
+28705,2025-12-19 07:01:00,SIED,CONCENTRADOR DE OXÍGENO,Philips Respironics,EVERFLO,3632,Canister + válvulas,1.00,424500.00,,"",zeolita/tamiz,"reemplazo de tamiz ciolita, valvula pilow, filtro, limpieza.",""
+28788,2025-12-19 07:01:00,SIED,ASPIRADOR A BATERÍAS,Movi-vac,A-550,3634,Vacuómetro,1.00,52852.50,,"",vacuometro,MOTOR RUIDOSO VACUOMETRO TRABADO,"DESMARME LIMPIEZA Y LUBRICACION DE MOTOR, FIJACION MOTOR A BOMBA CAMBIO DE VACUOMETRO"
+28500,2025-12-19 09:59:56,SIED,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5,3611,Compresor,1.00,185962.50,,"",compresor,"","compresor degradado - cambio de compresor (en espera de aprobación de presupuesto) - cambio de filtros - control del equipo
+"
+28612,2025-12-19 10:03:18,SIED,BOMBA DE INFUSIÓN,Kangaroo,324,3568,Pack BAterías,1.00,66163.00,,"",bateria/pila,NO ENCIENDE,"REQUIERE:
+CAMBIO DE FUSIBLE DE PLACA - CAMIBO DE GOMA MORDAZA- CAMBIO DE BUZZER , CAMBIO DE PACK DE BATERIAS LOTE 9419, LIMPIEZA INTERIOR."
+28704,2025-12-19 10:04:18,SIED,CONCENTRADOR DE OXÍGENO,AirSep,NewLife Elite,3573,Capacitor,1.00,10000.00,,"",capacitor,el quipo presento un paro en su funcionamiento después de un tiempo de su inicio debido a que el capacitor que tenia conectado el compresor ya estaba degradado,cambio de capacitor - cambio de filtros - control de funcionamiento ok - concentra 91-92% en 5L
+28784,2025-12-19 10:04:35,SIED,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5,3613,Placa,1.00,37192.50,,"",placa,"manguera de zeolita derecha rota
+placa principal con falla en la alarma",cambio de manguera zeolita - cambio de filtros - cambio de placa principal - control y limpieza del equipo
+28706,2025-12-19 10:05:04,SIED,CONCENTRADOR DE OXÍGENO,Philips Respironics,EVERFLO,3610,Canister,1.00,424500.00,,"",zeolita/tamiz,"",reemplazo de zeolita - reemplazo de válvula pilow - cambio de filtro - limpieza interna externa - control de funcionamiento - ajuste del regulador - reparación de tecla
+28617,2025-12-19 10:05:19,SIED,CONCENTRADOR DE OXÍGENO,Philips Respironics,EVERFLO,3609,Cambio ceoltias,1.00,424500.00,,"",zeolita/tamiz,"reemplazo tamiz ciolita, valvula pilow, limpieza filtro nuevo, ajuste de fuga en compresor.",""
+28616,2025-12-19 10:05:32,SIED,CONCENTRADOR DE OXÍGENO,Philips Respironics,EVERFLO,3558,Canister,1.00,424500.00,,"",zeolita/tamiz,"reemplazo de tamiz, valvula pilow, filtro, limpieza",""
+28178,2025-12-23 00:00:00,PRAXAIR ARG.,DESFIBRILADOR,Mindray,C1A,3155,Costo,1.21,598350.00,,"","","","● Revisión integral del equipo 
+● Chequeo de nivel de batería 
+● Chequeo de memoria interna 
+● Chequeo de patrones de descarga 
+● Prueba de niveles de descarga 
+● Actualización a ultima versión del sistema. 
+"
+28178,2025-12-23 00:00:00,PRAXAIR ARG.,DESFIBRILADOR,Mindray,C1A,3156,Revisión,0.30,598350.00,,"","","","● Revisión integral del equipo 
+● Chequeo de nivel de batería 
+● Chequeo de memoria interna 
+● Chequeo de patrones de descarga 
+● Prueba de niveles de descarga 
+● Actualización a ultima versión del sistema. 
+"
+28918,2025-12-31 11:38:00,RUSSO PABLO MATIAS,POLÍGRAFO,BMC,PolyWatch YH-600B,3661,CAble,1.00,65000.00,,"",cable,no sensa flujo y Respiración toracoabdominal por cable de kit de respiración degradado - se reinicia la fecha y hora por pila interna de 3v obsoleta - tiene artificio en las señales a la hora de leer los datos de terapia en el software - el año máximo al que llega el equipo es 2023 - equipo sin conector plástico de cánula nasal del kit de respiración - carcaza rota donde va la varilla de soporte de la tapa de pila y micro sd,cambio de cable de kit de respiración - cambio de pila interna de 3v - actualización de software para corrección de año y artificio - colocación de conector plástico de cánula nasal del kit de respiración - control de funcionamiento ok - reparación de carcaza - incorporación de varilla de tapa de pila y micro sd
+28918,2025-12-31 11:38:00,RUSSO PABLO MATIAS,POLÍGRAFO,BMC,PolyWatch YH-600B,3662,Canula,1.00,10000.00,,"",canula,no sensa flujo y Respiración toracoabdominal por cable de kit de respiración degradado - se reinicia la fecha y hora por pila interna de 3v obsoleta - tiene artificio en las señales a la hora de leer los datos de terapia en el software - el año máximo al que llega el equipo es 2023 - equipo sin conector plástico de cánula nasal del kit de respiración - carcaza rota donde va la varilla de soporte de la tapa de pila y micro sd,cambio de cable de kit de respiración - cambio de pila interna de 3v - actualización de software para corrección de año y artificio - colocación de conector plástico de cánula nasal del kit de respiración - control de funcionamiento ok - reparación de carcaza - incorporación de varilla de tapa de pila y micro sd

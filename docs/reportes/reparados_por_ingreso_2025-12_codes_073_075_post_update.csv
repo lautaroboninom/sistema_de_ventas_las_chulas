@@ -1,0 +1,7 @@
+﻿os,presupuesto_estado,quote_id,quote_item_id,tipo,descripcion,qty,precio_u,repuesto_id,repuesto_codigo,costo_u_neto
+28862,aprobado,8469,3647,mano_obra,Mano de obra,1.00,22962.00,,,
+28882,no_aplica,8494,3921,repuesto,"Pack Bateria Kangaroo 3,6V 80mA Ni-Mh 2 Pines",1.00,66619.80,9143,ME073,49348.00
+28918,aprobado,8503,3661,repuesto,CAble,1.00,65000.00,,,
+28918,aprobado,8503,3662,repuesto,Canula,1.00,10000.00,,,
+28918,aprobado,8503,3663,mano_obra,Mano de obra,1.00,28976.00,,,
+28918,aprobado,8503,3922,repuesto,CR1632 POLYWACH,1.00,6307.20,193,ME-075,4672.00

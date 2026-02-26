@@ -3,7 +3,7 @@ from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .helpers import q, exec_void, require_roles, _fetchall_dicts, _set_audit_user
+from .helpers import q, exec_void, exec_returning, require_roles, _fetchall_dicts, _set_audit_user
 
 
 class DeviceIdentificadoresView(APIView):
@@ -117,10 +117,12 @@ class DevicesListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        require_roles(request, ["jefe", "jefe_veedor", "admin"])
+        require_roles(request, ["jefe", "jefe_veedor", "admin", "tecnico"])
         q_raw = (request.GET.get("q") or "").strip()
         propio_raw = (request.GET.get("propio") or "").strip().lower()
         alquilado_raw = (request.GET.get("alquilado") or "").strip().lower()
+        preventivo_estado_raw = (request.GET.get("preventivo_estado") or "").strip().lower()
+        con_plan_raw = (request.GET.get("con_plan") or "").strip().lower()
         sort_raw = (request.GET.get("sort") or "").strip()
         page_raw = (request.GET.get("page") or "").strip()
         page_size_raw = (request.GET.get("page_size") or "").strip()
@@ -134,6 +136,75 @@ class DevicesListView(APIView):
             page_size = 0
         if page_size > 0:
             page_size = min(page_size, 500)
+
+        has_preventivos = bool(
+            q(
+                """
+                SELECT 1
+                  FROM information_schema.tables
+                 WHERE table_schema='public'
+                   AND table_name='preventivo_planes'
+                """,
+                one=True,
+            )
+        )
+
+        if preventivo_estado_raw and preventivo_estado_raw not in ("sin_plan", "al_dia", "proximo", "vencido"):
+            return Response({"detail": "preventivo_estado invalido"}, status=400)
+
+        con_plan_val = None
+        if con_plan_raw in ("1", "true", "yes", "y", "t"):
+            con_plan_val = True
+        elif con_plan_raw in ("0", "false", "no", "n", "f"):
+            con_plan_val = False
+
+        if has_preventivos:
+            from_sql = """
+                FROM devices d
+                LEFT JOIN customers c ON c.id = d.customer_id
+                LEFT JOIN marcas b ON b.id = d.marca_id
+                LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN locations loc ON loc.id = d.ubicacion_id
+                LEFT JOIN LATERAL (
+                  SELECT i.id AS ingreso_id,
+                         COALESCE(i.fecha_ingreso, i.fecha_creacion) AS fecha_ingreso
+                    FROM ingresos i
+                   WHERE i.device_id = d.id
+                   ORDER BY COALESCE(i.fecha_ingreso, i.fecha_creacion) DESC, i.id DESC
+                   LIMIT 1
+                ) lasti ON TRUE
+                LEFT JOIN LATERAL (
+                  SELECT
+                    p.id,
+                    p.periodicidad_valor,
+                    p.periodicidad_unidad::text AS periodicidad_unidad,
+                    p.aviso_anticipacion_dias,
+                    p.ultima_revision_fecha,
+                    p.proxima_revision_fecha
+                  FROM preventivo_planes p
+                  WHERE p.scope_type='device'
+                    AND p.device_id=d.id
+                    AND p.activa=true
+                  ORDER BY p.id DESC
+                  LIMIT 1
+                ) pp ON TRUE
+            """
+        else:
+            from_sql = """
+                FROM devices d
+                LEFT JOIN customers c ON c.id = d.customer_id
+                LEFT JOIN marcas b ON b.id = d.marca_id
+                LEFT JOIN models m ON m.id = d.model_id
+                LEFT JOIN locations loc ON loc.id = d.ubicacion_id
+                LEFT JOIN LATERAL (
+                  SELECT i.id AS ingreso_id,
+                         COALESCE(i.fecha_ingreso, i.fecha_creacion) AS fecha_ingreso
+                    FROM ingresos i
+                   WHERE i.device_id = d.id
+                   ORDER BY COALESCE(i.fecha_ingreso, i.fecha_creacion) DESC, i.id DESC
+                   LIMIT 1
+                ) lasti ON TRUE
+            """
 
         with connection.cursor() as cur:
             # Identificar id de cliente propio (MG BIO) si existe
@@ -170,6 +241,38 @@ class DevicesListView(APIView):
             elif alquilado_raw in ("0", "false", "no", "n"):
                 wh.append("COALESCE(d.alquilado,false) = false")
 
+            if has_preventivos:
+                if con_plan_val is True:
+                    wh.append("pp.id IS NOT NULL")
+                elif con_plan_val is False:
+                    wh.append("pp.id IS NULL")
+
+                if preventivo_estado_raw == "sin_plan":
+                    wh.append("pp.id IS NULL")
+                elif preventivo_estado_raw == "vencido":
+                    wh.append("pp.id IS NOT NULL AND pp.proxima_revision_fecha IS NOT NULL AND CURRENT_DATE > pp.proxima_revision_fecha")
+                elif preventivo_estado_raw == "proximo":
+                    wh.append(
+                        "pp.id IS NOT NULL "
+                        "AND pp.proxima_revision_fecha IS NOT NULL "
+                        "AND CURRENT_DATE <= pp.proxima_revision_fecha "
+                        "AND (CURRENT_DATE + (COALESCE(pp.aviso_anticipacion_dias,30) * INTERVAL '1 day'))::date >= pp.proxima_revision_fecha"
+                    )
+                elif preventivo_estado_raw == "al_dia":
+                    wh.append(
+                        "pp.id IS NOT NULL AND ("
+                        "pp.proxima_revision_fecha IS NULL OR ("
+                        "CURRENT_DATE <= pp.proxima_revision_fecha AND "
+                        "(CURRENT_DATE + (COALESCE(pp.aviso_anticipacion_dias,30) * INTERVAL '1 day'))::date < pp.proxima_revision_fecha"
+                        "))"
+                    )
+            else:
+                # Sin esquema preventivo aplicado: todo se considera sin plan.
+                if con_plan_val is True:
+                    wh.append("1=0")
+                if preventivo_estado_raw in ("vencido", "proximo", "al_dia"):
+                    wh.append("1=0")
+
             where_sql = (" WHERE " + " AND ".join(wh)) if wh else ""
 
             sort_map = {
@@ -188,6 +291,40 @@ class DevicesListView(APIView):
                 "ubicacion": "loc.nombre",
                 "-ubicacion": "loc.nombre DESC",
             }
+            if has_preventivos:
+                sort_map.update(
+                    {
+                        "preventivo_ultima": "pp.ultima_revision_fecha",
+                        "-preventivo_ultima": "pp.ultima_revision_fecha DESC",
+                        "preventivo_proxima": "pp.proxima_revision_fecha",
+                        "-preventivo_proxima": "pp.proxima_revision_fecha DESC",
+                        "preventivo_estado": (
+                            "CASE "
+                            "WHEN pp.id IS NULL THEN 0 "
+                            "WHEN pp.proxima_revision_fecha IS NOT NULL AND CURRENT_DATE > pp.proxima_revision_fecha THEN 1 "
+                            "WHEN pp.proxima_revision_fecha IS NOT NULL AND (CURRENT_DATE + (COALESCE(pp.aviso_anticipacion_dias,30) * INTERVAL '1 day'))::date >= pp.proxima_revision_fecha THEN 2 "
+                            "ELSE 3 END"
+                        ),
+                        "-preventivo_estado": (
+                            "CASE "
+                            "WHEN pp.id IS NULL THEN 0 "
+                            "WHEN pp.proxima_revision_fecha IS NOT NULL AND CURRENT_DATE > pp.proxima_revision_fecha THEN 1 "
+                            "WHEN pp.proxima_revision_fecha IS NOT NULL AND (CURRENT_DATE + (COALESCE(pp.aviso_anticipacion_dias,30) * INTERVAL '1 day'))::date >= pp.proxima_revision_fecha THEN 2 "
+                            "ELSE 3 END DESC"
+                        ),
+                    }
+                )
+            else:
+                sort_map.update(
+                    {
+                        "preventivo_ultima": "d.id",
+                        "-preventivo_ultima": "d.id DESC",
+                        "preventivo_proxima": "d.id",
+                        "-preventivo_proxima": "d.id DESC",
+                        "preventivo_estado": "0",
+                        "-preventivo_estado": "0 DESC",
+                    }
+                )
             order_sql = sort_map.get(sort_raw or "", "d.id DESC")
 
             limit_sql = ""
@@ -197,6 +334,39 @@ class DevicesListView(APIView):
                 overfetch = 1
                 limit_sql = " LIMIT %s OFFSET %s"
                 limit_params.extend([page_size + overfetch, max(0, (page - 1) * page_size)])
+
+            if has_preventivos:
+                preventivo_select_sql = """
+                  pp.id AS preventivo_plan_id,
+                  pp.periodicidad_valor AS preventivo_periodicidad_valor,
+                  pp.periodicidad_unidad AS preventivo_periodicidad_unidad,
+                  pp.ultima_revision_fecha AS preventivo_ultima_revision,
+                  pp.proxima_revision_fecha AS preventivo_proxima_revision,
+                  pp.aviso_anticipacion_dias AS preventivo_aviso_dias,
+                  (CASE
+                    WHEN pp.id IS NULL THEN 'sin_plan'
+                    WHEN pp.proxima_revision_fecha IS NOT NULL AND CURRENT_DATE > pp.proxima_revision_fecha THEN 'vencido'
+                    WHEN pp.proxima_revision_fecha IS NOT NULL
+                         AND (CURRENT_DATE + (COALESCE(pp.aviso_anticipacion_dias,30) * INTERVAL '1 day'))::date >= pp.proxima_revision_fecha
+                         THEN 'proximo'
+                    ELSE 'al_dia'
+                  END) AS preventivo_estado,
+                  (CASE
+                    WHEN pp.proxima_revision_fecha IS NULL THEN NULL
+                    ELSE (pp.proxima_revision_fecha - CURRENT_DATE)
+                  END) AS preventivo_dias_restantes,
+                """
+            else:
+                preventivo_select_sql = """
+                  NULL::integer AS preventivo_plan_id,
+                  NULL::integer AS preventivo_periodicidad_valor,
+                  NULL::text AS preventivo_periodicidad_unidad,
+                  NULL::date AS preventivo_ultima_revision,
+                  NULL::date AS preventivo_proxima_revision,
+                  NULL::integer AS preventivo_aviso_dias,
+                  'sin_plan'::text AS preventivo_estado,
+                  NULL::integer AS preventivo_dias_restantes,
+                """
 
             sql = f"""
                 SELECT
@@ -224,6 +394,7 @@ class DevicesListView(APIView):
                   NULL::integer AS last_customer_id,
                   ''::text AS last_customer_nombre,
                   lasti.fecha_ingreso AS last_fecha_ingreso,
+                  {preventivo_select_sql}
                   (CASE WHEN (d.numero_interno ~* '^(MG|NM|NV|CE)\\s*\\d{{1,4}}$'
                               OR d.numero_serie ~* '^(MG|NM|NV|CE)\\s*\\d{{1,4}}$')
                         THEN TRUE ELSE FALSE END) AS es_propietario_mg,
@@ -233,29 +404,24 @@ class DevicesListView(APIView):
                              AND d.customer_id IS NOT NULL
                              AND (%s IS NULL OR d.customer_id <> %s)
                         THEN TRUE ELSE FALSE END) AS vendido
-                FROM devices d
-                LEFT JOIN customers c ON c.id = d.customer_id
-                LEFT JOIN marcas b ON b.id = d.marca_id
-                LEFT JOIN models m ON m.id = d.model_id
-                LEFT JOIN locations loc ON loc.id = d.ubicacion_id
-                LEFT JOIN LATERAL (
-                  SELECT i.id AS ingreso_id,
-                         COALESCE(i.fecha_ingreso, i.fecha_creacion) AS fecha_ingreso
-                    FROM ingresos i
-                   WHERE i.device_id = d.id
-                   ORDER BY COALESCE(i.fecha_ingreso, i.fecha_creacion) DESC, i.id DESC
-                   LIMIT 1
-                ) lasti ON TRUE
+                {from_sql}
                 {where_sql}
                 ORDER BY {order_sql}
                 {limit_sql}
             """
             cur.execute(sql, [mg_owner_id, mg_owner_id] + params + limit_params)
             rows = _fetchall_dicts(cur)
-        # Conteo total (fuera del cursor anterior)
+
         with connection.cursor() as cur2:
-            cur2.execute("SELECT COUNT(*) FROM devices")
-            total_count = cur2.fetchone()[0]
+            cur2.execute(
+                f"""
+                SELECT COUNT(*)
+                {from_sql}
+                {where_sql}
+                """,
+                params,
+            )
+            total_count = int(cur2.fetchone()[0] or 0)
 
         if page_size == 0:
             return Response({"items": rows, "total_count": total_count})
@@ -271,11 +437,200 @@ class DevicesListView(APIView):
             "total_count": total_count,
         })
 
+def _parse_int_or_none(raw):
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except Exception:
+        return None
 
-__all__ = [
-    "DeviceIdentificadoresView",
-    "DevicesListView",
-]
+
+def _parse_bool_or_default(raw, default=False):
+    if raw is None:
+        return bool(default)
+    if isinstance(raw, bool):
+        return raw
+    txt = str(raw).strip().lower()
+    if txt in ("1", "true", "yes", "y", "t", "si", "s"):
+        return True
+    if txt in ("0", "false", "no", "n", "f"):
+        return False
+    return bool(default)
+
+
+class DeviceDirectCreateView(APIView):
+    """
+    Alta directa de equipo en tabla devices sin generar un ingreso.
+    Pensado para equipos bajo tutela del servicio tecnico instalados en instituciones.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        require_roles(request, ["jefe", "jefe_veedor", "admin"])
+        _set_audit_user(request)
+        data = request.data or {}
+
+        customer_id = _parse_int_or_none(data.get("customer_id"))
+        if not customer_id:
+            return Response({"detail": "customer_id requerido"}, status=400)
+        customer = q(
+            "SELECT id FROM customers WHERE id=%s",
+            [customer_id],
+            one=True,
+        )
+        if not customer:
+            return Response({"detail": "Institucion/cliente inexistente"}, status=404)
+
+        marca_id = _parse_int_or_none(data.get("marca_id"))
+        model_id = _parse_int_or_none(data.get("model_id"))
+        ubicacion_id = _parse_int_or_none(data.get("ubicacion_id"))
+
+        if marca_id:
+            marca = q("SELECT id FROM marcas WHERE id=%s", [marca_id], one=True)
+            if not marca:
+                return Response({"detail": "marca_id inexistente"}, status=400)
+
+        if model_id:
+            model = q("SELECT id, marca_id FROM models WHERE id=%s", [model_id], one=True)
+            if not model:
+                return Response({"detail": "model_id inexistente"}, status=400)
+            model_marca_id = int(model.get("marca_id") or 0) if model.get("marca_id") is not None else None
+            if marca_id and model_marca_id and int(marca_id) != model_marca_id:
+                return Response({"detail": "model_id no pertenece a marca_id"}, status=400)
+            if not marca_id:
+                marca_id = model_marca_id
+
+        if ubicacion_id:
+            loc = q("SELECT id FROM locations WHERE id=%s", [ubicacion_id], one=True)
+            if not loc:
+                return Response({"detail": "ubicacion_id inexistente"}, status=400)
+
+        numero_serie = (data.get("numero_serie") or "").strip()
+        numero_interno = (data.get("numero_interno") or "").strip()
+        if numero_interno and not numero_interno.upper().startswith(("MG", "NM", "NV", "CE")):
+            numero_interno = "MG " + numero_interno
+
+        tipo_equipo = (data.get("tipo_equipo") or "").strip()
+        variante = (data.get("variante") or "").strip()
+        alquilado = bool(_parse_bool_or_default(data.get("alquilado"), False))
+        alquiler_a = (data.get("alquiler_a") or "").strip()
+        if not alquilado:
+            alquiler_a = ""
+
+        if not (numero_serie or numero_interno or tipo_equipo or variante or model_id):
+            return Response(
+                {"detail": "Completa al menos N/S, MG, tipo_equipo, variante o modelo."},
+                status=400,
+            )
+
+        if numero_serie:
+            ns_key = numero_serie.replace(" ", "").replace("-", "").upper()
+            other_ns = q(
+                """
+                SELECT id
+                  FROM devices
+                 WHERE REPLACE(REPLACE(UPPER(numero_serie),' ',''),'-','') = %s
+                 LIMIT 1
+                """,
+                [ns_key],
+                one=True,
+            )
+            if other_ns:
+                return Response(
+                    {
+                        "detail": "El numero de serie ya esta asignado a otro equipo.",
+                        "conflict_type": "NS_DUPLICATE",
+                        "conflict_device_id": other_ns["id"],
+                    },
+                    status=400,
+                )
+
+        if numero_interno:
+            if connection.vendor == "postgresql":
+                other_mg = q(
+                    """
+                    SELECT id
+                      FROM devices
+                     WHERE numero_interno ~* '^(MG|NM|NV|CE)\\s*\\d{1,4}$'
+                       AND UPPER(REGEXP_REPLACE(numero_interno,
+                           '^(MG|NM|NV|CE)\\s*(\\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0'))) =
+                           UPPER(REGEXP_REPLACE(%s,
+                           '^(MG|NM|NV|CE)\\s*(\\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0')))
+                     LIMIT 1
+                    """,
+                    [numero_interno],
+                    one=True,
+                )
+            else:
+                other_mg = q(
+                    "SELECT id FROM devices WHERE numero_interno = %s LIMIT 1",
+                    [numero_interno],
+                    one=True,
+                )
+            if other_mg:
+                return Response(
+                    {
+                        "detail": "El numero interno ya esta asignado a otro equipo.",
+                        "conflict_type": "MG_DUPLICATE",
+                        "conflict_device_id": other_mg["id"],
+                    },
+                    status=400,
+                )
+
+        device_id = exec_returning(
+            """
+            INSERT INTO devices(
+              customer_id, marca_id, model_id, numero_serie, numero_interno,
+              tipo_equipo, variante, ubicacion_id, alquilado, alquiler_a
+            ) VALUES (%s, %s, %s, NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''), NULLIF(%s,''), %s, %s, NULLIF(%s,''))
+            RETURNING id
+            """,
+            [
+                customer_id,
+                marca_id,
+                model_id,
+                numero_serie,
+                numero_interno,
+                tipo_equipo,
+                variante,
+                ubicacion_id,
+                alquilado,
+                alquiler_a,
+            ],
+        )
+
+        row = q(
+            """
+            SELECT
+              d.id,
+              d.customer_id,
+              COALESCE(c.razon_social,'') AS customer_nombre,
+              d.marca_id,
+              d.model_id,
+              COALESCE(b.nombre,'') AS marca,
+              COALESCE(m.nombre,'') AS modelo,
+              COALESCE(d.numero_serie,'') AS numero_serie,
+              COALESCE(d.numero_interno,'') AS numero_interno,
+              COALESCE(d.tipo_equipo,'') AS tipo_equipo,
+              COALESCE(d.variante,'') AS variante,
+              d.ubicacion_id,
+              COALESCE(loc.nombre,'') AS ubicacion_nombre,
+              COALESCE(d.alquilado,false) AS alquilado,
+              COALESCE(d.alquiler_a,'') AS alquiler_a
+            FROM devices d
+            LEFT JOIN customers c ON c.id = d.customer_id
+            LEFT JOIN marcas b ON b.id = d.marca_id
+            LEFT JOIN models m ON m.id = d.model_id
+            LEFT JOIN locations loc ON loc.id = d.ubicacion_id
+            WHERE d.id=%s
+            """,
+            [device_id],
+            one=True,
+        )
+        return Response({"ok": True, "device": row}, status=201)
 
 
 def _norm_mg(value: str):
@@ -406,11 +761,11 @@ class DevicesMergeView(APIView):
                 SELECT id
                   FROM devices
                  WHERE id NOT IN (%s,%s)
-                   AND numero_interno ~* '^(MG|NM|NV|CE)\s*\d{1,4}$'
+                   AND numero_interno ~* '^(MG|NM|NV|CE)\\s*\\d{1,4}$'
                    AND UPPER(REGEXP_REPLACE(numero_interno,
-                       '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0'))) =
+                       '^(MG|NM|NV|CE)\\s*(\\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0'))) =
                        UPPER(REGEXP_REPLACE(%s,
-                       '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))
+                       '^(MG|NM|NV|CE)\\s*(\\d{1,4})$', '\\1 ' || LPAD('\\2',4,'0')))
                  LIMIT 1
                 """,
                 [target_id, source_id, mg_to_apply],
@@ -460,3 +815,11 @@ class DevicesMergeView(APIView):
             "applied_numero_serie": new_ns,
             "applied_numero_interno": mg_to_apply,
         })
+
+
+__all__ = [
+    "DeviceDirectCreateView",
+    "DeviceIdentificadoresView",
+    "DevicesListView",
+    "DevicesMergeView",
+]

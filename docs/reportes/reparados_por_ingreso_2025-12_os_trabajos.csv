@@ -1,0 +1,93 @@
+﻿os,fecha_ingreso,fecha_entrega,estado_actual,resolucion,presupuesto_estado,cliente,tipo_equipo,marca,modelo,variante,numero_serie,numero_interno,descripcion_problema,trabajos_realizados,comentarios,quote_id
+28783,2025-12-01 00:00:00,2025-12-19 10:04:50,entregado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5Q,"",SIED012024219,"",se soltó el tapón derecho del compresor,colocación de tapón - cambio de filtros - cambio de tapa de filtro - control y limpieza del equipo,"",8436
+28784,2025-12-01 00:00:00,2025-12-19 10:04:35,entregado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5,"",MZJ5S121153,"","manguera de zeolita derecha rota
+placa principal con falla en la alarma",cambio de manguera zeolita - cambio de filtros - cambio de placa principal - control y limpieza del equipo,"",8437
+28785,2025-12-01 00:00:00,2026-02-02 14:46:00,entregado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,Philips Respironics,EVERFLO,"",0014023,"","",reemplazo de válvula pilow - cambio de filtro - control y limpieza del equipo,"",8545
+28790,2025-12-01 00:00:00,2025-12-09 16:34:11,entregado,reparado,aprobado,DIAGNOSTIC MEDIC,POLÍGRAFO,BMC,PolyWatch YH-600B,PRO,S2224D611008,"","equipo no sensa bien el flujo de aire y la respiración toracoabdominal por cable de kit de respiracion desgastado, esto es por mal cuidado del equipo.","cambio de cable del kit de respiracion - control de funcionamiento ok
+
+Accesorios: bolso + kit respiratorio + Sensor SpO2 + latiguillos","",8451
+28788,2025-12-02 00:00:00,2025-12-19 07:01:00,entregado,reparado,aprobado,SIED,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",B5-0769,"",MOTOR RUIDOSO VACUOMETRO TRABADO,"DESMARME LIMPIEZA Y LUBRICACION DE MOTOR, FIJACION MOTOR A BOMBA CAMBIO DE VACUOMETRO","",8454
+28789,2025-12-02 00:00:00,,liberado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,Philips Respironics,EVERFLO,"",0012556,"","",cambio de canister de ceolita + válvula pilot - cambio de filtro genérico,"",8590
+28791,2025-12-02 00:00:00,2026-01-13 16:53:22,entregado,reparado,aprobado,OXIDOM,CPAP,BMC,CPAP G2,RESMART,E2121903231,"","EQUIPO TENIA PERDIDA DE FLUJO DE AIRE INTERNA - EQUIPO CONTAMINADO POR BICHOS EN SU INTERIOR - MAL FUNCIONAMIENTO DE RESLEX 
+PERDIDA DE FLUJO INTERNA POR TURBINA DESACOMODADA","LIMPIEZA Y DESINFECCION DE EQUIPO - ACTUALIZACION DE SOFTWARE DEL EQUIPO - CONTROL OK
+CAMBIO DE CARCAZA DE TURBINA POR RESIDUOS DE INSECTOS 
+","",8458
+28792,2025-12-02 00:00:00,2026-01-19 07:16:00,entregado,reparado,aprobado,OXIDOM,CPAP,BMC,CPAP G2,E-20C-H-O,E2121906223,"",MAL FUNCIONAMIENTO DEL RESLEX - SILBIDO EN TURBINA,"SE REALIZO ACTUALIZACION DE SOFTWARE PARA CORRECCION DE RESLEX - SILBIDO EN TURBINA CAUSADO POR RODAMIENTO INTERNO DE LA TURBINA DESGASTADO, CAUSADO POR EL EXCESO DE SUCIEDAD QUE ENTRO EN EL EQUIPO(SE ADJUNTAN FOTOS)
+REQUIERE CAMBIO DE TURBINA","",8457
+28803,2025-12-05 00:00:00,,reparado,"",pendiente,NOVAMED S.A.,oxímetro de pulso,Nellcor,N-560,"",F0019,NM 0258,Fijación de ficha de entrada de sensor ROTA,Incorporación de soporte interno para ficha de enttrada de sensor,"",8535
+28809,2025-12-05 00:00:00,,reparado,"",no_aplica,PRAXAIR ARG.,CPAP,BMC,CPAP G2,E-20C-H-O,E2122603158,MG 7057,oscilación de presión por falla en reslex - equipo sucio,actualización de software  - limpieza interior y exterior - control de funcionamiento ok,SIN CABLE,""
+28815,2025-12-05 00:00:00,,reparado,"",pendiente,DOMICILIO SALUD,oxímetro de pulso,Nellcor,N-560,"",150650041,MG 6631,bateria obsoleta - carcaza de frente e inferior rota,cambio de bateria 12v 1.3a - cambio de carcaza de frente e inferior,CARCASA ROTA,""
+28816,2025-12-05 00:00:00,,reparado,"",pendiente,PRAXAIR ARG.,oxímetro de pulso,Nellcor,N-560,"",N560003624,MG 4442,error 526(falla en modulo SPo2) - bateria obsoleta - carcaza inferior rota,cambio de modulo spo2 y bateria 12v 1.3a - cambio de carcaza inferior,"SIN ACCESORIOS
+SIN CABLE
+CARCASA ROTA",""
+28817,2025-12-05 00:00:00,,reparado,"",pendiente,PRAXAIR ARG.,oxímetro de pulso,Nellcor,N-560,"",011514040251,MG 3121,bateria obsoleta,CAMBIO DE BATERIA 12V 1.3A - CONTROL DE FUNCIONAMIENTO OK,"SIN ACCESORIOS
+SIN CABLE",""
+28819,2025-12-05 00:00:00,,reparado,"",pendiente,PRAXAIR ARG.,oxímetro de pulso,Nellcor,N-560,"",11511060326,MG 1554,bateria obsoleta,cambio de bateria 12v 1.3a - control de funcionamiento ok ,"SIN ACCESORIOS
+SIN CABLE",""
+28820,2025-12-05 00:00:00,,reparado,"",pendiente,PRAXAIR ARG.,oxímetro de pulso,Nellcor,N-560,"",560001329,MG 1729,BATERIA OBSOLETA,CAMBIO DE BATERIA 12V 1.3A - CONTROL OK,"SIN ACCESORIOS
+SIN CABLE",""
+28826,2025-12-05 00:00:00,,reparado,"",no_aplica,PRAXAIR ARG.,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5Q,"",MZJ5S122102,MG 5487,"compresor ruidoso 
+rueda delantera faltante
+zeolita degradada",colocación de rueda faltante - cambio de labios - cambio de filtros - cambio de zeolita - colocacion de banda elastica,RUEDA ROTA,8464
+28903,2025-12-05 00:00:00,,reparado,"",pendiente,PRAXAIR ARG.,oxímetro de pulso,Nellcor,N-560,"","",MG 2395,BATERIA OBSOLETA,CAMBIO DE BATERIA 12V 1.3 A - CONTROL DE FUNCIONAMIENTO OK,"",""
+28862,2025-12-09 00:00:00,2025-12-18 07:06:00,entregado,reparado,aprobado,OXICASTHOMECARE,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5Q,"",MZJ5S79790,"","zeolita degradada
+pila alarma degradada","cambio de zeolita - cambio de pila alarma - cambio de filtros - corrección de tecla ON/OFF - control y limpieza del equipo
+
+Se BONIFICA el cambio de zeolitas por posible falla de fábrica.","",8469
+28864,2025-12-09 00:00:00,,liberado,reparado,aprobado,HOSPICE KAMALAYA,CONCENTRADOR DE OXÍGENO,Philips Respironics,EVERFLO,"",0022827,"","",reemplazó de tamiz - cambio de válvula pilow - cambio de filtro - limpieza interna externa - control de funcionamiento,"",8530
+28866,2025-12-09 00:00:00,,alquilado,reparado,pendiente,SIMPLE SALUD,CONCENTRADOR DE OXÍGENO,AirSep,NewLife Elite,5L,N5161411,MG 2397,el equipo esta en buenas condiciones,"cambio de filtro externo - control de funcionamiento - concentra en 5L 92,3/94,6%","",8466
+28867,2025-12-09 00:00:00,,reparado,"",no_aplica,SIMPLE SALUD,CONCENTRADOR DE OXÍGENO,AirSep,NewLife Elite,5L,5167674,MG 2723,"válvula de alivio rota
+zeolita degradada
+electroválvula degradada",cambio zeolita (CAN 0034/35) - cambio de válvula de alivio - cambio de electroválvula - cambio de filtros ,"",8475
+28882,2025-12-09 00:00:00,,reparado,"",no_aplica,DOMICILIO SALUD,BOMBA DE ALIMENTACIÓN,Kangaroo,224,"",T9017076,MG 3479,NO FUNCIONA A BATERIA,"CONTROL DE FUNCIONAMIENTO, CAMBIO DE BATERIAS LOTE 9868 ","",8494
+28870,2025-12-11 00:00:00,2026-01-13 07:17:00,entregado,reparado,aprobado,DIAGNOSTIC MEDIC,CPAP,BMC,CPAP G2,E-20C-H-O,E2122523003,"",OSCILACION DE PRESION CUANDO EL RESLEX ESTA ACTIVADO,ACTUALIZACION DE SOFTWARE PARA CORRECCION DE FALLA EN RESLEX - CALIBRACION DEL EQUIPO - CONTROL DE FUNCIONAMIENTO OK - CAMBIO DE FILTRO,"",8489
+28871,2025-12-11 00:00:00,2025-12-30 13:47:00,entregado,reparado,aprobado,SOENSA,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",A4-0281,"",PULSADOR DE ENCENDIDO DESARMADO,"REPARACION DE LLAVE DE ENCENDIDO (REARMADO MONTAJE DE LLAVE ENCENDIDO) DESMONTAJE TOTAL DE MOTOR BATERIAS Y PLACA ELECTRONICA LIMPIEZA INTERIOR MONTAJE DE BATERIAS , LIMPIEZA MOTOR Y LUBRICACION CON GRASA EN AEROSOL CONTROL DE FUNCIONAMIENTO PLACA ELECTRONICA",Entrega: remito 28871 - retira YO,8470
+28874,2025-12-12 00:00:00,2025-12-24 08:03:00,entregado,reparado,aprobado,AVIL SALUD SRL,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",C8-1371,"",VALVULA AGUJA FORZADA,LUBRICACION VALVULA AGUJA Y FIJACION A GABINETE,SIN ACCESORIOS,8487
+28875,2025-12-15 00:00:00,2026-01-14 07:19:00,entregado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,AirSep,NewLife Elite,5L,N5152590,"","placa principal con componentes quemados 
+electroválvula defectuosa 
+zeolita degradada",cambio de placa principal - cambio de electroválvula - cambio de filtros - cambio zeolita (CAN 0026/27) - control y limpieza del equipo,"",8488
+28876,2025-12-15 00:00:00,2026-01-13 11:59:48,entregado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5,"",MZJ5S121641,"","Cooler quemado
+zeolita degradada",cambio de cooler - cambio zeolita - cambio de filtros - control y limpieza del equipo,"",8471
+28877,2025-12-15 00:00:00,2026-01-13 11:58:26,entregado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5Q,"",MZJ5S122063,"","pico de salida roto
+zeolita degradada/ concentraba 86/89%",cambio de pico de salida O2 - cambio de zeolita - cambio de banda elástica - control y limpieza del equipo,"",8472
+28891,2025-12-15 00:00:00,2026-01-09 11:43:00,entregado,reparado,aprobado,BIOMEDICAL CARE SUR S.A.S.,CPAP,Yamind,DM26,20C,Y662124390124,"","microsd del equipo pide formatear por error de numero de serie - cuando se intento leer los datos de tarjeta en el software somnus tiro el error  ""La operación aritmética ha provocado un desbordamiento"" - equipo con bastante polvo y tierra en su interior","-El equipo pide formatear la microSD cuando se enciende porque esta línea de equipos solo permite una microSD por equipo, no permite usar la misma para diferentes equipos
+-Se identificaron los archivos corruptos de la sd y se intercambiaron por otros que no lo estén, de otro equipo, haciendo esto se logro leer los datos de terapia en el somnus con el inconveniente de que a la hora de leer los datos, el numero de serie que figurara es el del equipo que se usaron los archivos - se enviara una carpeta comprimida con todos los datos óptimos para leerlos - se recomienda formatear la microSD y usarla nuevamente en el equipo que corresponde
+-Limpieza interior y exterior de equipo, control de funcionamiento ok","",8490
+28892,2025-12-15 00:00:00,2026-01-06 11:39:00,entregado,reparado,aprobado,BIOMEDICAL CARE SUR S.A.S.,CPAP,BMC,CPAP G2S,C20,ES121A03053,"",equipo entrega presiones erroneas cuando el reslex esta activado,actualizacion de software para correccion de falla en reslex - calibracion del equipo - control de funcionamiento ok - limpieza interior y exterior - cambio de filtro,"",8486
+28888,2025-12-16 00:00:00,,reparado,"",no_aplica,ALEXANDER FLEMING S A,BOMBA DE ASPIRACION DE DRENAJE,EI,K-135,"",365,MG 2951,"leds testigos y porta fusible flojos
+conectores llenos de cinta 
+mangueras internas vencidas",cambio de mangueras - ajuste de leds testigos y porta fusible - limpieza de cinta en conectores y columna de agua - control y limpieza del equipo,"",8495
+28889,2025-12-16 00:00:00,2026-01-13 11:58:48,entregado,reparado,aprobado,SIED,BOMBA DE INFUSIÓN,Kangaroo,324,"",T0313433,"",NO DETECTA IMAN DE GOTERO,"AJUSTE DE ALOJAMIENTO IMAN DE GOTERO, CONTROL DE FUNCIONAMIENTO","",8481
+28927,2025-12-16 00:00:00,,reparado,"",pendiente,ALEXANDER FLEMING S A,BOMBA DE ASPIRACION DE DRENAJE,EI,K-135,"",R0176,MG 3546,mangueras interna y externas gastadas,cambio de mangueras - control y limpieza del equipo,"",""
+28893,2025-12-17 00:00:00,2026-01-09 11:34:00,entregado,reparado,no_aplica,SOENSA,AUTO CPAP,BMC,AUTO CPAP G2S,G2S,ES423803054,"","EQUIPO CON SILBIDO EN TURBINA POR RODAMIENTO DESGASTADO - REQUIERE CAMBIO DE TURBINA - PLACA OK 
+ EQUIPO EN GARANTIA NO SE ENCONTRARON ANOMALIAS O SIGNOS DE MAL USO DEL EQUIPO E",CONTROL DE FUNCIONAMIENTO DE TODOS LOS PARAMETROS DEL EQUIPO OK - CAMBIO DE TURBINA - CAMBIO DE FILTRO,S/CAMARA HUMI,8498
+28894,2025-12-18 00:00:00,2026-01-20 07:11:00,entregado,reparado,aprobado,PANAS,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",A8-0480,"","NOCARGA BATERIA, SOPORTE MANIJA ROTO","REPARATO GABINETE SOPORTE DE MANIJA, CAMBIO DE FUJSE BATERIA","",8531
+28895,2025-12-18 00:00:00,2026-01-20 07:10:00,entregado,reparado,aprobado,PANAS,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",A4-0285,"",equipo no funcionaba correctamente a baterias - baterias descargadas -,se cargaron las baterias hasta que lleguen a la tensión normal de las mismas (estaban muy descargadas) - control de funcionamiento de baterias ok - control de carga ok - aspiracion maxima 550mmHg,"",8505
+28896,2025-12-18 00:00:00,2026-01-20 07:13:00,entregado,reparado,aprobado,PANAS,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",A4-0292,"","","CAMBIO DE VACUOMETRO, CAMBIO DE 2 BATERIAS DE 6V 4 AMP LOTE 9970 LIMPIEZA Y LUBRICACION DE MOTOR, COLOCACION DE SUPLEMENTE SOPORTE DE VALVULA AGUJA","",8506
+28897,2025-12-18 00:00:00,2026-01-20 07:11:00,entregado,reparado,aprobado,PANAS,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",C6-1277,"",NO FUNCIONA A BATERIAS BAJO NIVEL DE ASPIRACION,"CAMBIO DE MINIFUSE 3 AMP, DESARME LIMPIEZA Y LUBRICACION MOTOR.","",8509
+28898,2025-12-18 00:00:00,2026-01-19 07:15:00,entregado,reparado,aprobado,OXIDOM,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",A3-0209,"",baterias obsoletas - falla en carga de baterias - falla en carga del equipo por jack de alimentacion en mal estado - limpieza en pines de conexion de placa -  aspiración máxima 5500mmHg,requiere cambio de pack de baterias 6v 4a- jack de alimentacion - ,"",8518
+28899,2025-12-22 00:00:00,,liberado,reparado,aprobado,JORGE TEMPORETTI,CONCENTRADOR DE OXÍGENO PORTÁTIL,Inogen,ONE,G2,17218793,"","Lectura de LOGS con software de Inogen DATA LOG:
+- Nivel de Oxígeno bajo. Ceolitas agotadas con 0% de vida útil.
+- Filtros para recambio
+- Batería ok
+- Compresor ok","Se cambia canister de ceolitas (HF-COLC-244727324)
+Se cambian Filtros
+Limpieza general del equipo","",8496
+28912,2025-12-22 00:00:00,2026-01-07 06:54:00,entregado,reparado,presupuestado,NOVAMED S.A.,ASPIRADOR,Silfab,N-33A,"",09-23T-1004-0017,"","",LIMPIEZA Y CONTROL DE FUNCIONAMIENTO,"",8513
+28906,2025-12-23 00:00:00,,liberado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,Philips Respironics,EVERFLO,"",0012642,"","",cambio de canister - cambio de válvula pilot - cambio de filtro - control y limpieza del equipo,ALARMA ROJA,8541
+28907,2025-12-23 00:00:00,2026-01-13 12:00:10,entregado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5,"",MZJ5S121304,"","compresor ruidoso
+silenciadores sueltos
+base plástica rota
+zeolita degradada",cambio de base plástica - cambio de labios - cambio de flapers - ajuste de silenciadores - cambio de filtros - cambio de zeolita - cambio de tapa superior -  ajuste de tecla ON/OFF,RUEDA ROTA,8508
+28908,2025-12-23 00:00:00,2026-01-14 07:17:00,entregado,reparado,aprobado,SIED,CONCENTRADOR DE OXÍGENO,AirSep,NewLife Elite,5L,N5134538,"",zeolita degradada,cambiar zeolita (CAN 0030/31) - cambio de filtros - control y limpieza del equipo,SE APAGA Y SE PRENDE,8512
+28909,2025-12-23 00:00:00,2026-01-13 12:00:29,entregado,reparado,aprobado,SIED,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",A5-0323,"",VALVULA AGUJA SUELTA,"ADAPTADOR SOPORTE VALVULA AGUJA, 2 DE BATERIAS DE 6V 4 AMP LOT 9970, LUBRICACION MOTOR, CAMBIO DE SOPORTE BATERIA LIMPIEZA INTERIOR, CAMBIO DE VACUOMETRO LOTE 26912","",8510
+28910,2025-12-23 00:00:00,2026-01-13 11:59:13,entregado,reparado,aprobado,SIED,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",B4-0732,"","BAJA ASPIRACION POR FLAPPER DE MOTOR ROTO, SIN LUBRICANTE Y LABIO TOTALMENTE SUCIO - CARCAZA FRONTAL ROTA - VACUOMETRO DESCALIBRADO - BATERIAS OBSOLETAS - CIRCUITO NEUMATICO CONTAMINADO DE SUCIEDAD - PLACA OK","REQUIERE CAMBIO DE PACK DE BATERIAS 6V 4A - VACUOMETRO - CAMBIO DE CARCAZA FRONTAL - CIRCUITO NEUMATICO - LIMPIEZA Y LUBRICACION DE MOTOR COMPLETO CON GRASA LIQUIDA WURTH, CAMBIO DE FLAPPER(HECHO) - ","",8507
+28911,2025-12-23 00:00:00,2026-01-13 08:57:00,entregado,reparado,aprobado,SIED,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",C1-1037,"",NO CARGA BATERIAS VACUOMETRO DESFASADO 40 MMHG,"CAMBIO DE FUSE 3 AMP MINIFICHA, CAMBIO VACUOMETRO (LOTE 26912)","",8511
+28915,2025-12-24 00:00:00,2026-01-07 06:48:00,entregado,reparado,aprobado,NOVAMED S.A.,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",A5-0344,NM0272,vacuómetro descalibrado - baterías obsoletas - equipo no cargaba por componente faltante en placa,"se cambió pack de baterías 6v 4a  lote  9970- cambio de vacuómetro   lote 26912 más conector plástico - reparación de placa 
+aspiración máxima 540mmHg","",8501
+28918,2025-12-29 00:00:00,2025-12-31 11:38:00,entregado,reparado,aprobado,RUSSO PABLO MATIAS,POLÍGRAFO,BMC,PolyWatch YH-600B,PRO,S222D804029,"",no sensa flujo y Respiración toracoabdominal por cable de kit de respiración degradado - se reinicia la fecha y hora por pila interna de 3v obsoleta - tiene artificio en las señales a la hora de leer los datos de terapia en el software - el año máximo al que llega el equipo es 2023 - equipo sin conector plástico de cánula nasal del kit de respiración - carcaza rota donde va la varilla de soporte de la tapa de pila y micro sd,cambio de cable de kit de respiración - cambio de pila interna de 3v - actualización de software para corrección de año y artificio - colocación de conector plástico de cánula nasal del kit de respiración - control de funcionamiento ok - reparación de carcaza - incorporación de varilla de tapa de pila y micro sd,"",8503
+28921,2025-12-30 00:00:00,2026-01-19 07:14:00,entregado,reparado,aprobado,OXIDOM,ASPIRADOR A BATERÍAS,Movi-vac,A-550,"",A3-0208,"",NO ENCIENDE NI CARGA POR FUSIBLE DE BATERIA ABIERTO - RUIDO POR MOTOR DESMOTADO DE SU BASE - VACUOMETRO DESCALIBRADO,"CAMBIO DE FUSIBLE MINIFICHA 3A - ARMADO DE MOTOR - LIMPIEZA Y LUBRICACION DE MOTOR(con grasa liquida) - REQUIERE CAMBIO DE VACUOMETRO 
+ASPIRACION MAXIMA 550mmHg","",8521
+28922,2025-12-30 00:00:00,2026-02-09 11:32:00,entregado,reparado,aprobado,OXIGENOTERAPIA LOMAS S.A,CONCENTRADOR DE OXÍGENO,Longfian,JAY-5,"",MZJ5S121725,"","cooler quemado
+Baja concentración",cambio de cooler - cambio de zeolita - control y limpieza del equipo,"",8515
+28931,2025-12-31 00:00:00,,reparado,"",pendiente,RESPIFLOW,ASPIRADOR,Silfab,N-33A,"",B2611,MG 6666,devolucion,LIMPIEZA GRAL CONTROL DE FUNCIONAMIENTO,SIN ACCESORIOS,8523

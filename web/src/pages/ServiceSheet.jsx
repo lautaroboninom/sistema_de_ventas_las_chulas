@@ -26,6 +26,7 @@ import ArchivosTab from "./ServiceSheet/tabs/ArchivosTab";
 import HistorialTab from "./ServiceSheet/tabs/HistorialTab";
 import PresupuestoTab from "./ServiceSheet/tabs/PresupuestoTab";
 import DiagnosticoTab from "./ServiceSheet/tabs/DiagnosticoTab";
+import TestTab from "./ServiceSheet/tabs/TestTab";
 import PrincipalTab from "./ServiceSheet/tabs/PrincipalTab";
 import DerivacionesTab from "./ServiceSheet/tabs/DerivacionesTab";
 
@@ -71,7 +72,7 @@ export default function ServiceSheet() {
   useEffect(() => {
     try {
       const t = location?.state?.tab;
-      if (t && ["principal","diagnostico","presupuesto","derivaciones","historial"].includes(t)) setTab(t);
+      if (t && ["principal","diagnostico","test","presupuesto","derivaciones","historial"].includes(t)) setTab(t);
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location?.state]);
@@ -83,7 +84,7 @@ export default function ServiceSheet() {
       if (!search) return;
       const sp = new URLSearchParams(search);
       const t = (sp.get("tab") || "").trim();
-      if (t && ["principal","diagnostico","presupuesto","derivaciones","historial"].includes(t)) {
+      if (t && ["principal","diagnostico","test","presupuesto","derivaciones","historial"].includes(t)) {
         setTab(t);
       }
       if (canAssignTecnico) {
@@ -749,6 +750,7 @@ export default function ServiceSheet() {
         items={[
           { value: "principal", label: "Principal" },
           { value: "diagnostico", label: "Diagnóstico y Reparación" },
+          { value: "test", label: "Tests" },
           { value: "presupuesto", label: "Presupuesto" },
           { value: "derivaciones", label: "Derivaciones" },
           { value: "archivos", label: "Archivos" },
@@ -839,6 +841,14 @@ export default function ServiceSheet() {
           setShowReparadoToast={setShowReparadoToast}
           savingDiag={savingDiag}
           canManagePhotos={canManagePhotos}
+        />
+      )}
+
+      {/* TEST */}
+      {tab === "test" && (
+        <TestTab
+          id={id}
+          setErr={setErr}
         />
       )}
 

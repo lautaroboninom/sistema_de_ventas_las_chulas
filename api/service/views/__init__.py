@@ -66,6 +66,11 @@ from .ingresos_views import (
     CerrarReparacionView,
 )
 
+from .ingreso_tests_views import (
+    IngresoTestView,
+    IngresoTestPdfView,
+)
+
 from .quotes_views import (
     QuoteDetailView,
     QuoteItemsView,
@@ -157,9 +162,23 @@ from .derivaciones_views import (
 )
 
 from .devices_views import (
+    DeviceDirectCreateView,
     DeviceIdentificadoresView,
     DevicesListView,
     DevicesMergeView,
+)
+
+from .preventivos_views import (
+    DevicePreventivoPlanView,
+    DevicePreventivoRevisionCreateView,
+    PreventivoAgendaView,
+    PreventivoClientesListView,
+    CustomerPreventivoPlanView,
+    CustomerPreventivoRevisionesView,
+    PreventivoRevisionDetailView,
+    PreventivoRevisionItemsView,
+    PreventivoRevisionItemDetailView,
+    PreventivoRevisionCerrarView,
 )
 
 from .proveedores_views import (
@@ -229,6 +248,8 @@ __all__ = [
     "IngresoAsignarTecnicoView",
     "IngresoSolicitarAsignacionView",
     "IngresoHistorialView",
+    "IngresoTestView",
+    "IngresoTestPdfView",
     "PendientesGeneralView",
     "ListosParaRetiroView",
     "CerrarReparacionView",
@@ -307,9 +328,21 @@ __all__ = [
     "DevolverDerivacionView",
     "EquiposDerivadosView",
     # devices
+    "DeviceDirectCreateView",
     "DeviceIdentificadoresView",
     "DevicesListView",
     "DevicesMergeView",
+    # preventivos
+    "DevicePreventivoPlanView",
+    "DevicePreventivoRevisionCreateView",
+    "PreventivoAgendaView",
+    "PreventivoClientesListView",
+    "CustomerPreventivoPlanView",
+    "CustomerPreventivoRevisionesView",
+    "PreventivoRevisionDetailView",
+    "PreventivoRevisionItemsView",
+    "PreventivoRevisionItemDetailView",
+    "PreventivoRevisionCerrarView",
     # proveedores
     "ProveedoresExternosView",
     # clientes

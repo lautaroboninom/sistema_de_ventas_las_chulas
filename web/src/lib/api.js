@@ -534,8 +534,25 @@ export const postModelo = (brandId, payloadOrNombre) => {
     api.get("/api/ingresos/aprobados-reparados/");
   export const getLiberados = () => api.get("/api/ingresos/liberados/");
   export const getTecnicos = () => api.get("/api/catalogos/tecnicos/");
+
+  const buildQuery = (params = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      if (Array.isArray(value)) {
+        value.forEach((item) => {
+          if (item === undefined || item === null || item === "") return;
+          qs.append(key, String(item));
+        });
+        return;
+      }
+      qs.set(key, String(value));
+    });
+    return qs.toString();
+  };
+
   export const getHistoricoIngresos = (params = {}) => {
-    const qs = new URLSearchParams(params).toString();
+    const qs = buildQuery(params);
     return api.get(`/api/ingresos/${qs ? `?${qs}` : ""}`);
   };
   // Compatibilidad: antes se llamaba así
@@ -543,9 +560,41 @@ export const postModelo = (brandId, payloadOrNombre) => {
 
   // Devices (tabla de equipos)
   export const getDevices = (params = {}) => {
-    const qs = new URLSearchParams(params).toString();
+    const qs = buildQuery(params);
     return api.get(`/api/equipos/${qs ? `?${qs}` : ""}`);
   };
+  export const postDeviceDirectCreate = (payload) =>
+    api.post("/api/devices/alta-directa/", payload);
+  export const postDevicePreventivoPlan = (deviceId, payload) =>
+    api.post(`/api/equipos/${deviceId}/preventivo-plan/`, payload);
+  export const patchDevicePreventivoPlan = (deviceId, payload) =>
+    api.patch(`/api/equipos/${deviceId}/preventivo-plan/`, payload);
+  export const postDevicePreventivoRevision = (deviceId, payload) =>
+    api.post(`/api/equipos/${deviceId}/preventivo-revisiones/`, payload);
+  export const getPreventivosAgenda = (params = {}) => {
+    const qs = buildQuery(params);
+    return api.get(`/api/preventivos/agenda/${qs ? `?${qs}` : ""}`);
+  };
+  export const getPreventivosClientes = (params = {}) => {
+    const qs = buildQuery(params);
+    return api.get(`/api/preventivos/clientes/${qs ? `?${qs}` : ""}`);
+  };
+  export const postCustomerPreventivoPlan = (customerId, payload) =>
+    api.post(`/api/clientes/${customerId}/preventivo-plan/`, payload);
+  export const patchCustomerPreventivoPlan = (customerId, payload) =>
+    api.patch(`/api/clientes/${customerId}/preventivo-plan/`, payload);
+  export const getCustomerPreventivoRevisiones = (customerId) =>
+    api.get(`/api/clientes/${customerId}/preventivo-revisiones/`);
+  export const postCustomerPreventivoRevision = (customerId, payload = {}) =>
+    api.post(`/api/clientes/${customerId}/preventivo-revisiones/`, payload);
+  export const getPreventivoRevision = (revisionId) =>
+    api.get(`/api/preventivos/revisiones/${revisionId}/`);
+  export const postPreventivoRevisionItem = (revisionId, payload) =>
+    api.post(`/api/preventivos/revisiones/${revisionId}/items/`, payload);
+  export const patchPreventivoRevisionItem = (revisionId, itemId, payload) =>
+    api.patch(`/api/preventivos/revisiones/${revisionId}/items/${itemId}/`, payload);
+  export const postPreventivoRevisionCerrar = (revisionId, payload) =>
+    api.post(`/api/preventivos/revisiones/${revisionId}/cerrar/`, payload);
   export const patchDeviceIdentificadores = (deviceId, payload) =>
     api.patch(`/api/devices/${deviceId}/identificadores/`, payload);
   export const postDevicesMerge = (payload) =>
@@ -590,6 +639,18 @@ export const postModelo = (brandId, payloadOrNombre) => {
 
   export async function patchIngreso(id, payload) {
     return api.patch(`/api/ingresos/${id}/`, payload);
+  }
+
+  export async function getIngresoTest(id) {
+    return api.get(`/api/ingresos/${id}/test/`);
+  }
+
+  export async function patchIngresoTest(id, payload) {
+    return api.patch(`/api/ingresos/${id}/test/`, payload);
+  }
+
+  export async function getIngresoTestPdfBlob(id) {
+    return getBlob(`/api/ingresos/${id}/test/pdf/`);
   }
 
   export const patchIngresoTecnico = (ingresoId, tecnico_id) =>

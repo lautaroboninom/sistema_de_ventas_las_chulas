@@ -65,10 +65,59 @@ Manual del Sistema de Reparaciones
 - Requiere tabla: `python manage.py apply_presupuesto_alerts_schema`.
 - Scheduling: ejecutar diario via cron/Task Scheduler (ej. 03:00).
 
+### Mantenimientos preventivos (`/equipos`)
+- UX:
+  - La pantalla `/equipos` tiene 3 pestañas: `Equipos`, `Mantenimientos preventivos`, `Instituciones`.
+  - `Equipos`: conserva la grilla historica original de equipos (mismo listado y acciones legacy).
+  - `Mantenimientos preventivos`: muestra solo equipos (no instituciones) que tienen plan activo o tuvieron plan historico; incluye conteos (`Vencidos`, `Proximos`, `Sin plan`) y filtros por `estado` e `institucion`.
+  - `Mantenimientos preventivos`: permite agregar equipo desde la lista de `Equipos` y crear equipo directo "sin ingreso" para inventario bajo tutela tecnica en institucion.
+  - `Instituciones`: selector de institucion (customers), alta inline de institucion y flujo de revision institucional con continuidad.
+- Reglas de estado:
+  - `sin_plan`: no existe plan activo.
+  - `vencido`: `hoy > proxima_revision_fecha`.
+  - `proximo`: `hoy + aviso_anticipacion_dias >= proxima_revision_fecha` y no vencido.
+  - `al_dia`: plan activo y no entra en `proximo/vencido`.
+- Continuidad institucional:
+  - Si hay borrador abierto, se retoma el mismo.
+  - Nueva revision clona la ultima cerrada con `arrastrar_proxima=true` y agrega equipos nuevos del cliente en `pendiente`.
+  - Para `retirado`, default operativo `arrastrar_proxima=false` (editable).
+- Endpoints nuevos:
+  - `GET /api/equipos/` (extendido con campos preventivos + filtros `preventivo_estado` y `con_plan`).
+  - `POST /api/devices/alta-directa/` (alta de equipo sin generar ingreso).
+  - `POST|PATCH /api/equipos/<device_id>/preventivo-plan/`.
+  - `POST /api/equipos/<device_id>/preventivo-revisiones/`.
+  - `GET /api/preventivos/agenda/` (soporta `scope`, `estado`, `customer_id`, `q`, `only_with_plan`).
+  - `GET /api/preventivos/clientes/`.
+  - `POST|PATCH /api/clientes/<customer_id>/preventivo-plan/`.
+  - `GET|POST /api/clientes/<customer_id>/preventivo-revisiones/`.
+  - `GET /api/preventivos/revisiones/<revision_id>/`.
+  - `POST /api/preventivos/revisiones/<revision_id>/items/`.
+  - `PATCH /api/preventivos/revisiones/<revision_id>/items/<item_id>/`.
+  - `POST /api/preventivos/revisiones/<revision_id>/cerrar/`.
+- Esquema:
+  - Fuente de verdad en `sql/schema.sql` (enums + tablas `preventivo_planes`, `preventivo_revisiones`, `preventivo_revision_items`, indices y triggers).
+  - Aplicacion en bases desplegadas: `python manage.py apply_preventivos_schema`.
+- Alertas diarias por email:
+  - Command: `python manage.py send_preventivo_alerts [--dry-run] [--limit N]`.
+  - Destinatarios: usuarios activos con `rol='jefe'`.
+  - Configuracion: `PREVENTIVO_ALERT_ENABLED`, `PREVENTIVO_DEFAULT_LEAD_DAYS`.
+  - Scheduling: diario (cron/Task Scheduler), mismo patron que presupuestos.
+
 - PDFs y reportes
   - Presupuesto PDF: `api/service/pdf.py` + endpoints en `api/service/views/quotes_views.py`.
   - Remito de salida: `api/service/views/reportes_views.py` (autocompleta resolución si estado=‘reparado’ y libera).
   - Remito de derivación: `render_remito_derivacion_pdf` en `api/service/pdf.py` y endpoint asociado.
+  - Informe de test tecnico: `GET /api/ingresos/<id>/test/pdf/` (usa `references_snapshot` persistido para trazabilidad estable).
+
+- Test tecnico por tipo de equipo
+  - Pestaña `Test` en Hoja de Servicio con protocolo dinamico por `tipo_equipo`.
+  - Esquema: `python manage.py apply_test_schema` (crea/actualiza `ingreso_tests`).
+  - Endpoints:
+    - `GET /api/ingresos/<id>/test/`
+    - `PATCH /api/ingresos/<id>/test/`
+    - `GET /api/ingresos/<id>/test/pdf/`
+  - Cada protocolo incluye referencias tecnicas (`REF-xx`) visibles en frontend y PDF.
+  - `references_snapshot` se congela al guardar para evitar cambios retroactivos en informes ya emitidos.
 
 - Auditoría y eventos
   - Tabla `ingreso_events`: registra transición a ‘liberado’ en impresión (una sola vez).

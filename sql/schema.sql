@@ -32,6 +32,18 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'deriv_estado') THEN
     CREATE TYPE deriv_estado AS ENUM ('derivado','en_servicio','devuelto','entregado_cliente');
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preventivo_scope_type') THEN
+    CREATE TYPE preventivo_scope_type AS ENUM ('device','customer');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preventivo_period_unit') THEN
+    CREATE TYPE preventivo_period_unit AS ENUM ('dias','meses','anios');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preventivo_revision_state') THEN
+    CREATE TYPE preventivo_revision_state AS ENUM ('borrador','cerrada','cancelada');
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preventivo_item_state') THEN
+    CREATE TYPE preventivo_item_state AS ENUM ('pendiente','ok','retirado','no_controlado');
+  END IF;
 END $$;
 
 -- =============================
@@ -572,6 +584,27 @@ CREATE TABLE IF NOT EXISTS ingreso_media (
 );
 
 -- Solicitudes de asignación de técnico (simple, una fila por solicitud)
+CREATE TABLE IF NOT EXISTS ingreso_tests (
+  id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  ingreso_id           INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
+  template_key         TEXT NOT NULL,
+  template_version     TEXT NOT NULL,
+  tipo_equipo_snapshot TEXT,
+  payload              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  references_snapshot  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  resultado_global     TEXT NOT NULL DEFAULT 'pendiente',
+  conclusion           TEXT,
+  instrumentos         TEXT,
+  firmado_por          TEXT,
+  fecha_ejecucion      TIMESTAMPTZ NULL,
+  tecnico_id           INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ingreso_tests_ingreso ON ingreso_tests(ingreso_id);
+CREATE INDEX IF NOT EXISTS ix_ingreso_tests_template_key ON ingreso_tests(template_key);
+CREATE INDEX IF NOT EXISTS ix_ingreso_tests_updated_at ON ingreso_tests(updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS ingreso_assignment_requests (
   id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   ingreso_id  INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
@@ -1041,6 +1074,73 @@ CREATE TABLE IF NOT EXISTS feriados (
   nombre TEXT NOT NULL
 );
 
+-- Mantenimientos preventivos
+CREATE TABLE IF NOT EXISTS preventivo_planes (
+  id                       INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  scope_type               preventivo_scope_type NOT NULL,
+  device_id                INTEGER NULL REFERENCES devices(id) ON DELETE CASCADE,
+  customer_id              INTEGER NULL REFERENCES customers(id) ON DELETE CASCADE,
+  periodicidad_valor       INTEGER NOT NULL,
+  periodicidad_unidad      preventivo_period_unit NOT NULL,
+  aviso_anticipacion_dias  INTEGER NOT NULL DEFAULT 30,
+  ultima_revision_fecha    DATE NULL,
+  proxima_revision_fecha   DATE NULL,
+  activa                   BOOLEAN NOT NULL DEFAULT TRUE,
+  observaciones            TEXT NULL,
+  created_by               INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+  updated_by               INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_preventivo_planes_scope
+    CHECK (
+      (scope_type = 'device' AND device_id IS NOT NULL AND customer_id IS NULL)
+      OR
+      (scope_type = 'customer' AND customer_id IS NOT NULL AND device_id IS NULL)
+    ),
+  CONSTRAINT chk_preventivo_planes_periodicidad CHECK (periodicidad_valor > 0),
+  CONSTRAINT chk_preventivo_planes_aviso CHECK (aviso_anticipacion_dias >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS preventivo_revisiones (
+  id                INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  plan_id           INTEGER NOT NULL REFERENCES preventivo_planes(id) ON DELETE CASCADE,
+  estado            preventivo_revision_state NOT NULL DEFAULT 'borrador',
+  fecha_programada  DATE NULL,
+  fecha_realizada   DATE NULL,
+  realizada_por     INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+  resumen           TEXT NULL,
+  created_by        INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+  updated_by        INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_preventivo_revisiones_cerrada_fecha
+    CHECK (estado <> 'cerrada' OR fecha_realizada IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS preventivo_revision_items (
+  id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  revision_id          INTEGER NOT NULL REFERENCES preventivo_revisiones(id) ON DELETE CASCADE,
+  orden                INTEGER NOT NULL DEFAULT 1,
+  device_id            INTEGER NULL REFERENCES devices(id) ON DELETE SET NULL,
+  equipo_snapshot      TEXT NULL,
+  serie_snapshot       TEXT NULL,
+  interno_snapshot     TEXT NULL,
+  estado_item          preventivo_item_state NOT NULL DEFAULT 'pendiente',
+  motivo_no_control    TEXT NULL,
+  ubicacion_detalle    TEXT NULL,
+  accesorios_cambiados BOOLEAN NOT NULL DEFAULT FALSE,
+  accesorios_detalle   TEXT NULL,
+  notas                TEXT NULL,
+  arrastrar_proxima    BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_preventivo_items_motivo_no_control
+    CHECK (
+      estado_item <> 'no_controlado'
+      OR NULLIF(TRIM(COALESCE(motivo_no_control, '')), '') IS NOT NULL
+    )
+);
+
 -- =============================
 -- Índices
 -- =============================
@@ -1082,6 +1182,28 @@ CREATE INDEX IF NOT EXISTS idx_repuestos_proveedores_proveedor_id ON repuestos_p
 CREATE INDEX IF NOT EXISTS idx_repuestos_stock_permisos_tecnico_id ON repuestos_stock_permisos(tecnico_id);
 CREATE INDEX IF NOT EXISTS idx_repuestos_stock_permisos_expires_at ON repuestos_stock_permisos(expires_at);
 CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_accesorio ON ingreso_alquiler_accesorios(accesorio_id);
+
+CREATE INDEX IF NOT EXISTS idx_preventivo_planes_device ON preventivo_planes(device_id);
+CREATE INDEX IF NOT EXISTS idx_preventivo_planes_customer ON preventivo_planes(customer_id);
+CREATE INDEX IF NOT EXISTS idx_preventivo_planes_next_active
+  ON preventivo_planes(proxima_revision_fecha)
+  WHERE activa = TRUE;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_preventivo_planes_device_active
+  ON preventivo_planes(device_id)
+  WHERE activa = TRUE AND device_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_preventivo_planes_customer_active
+  ON preventivo_planes(customer_id)
+  WHERE activa = TRUE AND customer_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_preventivo_revisiones_plan_fecha
+  ON preventivo_revisiones(plan_id, fecha_programada DESC);
+CREATE INDEX IF NOT EXISTS idx_preventivo_revisiones_plan_estado
+  ON preventivo_revisiones(plan_id, estado);
+
+CREATE INDEX IF NOT EXISTS idx_preventivo_revision_items_revision_orden
+  ON preventivo_revision_items(revision_id, orden);
+CREATE INDEX IF NOT EXISTS idx_preventivo_revision_items_revision_estado
+  ON preventivo_revision_items(revision_id, estado_item);
 
 CREATE INDEX IF NOT EXISTS idx_mte_marca ON marca_tipos_equipo(marca_id);
 CREATE INDEX IF NOT EXISTS idx_ms_tipo   ON marca_series(tipo_id);
@@ -1132,6 +1254,21 @@ DO $$ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_mh_updated_at') THEN
     CREATE TRIGGER trg_mh_updated_at BEFORE UPDATE ON model_hierarchy
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_preventivo_planes_updated_at') THEN
+    CREATE TRIGGER trg_preventivo_planes_updated_at
+    BEFORE UPDATE ON preventivo_planes
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_preventivo_revisiones_updated_at') THEN
+    CREATE TRIGGER trg_preventivo_revisiones_updated_at
+    BEFORE UPDATE ON preventivo_revisiones
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_preventivo_revision_items_updated_at') THEN
+    CREATE TRIGGER trg_preventivo_revision_items_updated_at
+    BEFORE UPDATE ON preventivo_revision_items
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
   END IF;
   -- audit_log append-only
@@ -1209,6 +1346,21 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_proveedores_externos') THEN
     CREATE TRIGGER trg_audit_proveedores_externos
     AFTER INSERT OR UPDATE OR DELETE ON proveedores_externos
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_preventivo_planes') THEN
+    CREATE TRIGGER trg_audit_preventivo_planes
+    AFTER INSERT OR UPDATE OR DELETE ON preventivo_planes
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_preventivo_revisiones') THEN
+    CREATE TRIGGER trg_audit_preventivo_revisiones
+    AFTER INSERT OR UPDATE OR DELETE ON preventivo_revisiones
+    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_preventivo_revision_items') THEN
+    CREATE TRIGGER trg_audit_preventivo_revision_items
+    AFTER INSERT OR UPDATE OR DELETE ON preventivo_revision_items
     FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
   END IF;
 END $$;

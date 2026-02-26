@@ -1,0 +1,6 @@
+﻿"os","fecha_entrega","cliente","marca","modelo","tipo_equipo","descripcion_problema","trabajos_realizados","comentarios"
+"28753","2025-12-09 16:37:08","DIAGNOSTIC MEDIC","Yamind","DM26","CPAP","se cae la presion en medio de la terapia","ERROR CAUSADO POR ARCHIVOS CORRUPTOS DE LA TARJETA MICRO SD, NO PERMITE EL CORRECTO FUNCIONAMIENTO DEL EQUIPO - SE PROBO EL EQUIPO CON SD NUEVA DURANTE 8 HORAS Y FUNCIONO CORRECTAMENTE - EL CLIENTE DEBE UTILIZAR UNA MICRO SD NUEVA - LIMPIEZA INTERIOR Y EXTERIOR DEL EQUIPO- CAMBIO DE FILTRO",""
+"28707","2025-12-09 16:37:27","DIAGNOSTIC MEDIC","BMC","CPAP G2","CPAP","equipo entrega presiones erróneas - mal funcionamiento de reslex(fluctúa mucho)","calibración del equipo - actualización de software del equipo para la corrección del reslex - control de funcionamiento ok - limpieza interior y exterior",""
+"28709","2025-12-10 12:36:00","DIAGNOSTIC MEDIC","BMC","CPAP G2","CPAP","Equipo tiene un error de medicion bastante grande, llega a superar un error de  ±1 cmh20, esto es por equipo descalibrado","se realizo la correcta calibración del equipo y con eso se corrigió el error de medición de presión - control de funcionamiento ok 
+
+Entra en garantía",""

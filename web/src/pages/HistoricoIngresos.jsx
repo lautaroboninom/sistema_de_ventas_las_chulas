@@ -30,6 +30,12 @@ export default function HistoricoIngresos() {
   const [fechaLiberacionTo, setFechaLiberacionTo] = useQueryState("fecha_liberacion_to", "");
   const [fechaEntregaFrom, setFechaEntregaFrom] = useQueryState("fecha_entrega_from", "");
   const [fechaEntregaTo, setFechaEntregaTo] = useQueryState("fecha_entrega_to", "");
+  const [fechaIngresoFromDraft, setFechaIngresoFromDraft] = useState(fechaIngresoFrom);
+  const [fechaIngresoToDraft, setFechaIngresoToDraft] = useState(fechaIngresoTo);
+  const [fechaLiberacionFromDraft, setFechaLiberacionFromDraft] = useState(fechaLiberacionFrom);
+  const [fechaLiberacionToDraft, setFechaLiberacionToDraft] = useState(fechaLiberacionTo);
+  const [fechaEntregaFromDraft, setFechaEntregaFromDraft] = useState(fechaEntregaFrom);
+  const [fechaEntregaToDraft, setFechaEntregaToDraft] = useState(fechaEntregaTo);
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
   const pageSize = 200;
@@ -69,6 +75,34 @@ export default function HistoricoIngresos() {
     setFechaEntregaFrom,
     setFechaEntregaTo,
   ]);
+
+  useEffect(() => {
+    setFechaIngresoFromDraft(fechaIngresoFrom || "");
+    setFechaIngresoToDraft(fechaIngresoTo || "");
+    setFechaLiberacionFromDraft(fechaLiberacionFrom || "");
+    setFechaLiberacionToDraft(fechaLiberacionTo || "");
+    setFechaEntregaFromDraft(fechaEntregaFrom || "");
+    setFechaEntregaToDraft(fechaEntregaTo || "");
+  }, [
+    fechaIngresoFrom,
+    fechaIngresoTo,
+    fechaLiberacionFrom,
+    fechaLiberacionTo,
+    fechaEntregaFrom,
+    fechaEntregaTo,
+  ]);
+
+  const commitDate = (draftValue, currentValue, setter) => {
+    const next = draftValue || "";
+    const current = currentValue || "";
+    if (next !== current) setter(next);
+  };
+
+  const onDateKeyDown = (e, commitFn) => {
+    if (e.key !== "Enter") return;
+    commitFn();
+    e.currentTarget.blur();
+  };
 
   const qEffective = (qDebounced || "").trim();
 
@@ -207,10 +241,6 @@ export default function HistoricoIngresos() {
 
       {loading ? (
         "Cargando..."
-      ) : filtered.length === 0 ? (
-        <div className="text-sm text-gray-500">
-          No hay resultados que coincidan con el filtro.
-        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -322,88 +352,126 @@ export default function HistoricoIngresos() {
                 </th>
                 <th className="p-2 align-top">
                   <div className="flex flex-col gap-1">
-                    <input
-                      type="date"
-                      value={fechaIngresoFrom}
-                      onChange={(e) => setFechaIngresoFrom(e.target.value)}
-                      className="border rounded p-1 w-full text-[11px]"
-                      aria-label="Fecha ingreso desde"
-                    />
-                    <input
-                      type="date"
-                      value={fechaIngresoTo}
-                      onChange={(e) => setFechaIngresoTo(e.target.value)}
-                      className="border rounded p-1 w-full text-[11px]"
-                      aria-label="Fecha ingreso hasta"
-                    />
+                    <label className="text-[10px] leading-none text-gray-500">
+                      Desde
+                      <input
+                        type="date"
+                        value={fechaIngresoFromDraft}
+                        onChange={(e) => setFechaIngresoFromDraft(e.target.value)}
+                        onBlur={() => commitDate(fechaIngresoFromDraft, fechaIngresoFrom, setFechaIngresoFrom)}
+                        onKeyDown={(e) => onDateKeyDown(e, () => commitDate(fechaIngresoFromDraft, fechaIngresoFrom, setFechaIngresoFrom))}
+                        className="border rounded p-1 w-full text-[11px] mt-0.5"
+                        aria-label="Fecha ingreso desde"
+                      />
+                    </label>
+                    <label className="text-[10px] leading-none text-gray-500">
+                      Hasta
+                      <input
+                        type="date"
+                        value={fechaIngresoToDraft}
+                        onChange={(e) => setFechaIngresoToDraft(e.target.value)}
+                        onBlur={() => commitDate(fechaIngresoToDraft, fechaIngresoTo, setFechaIngresoTo)}
+                        onKeyDown={(e) => onDateKeyDown(e, () => commitDate(fechaIngresoToDraft, fechaIngresoTo, setFechaIngresoTo))}
+                        className="border rounded p-1 w-full text-[11px] mt-0.5"
+                        aria-label="Fecha ingreso hasta"
+                      />
+                    </label>
                   </div>
                 </th>
                 <th className="p-2 align-top">
                   <div className="flex flex-col gap-1">
-                    <input
-                      type="date"
-                      value={fechaLiberacionFrom}
-                      onChange={(e) => setFechaLiberacionFrom(e.target.value)}
-                      className="border rounded p-1 w-full text-[11px]"
-                      aria-label="Fecha liberacion desde"
-                    />
-                    <input
-                      type="date"
-                      value={fechaLiberacionTo}
-                      onChange={(e) => setFechaLiberacionTo(e.target.value)}
-                      className="border rounded p-1 w-full text-[11px]"
-                      aria-label="Fecha liberacion hasta"
-                    />
+                    <label className="text-[10px] leading-none text-gray-500">
+                      Desde
+                      <input
+                        type="date"
+                        value={fechaLiberacionFromDraft}
+                        onChange={(e) => setFechaLiberacionFromDraft(e.target.value)}
+                        onBlur={() => commitDate(fechaLiberacionFromDraft, fechaLiberacionFrom, setFechaLiberacionFrom)}
+                        onKeyDown={(e) => onDateKeyDown(e, () => commitDate(fechaLiberacionFromDraft, fechaLiberacionFrom, setFechaLiberacionFrom))}
+                        className="border rounded p-1 w-full text-[11px] mt-0.5"
+                        aria-label="Fecha liberacion desde"
+                      />
+                    </label>
+                    <label className="text-[10px] leading-none text-gray-500">
+                      Hasta
+                      <input
+                        type="date"
+                        value={fechaLiberacionToDraft}
+                        onChange={(e) => setFechaLiberacionToDraft(e.target.value)}
+                        onBlur={() => commitDate(fechaLiberacionToDraft, fechaLiberacionTo, setFechaLiberacionTo)}
+                        onKeyDown={(e) => onDateKeyDown(e, () => commitDate(fechaLiberacionToDraft, fechaLiberacionTo, setFechaLiberacionTo))}
+                        className="border rounded p-1 w-full text-[11px] mt-0.5"
+                        aria-label="Fecha liberacion hasta"
+                      />
+                    </label>
                   </div>
                 </th>
                 <th className="p-2 align-top">
                   <div className="flex flex-col gap-1">
-                    <input
-                      type="date"
-                      value={fechaEntregaFrom}
-                      onChange={(e) => setFechaEntregaFrom(e.target.value)}
-                      className="border rounded p-1 w-full text-[11px]"
-                      aria-label="Fecha entrega desde"
-                    />
-                    <input
-                      type="date"
-                      value={fechaEntregaTo}
-                      onChange={(e) => setFechaEntregaTo(e.target.value)}
-                      className="border rounded p-1 w-full text-[11px]"
-                      aria-label="Fecha entrega hasta"
-                    />
+                    <label className="text-[10px] leading-none text-gray-500">
+                      Desde
+                      <input
+                        type="date"
+                        value={fechaEntregaFromDraft}
+                        onChange={(e) => setFechaEntregaFromDraft(e.target.value)}
+                        onBlur={() => commitDate(fechaEntregaFromDraft, fechaEntregaFrom, setFechaEntregaFrom)}
+                        onKeyDown={(e) => onDateKeyDown(e, () => commitDate(fechaEntregaFromDraft, fechaEntregaFrom, setFechaEntregaFrom))}
+                        className="border rounded p-1 w-full text-[11px] mt-0.5"
+                        aria-label="Fecha entrega desde"
+                      />
+                    </label>
+                    <label className="text-[10px] leading-none text-gray-500">
+                      Hasta
+                      <input
+                        type="date"
+                        value={fechaEntregaToDraft}
+                        onChange={(e) => setFechaEntregaToDraft(e.target.value)}
+                        onBlur={() => commitDate(fechaEntregaToDraft, fechaEntregaTo, setFechaEntregaTo)}
+                        onKeyDown={(e) => onDateKeyDown(e, () => commitDate(fechaEntregaToDraft, fechaEntregaTo, setFechaEntregaTo))}
+                        className="border rounded p-1 w-full text-[11px] mt-0.5"
+                        aria-label="Fecha entrega hasta"
+                      />
+                    </label>
                   </div>
                 </th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((row) => (
-                <tr
-                  key={ingresoIdOf(row)}
-                  onClick={() => go(row)}
-                  onKeyDown={(e) => onRowKeyDown(e, row)}
-                  className="hover:bg-gray-50 cursor-pointer"
-                  role="link"
-                  tabIndex={0}
-                  aria-label={`Abrir hoja de servicio de ${formatOS(row)}`}
-                  data-testid={`row-${ingresoIdOf(row)}`}
-                >
-                  <td className="p-2 underline">{formatOS(row)}</td>
-                  <td className="p-2">
-                    {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={12} className="p-2 text-sm text-gray-500">
+                    No hay resultados que coincidan con el filtro.
                   </td>
-                  <td className="p-2">{tipoEquipoOf(row)}</td>
-                  <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
-                  <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
-                  <td className="p-2">{row?.equipo_variante ?? row?.variante ?? row?.modelo_variante ?? "-"}</td>
-                  <td className="p-2"><StatusChip value={row?.estado} /></td>
-                  <td className="p-2">{row?.numero_serie ?? "-"}</td>
-                  <td className="p-2">{row?.numero_interno ?? "-"}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_liberacion)}</td>
-                  <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_entrega)}</td>
                 </tr>
-              ))}
+              ) : (
+                filtered.map((row) => (
+                  <tr
+                    key={ingresoIdOf(row)}
+                    onClick={() => go(row)}
+                    onKeyDown={(e) => onRowKeyDown(e, row)}
+                    className="hover:bg-gray-50 cursor-pointer"
+                    role="link"
+                    tabIndex={0}
+                    aria-label={`Abrir hoja de servicio de ${formatOS(row)}`}
+                    data-testid={`row-${ingresoIdOf(row)}`}
+                  >
+                    <td className="p-2 underline">{formatOS(row)}</td>
+                    <td className="p-2">
+                      {row?.razon_social ?? row?.cliente ?? row?.cliente_nombre ?? "-"}
+                    </td>
+                    <td className="p-2">{tipoEquipoOf(row)}</td>
+                    <td className="p-2">{row?.marca ?? row?.equipo?.marca ?? "-"}</td>
+                    <td className="p-2">{row?.modelo ?? row?.equipo?.modelo ?? "-"}</td>
+                    <td className="p-2">{row?.equipo_variante ?? row?.variante ?? row?.modelo_variante ?? "-"}</td>
+                    <td className="p-2"><StatusChip value={row?.estado} /></td>
+                    <td className="p-2">{row?.numero_serie ?? "-"}</td>
+                    <td className="p-2">{row?.numero_interno ?? "-"}</td>
+                    <td className="p-2 whitespace-nowrap">{formatDateTime(resolveFechaIngreso(row))}</td>
+                    <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_liberacion)}</td>
+                    <td className="p-2 whitespace-nowrap">{formatDateTime(row?.fecha_entrega)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
           <div className="text-xs text-gray-500 mt-2">
