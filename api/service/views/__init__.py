@@ -131,6 +131,7 @@ from .catalogo_hierarquia_views import (
 from .marcas_modelos_views import (
     CatalogoMarcasView,
     CatalogoModelosView,
+    CatalogoVariantesPorMarcaView,
     CatalogoUbicacionesView,
     ModeloVarianteView,
     ModelosPorMarcaView,
@@ -151,6 +152,9 @@ from .usuarios_views import (
     UsuarioRolePermView,
     UsuarioDeleteView,
     CatalogoRolesView,
+    CatalogoPermisosView,
+    UsuarioPermisosView,
+    UsuarioPermisosResetView,
     CatalogoTecnicosView,
 )
 
@@ -302,6 +306,7 @@ __all__ = [
     # marcas y modelos
     "CatalogoMarcasView",
     "CatalogoModelosView",
+    "CatalogoVariantesPorMarcaView",
     "CatalogoUbicacionesView",
     "ModeloVarianteView",
     "ModelosPorMarcaView",
@@ -321,6 +326,9 @@ __all__ = [
     "UsuarioRolePermView",
     "UsuarioDeleteView",
     "CatalogoRolesView",
+    "CatalogoPermisosView",
+    "UsuarioPermisosView",
+    "UsuarioPermisosResetView",
     "CatalogoTecnicosView",
     # derivaciones
     "DerivarIngresoView",

@@ -27,6 +27,11 @@ BASE_TEMPLATES: dict[str, dict[str, Any]] = {
         "template_key": "aspirador_v1",
         "template_version": "1.0.0",
         "display_name": "Aspirador",
+        "default_instrumentos": (
+            "Vacuómetro de referencia con certificado: U3556-260115. Última calibración 15/1/2026\n"
+            "Flujómetro de referencia: Analizador de flujo de gases Ventmeter de Magnamed. "
+            "Última calibración en 2025"
+        ),
         "references": [
             {
                 "ref_id": "REF-01",
@@ -76,6 +81,13 @@ BASE_TEMPLATES: dict[str, dict[str, Any]] = {
                         "label": "Caudal libre",
                         "target": "Dentro de especificación del fabricante",
                         "unit": "L/min",
+                        "ref_ids": ["REF-01"],
+                    },
+                    {
+                        "key": "asp_duracion_bateria",
+                        "label": "Duración de batería",
+                        "target": "Según especificación del fabricante",
+                        "unit": "min",
                         "ref_ids": ["REF-01"],
                     },
                 ],
@@ -449,6 +461,7 @@ TYPE_ALIASES: dict[str, list[str]] = {
     "aspirador": [
         "aspirador",
         "aspirador quirúrgico",
+        "aspirador a bateria",
         "bomba de aspiración",
         "suctor",
     ],
@@ -630,6 +643,7 @@ def default_values_for_protocol(protocol: dict[str, Any]) -> dict[str, dict[str,
         if not key:
             continue
         defaults[key] = {
+            "valor_a_medir": "",
             "measured": "",
             "result": "",
             "observaciones": "",

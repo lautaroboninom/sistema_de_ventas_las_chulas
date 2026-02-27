@@ -34,8 +34,7 @@ class IngresoTestsAPITest(TestCase):
                 email VARCHAR(320) UNIQUE,
                 hash_pw TEXT,
                 rol TEXT,
-                activo {bool_type} DEFAULT 1,
-                perm_ingresar {bool_type} DEFAULT 0
+                activo {bool_type} DEFAULT 1
             ){engine_suffix}
         """
 
@@ -261,11 +260,22 @@ class IngresoTestsAPITest(TestCase):
         first_item = sections[0]["items"][0]
         self.assertTrue((first_item.get("ref_ids") or []))
 
+    def test_aspirador_get_has_default_instrumentos_and_battery_item(self):
+        resp = self.client.get(self._url(self.ingreso_asp_id))
+        self.assertEqual(resp.status_code, 200)
+        instrumentos = str(resp.data.get("instrumentos") or "")
+        self.assertIn("Vacuómetro de referencia con certificado", instrumentos)
+        self.assertIn("Flujómetro de referencia", instrumentos)
+
+        sections = resp.data.get("schema", {}).get("sections") or []
+        keys = [it.get("key") for sec in sections for it in (sec.get("items") or [])]
+        self.assertIn("asp_duracion_bateria", keys)
+
     def test_patch_persists_references_snapshot_norma_only(self):
         payload = {
             "values": {
-                "cpap_presion_setpoint": {"measured": "10.0", "result": "ok", "observaciones": "Estable"},
-                "cpap_rampa": {"measured": "OK", "result": "ok", "observaciones": ""},
+                "cpap_presion_setpoint": {"valor_a_medir": "10 cmH2O", "measured": "10.0", "result": "ok"},
+                "cpap_rampa": {"valor_a_medir": "Rampa 20 min", "measured": "OK", "result": "ok"},
             },
             "resultado_global": "pendiente",
             "conclusion": "Sin desvio relevante",
@@ -282,6 +292,15 @@ class IngresoTestsAPITest(TestCase):
         refs = raw_refs if isinstance(raw_refs, list) else json.loads(raw_refs)
         self.assertGreaterEqual(len(refs), 1)
         self.assertTrue(all((r.get("tipo") == "norma") for r in refs))
+
+        get_resp = self.client.get(self._url(self.ingreso_cpap_id))
+        self.assertEqual(get_resp.status_code, 200)
+        got_val = (
+            get_resp.data.get("values", {})
+            .get("cpap_presion_setpoint", {})
+            .get("valor_a_medir")
+        )
+        self.assertEqual(got_val, "10 cmH2O")
 
     def test_patch_rejects_apto_without_references(self):
         original_refs = copy.deepcopy(test_protocols.BASE_TEMPLATES["aspirador"]["references"])

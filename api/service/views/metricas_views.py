@@ -860,7 +860,7 @@ class MetricasFinanzasLiberadosView(APIView):
                     next_month = dt.datetime(y, m + 1, 1)
                 until = timezone.make_aware(next_month, tz) - dt.timedelta(microseconds=1)
             except Exception:
-                return Response({"detail": "month invalido (YYYY-MM)"}, status=400)
+                return Response({"detail": "month inválido (YYYY-MM)"}, status=400)
         else:
             since, until = _parse_range_params(request)
 

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import { isAdmin, isJefe, isJefeVeedor, isTecnico } from "../lib/authz";
+import { normalizeRole } from "../lib/authz";
+import { can, PERMISSION_CODES } from "../lib/permissions";
 import { formatMoney, norm } from "../lib/ui-helpers";
 import * as XLSX from "xlsx";
 import {
@@ -217,13 +218,17 @@ const buildEmptyCompraForm = () => ({
  */
 export default function Repuestos() {
   const { user } = useAuth();
-  const canManage = isJefe(user) || isJefeVeedor(user);
-  const userIsAdmin = isAdmin(user);
-  const isTech = isTecnico(user);
-  const canSeeCosts = canManage || userIsAdmin;
-  const canEditCost = canSeeCosts;
-  const canManageSubrubros = canManage || userIsAdmin;
-  const canViewCambios = canManage || userIsAdmin;
+  const role = normalizeRole(user?.rol);
+  const isTech = role === "tecnico";
+  const canManage = can(user, PERMISSION_CODES.ACTION_SPARE_PARTS_MANAGE);
+  const canManage24hPermissions = can(
+    user,
+    PERMISSION_CODES.ACTION_SPARE_PARTS_MANAGE_24H_PERMISSIONS,
+  );
+  const canSeeCosts = canManage || can(user, PERMISSION_CODES.ACTION_PRESUPUESTO_VIEW_COSTS);
+  const canEditCost = canManage;
+  const canManageSubrubros = canManage;
+  const canViewCambios = canManage;
 
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
@@ -429,7 +434,7 @@ export default function Repuestos() {
   }
 
   async function loadTecnicos() {
-    if (!canManage) return;
+    if (!canManage24hPermissions) return;
     try {
       const rows = await getTecnicos();
       setTecnicos(rows || []);
@@ -732,9 +737,9 @@ export default function Repuestos() {
   }
 
   async function enablePermiso() {
-    if (!canManage) return;
+    if (!canManage24hPermissions) return;
     if (!permForm.tecnico_id) {
-      setPermisosErr("Selecciona un tecnico");
+      setPermisosErr("Seleccione un técnico");
       return;
     }
     try {
@@ -752,7 +757,7 @@ export default function Repuestos() {
   }
 
   async function revokePermiso(id) {
-    if (!canManage) return;
+    if (!canManage24hPermissions) return;
     try {
       setPermSaving(true);
       await patchRepuestosStockPermiso(id, { revoked: true });
@@ -775,13 +780,13 @@ export default function Repuestos() {
 
   useEffect(() => {
     loadPermisos();
-    if (canManage) {
+    if (canManage24hPermissions) {
       loadTecnicos();
     }
     if (canEditStock) {
       loadProveedores();
     }
-  }, [canManage, canEditStock, user?.id]);
+  }, [canManage24hPermissions, canEditStock, user?.id]);
 
   useEffect(() => {
     if (canAdd || canManageSubrubros) {
@@ -1453,7 +1458,7 @@ export default function Repuestos() {
             type="button"
             onClick={() => setMenuOpen((prev) => !prev)}
           >
-            Menu
+            Menú
           </button>
           {menuOpen && (
             <div className="absolute right-0 mt-2 w-56 bg-white border rounded shadow z-10">
@@ -1577,7 +1582,7 @@ export default function Repuestos() {
           )}
         </div>
         <div className="text-xs text-gray-500 mt-2">
-          Ultima actualizacion: {formatTs(config?.updated_at)}
+          Última actualización: {formatTs(config?.updated_at)}
           {config?.updated_by_nombre ? ` por ${config.updated_by_nombre}` : ""}
         </div>
         {history?.length ? (
@@ -1595,7 +1600,7 @@ export default function Repuestos() {
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="font-medium">Permisos de conteo</div>
           {isTech && activePerm && (
-            <Chip tone="green">Edicion habilitada hasta {formatTs(activePerm.expires_at)}</Chip>
+            <Chip tone="green">Edición habilitada hasta {formatTs(activePerm.expires_at)}</Chip>
           )}
         </div>
         {permisosErr && (
@@ -1603,11 +1608,11 @@ export default function Repuestos() {
             {permisosErr}
           </div>
         )}
-        {canManage ? (
+        {canManage24hPermissions ? (
           <div className="space-y-3">
             <div className="flex flex-col md:flex-row md:items-end gap-3">
               <div className="flex-1">
-                <label className="text-sm block mb-1">Tecnico</label>
+                <label className="text-sm block mb-1">Técnico</label>
                 <select
                   className="border rounded p-2 w-full"
                   value={permForm.tecnico_id}
@@ -1615,7 +1620,7 @@ export default function Repuestos() {
                     setPermForm((s) => ({ ...s, tecnico_id: e.target.value }))
                   }
                 >
-                  <option value="">Seleccionar tecnico</option>
+                  <option value="">Seleccionar técnico</option>
                   {tecnicos.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.nombre || t.email || t.id}
@@ -1641,7 +1646,7 @@ export default function Repuestos() {
               <table className="min-w-full text-xs">
                 <thead>
                   <tr className="text-left">
-                    <th className="p-2">Tecnico</th>
+                    <th className="p-2">Técnico</th>
                     <th className="p-2">Habilitado por</th>
                     <th className="p-2">Desde</th>
                     <th className="p-2">Vence</th>
@@ -1682,12 +1687,12 @@ export default function Repuestos() {
           <div className="text-sm text-gray-700">
             {activePerm ? (
               <div className="flex items-center gap-2">
-                <Chip tone="green">Edicion habilitada</Chip>
+                <Chip tone="green">Edición habilitada</Chip>
                 <span>Vence {formatTs(activePerm.expires_at)}</span>
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <Chip>Edicion de stock no habilitada</Chip>
+                <Chip>Edición de stock no habilitada</Chip>
                 <span>Contacta a un jefe para habilitar conteo.</span>
               </div>
             )}
@@ -1742,7 +1747,7 @@ export default function Repuestos() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
               <div>
-                <label className="text-xs text-gray-500">Codigo *</label>
+                <label className="text-xs text-gray-500">Código *</label>
                 <Input
                   placeholder="4 digitos"
                   value={subrubroForm.codigo}
@@ -1778,7 +1783,7 @@ export default function Repuestos() {
                   onClick={resetSubrubroForm}
                   disabled={subrubroSaving}
                 >
-                  Cancelar edicion
+                  Cancelar edición
                 </button>
               )}
               <button
@@ -1799,7 +1804,7 @@ export default function Repuestos() {
               <table className="min-w-full text-xs">
                 <thead>
                   <tr className="text-left">
-                    <th className="p-2">Codigo</th>
+                    <th className="p-2">Código</th>
                     <th className="p-2">Nombre</th>
                     <th className="p-2 text-right">Acciones</th>
                   </tr>
@@ -1884,7 +1889,7 @@ export default function Repuestos() {
                   ))}
                 </select>
                 <div className="text-xs text-gray-500 mt-1">
-                  Codigo se asigna automaticamente con el proximo disponible.
+                  El código se asigna automáticamente con el próximo disponible.
                 </div>
                 {subrubrosLoading && (
                   <div className="text-xs text-gray-500 mt-1">Cargando subrubros...</div>
@@ -2113,7 +2118,7 @@ export default function Repuestos() {
                     </div>
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500">Ubicacion deposito</label>
+                    <label className="text-xs text-gray-500">Ubicación depósito</label>
                     <Input
                       value={addForm.ubicacion_deposito}
                       onChange={(e) =>
@@ -2160,7 +2165,7 @@ export default function Repuestos() {
                     className="hover:underline"
                     onClick={setCodigoOrder}
                   >
-                    Codigo
+                    Código
                   </button>
                 </th>
                 <th className="p-2">Nombre</th>
@@ -2340,7 +2345,7 @@ export default function Repuestos() {
                               <div className="flex items-start justify-between gap-3 mb-3">
                                 <div>
                                   <div className="text-xs text-gray-500">
-                                    Codigo:{" "}
+                                    Código:{" "}
                                     <span className="font-medium text-gray-800">
                                       {detail.data.codigo || it.codigo}
                                     </span>
@@ -2620,7 +2625,7 @@ export default function Repuestos() {
                                       />
                                     </div>
                                     <div>
-                                      <label className="text-xs text-gray-500">Ubicacion deposito</label>
+                                      <label className="text-xs text-gray-500">Ubicación depósito</label>
                                       <Input
                                         value={detailDraft.ubicacion_deposito || ""}
                                         onChange={(e) =>
@@ -2630,7 +2635,7 @@ export default function Repuestos() {
                                       />
                                     </div>
                                     <div>
-                                      <label className="text-xs text-gray-500">Fecha ultima compra</label>
+                                      <label className="text-xs text-gray-500">Fecha última compra</label>
                                       <input
                                         type="date"
                                         className="border rounded p-2 w-full"
@@ -2757,7 +2762,7 @@ export default function Repuestos() {
                                               />
                                             </div>
                                             <div>
-                                              <label className="text-xs text-gray-500">Ultima compra</label>
+                                              <label className="text-xs text-gray-500">Última compra</label>
                                               <input
                                                 type="date"
                                                 className="border rounded p-2 w-full"
@@ -2907,7 +2912,7 @@ export default function Repuestos() {
                 <div className="relative">
                   <input
                     className="border rounded p-2 w-full text-sm"
-                    placeholder="Codigo o nombre"
+                    placeholder="Código o nombre"
                     value={compraForm.repuesto_input}
                     onFocus={() => setCompraRepuestoOpen(true)}
                     onBlur={() => {
@@ -3158,8 +3163,8 @@ export default function Repuestos() {
                   <tr className="text-left">
                     <th className="p-2">Fecha</th>
                     <th className="p-2">Usuario</th>
-                    <th className="p-2">Accion</th>
-                    <th className="p-2">Codigo</th>
+                    <th className="p-2">Acción</th>
+                    <th className="p-2">Código</th>
                     <th className="p-2">Nombre anterior</th>
                     <th className="p-2">Nombre nuevo</th>
                   </tr>
@@ -3198,3 +3203,5 @@ export default function Repuestos() {
     </div>
   );
 }
+
+

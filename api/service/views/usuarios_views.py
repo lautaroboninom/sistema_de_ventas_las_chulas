@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from django.core.mail import send_mail
 
 from .helpers import (
@@ -21,6 +21,16 @@ from .helpers import (
     _email_append_footer_html,
     TOKEN_TTL_MIN,
 )
+from ..permission_catalog import get_catalog, PERMISSION_CODES
+from ..permissions import (
+    EFFECT_ALLOW,
+    EFFECT_DENY,
+    EFFECT_INHERIT,
+    apply_overrides,
+    require_permission,
+    reset_overrides,
+    resolve_effective_permissions,
+)
 from ..roles import ROLE_KEYS, ROLE_CHOICES
 
 
@@ -29,13 +39,35 @@ class UsuariosView(APIView):
 
     def get(self, request):
         require_roles(request, ["jefe", "admin","jefe_veedor"])
-        rows = q(
-            """
-            SELECT id, nombre, email, rol, activo, COALESCE(perm_ingresar,false) AS perm_ingresar
-            FROM users
-            ORDER BY id ASC
-            """
-        )
+        try:
+            rows = q(
+                """
+                SELECT
+                  u.id,
+                  u.nombre,
+                  u.email,
+                  u.rol,
+                  u.activo,
+                  COALESCE(up.cnt, 0) AS permisos_personalizados
+                FROM users u
+                LEFT JOIN (
+                  SELECT user_id, COUNT(*) AS cnt
+                  FROM user_permission_overrides
+                  GROUP BY user_id
+                ) up ON up.user_id = u.id
+                ORDER BY u.id ASC
+                """
+            )
+        except Exception:
+            rows = q(
+                """
+                SELECT id, nombre, email, rol, activo
+                FROM users
+                ORDER BY id ASC
+                """
+            ) or []
+            for item in rows:
+                item["permisos_personalizados"] = 0
         return Response(rows)
 
     @transaction.atomic
@@ -50,7 +82,7 @@ class UsuariosView(APIView):
         if not nombre or not email:
             raise ValidationError("Nombre y email son requeridos")
         if rol not in ROLE_KEYS:
-            raise ValidationError("Rol invalido")
+            raise ValidationError("Rol inválido")
 
         _set_audit_user(request)
         existed = q("SELECT id FROM users WHERE email=%s", [email], one=True)
@@ -174,23 +206,27 @@ class UsuarioRolePermView(APIView):
     def patch(self, request, uid):
         require_roles_strict(request, ["jefe", "admin"])
         rol = request.data.get("rol")
-        perm_ing = request.data.get("perm_ingresar")
 
         _set_audit_user(request)
         sets, params = [], {"id": uid}
+        prev = q("SELECT rol FROM users WHERE id=%s", [uid], one=True) or {}
+        prev_role = (prev.get("rol") or "").strip().lower()
+        next_role = prev_role
         if rol is not None:
             r = (rol or "").strip().lower()
             if r not in ROLE_KEYS:
-                raise ValidationError("Rol invalido")
+                raise ValidationError("Rol inválido")
             sets.append("rol = %(rol)s")
             params["rol"] = r
-        if perm_ing is not None:
-            sets.append("perm_ingresar = %(p)s")
-            params["p"] = bool(perm_ing)
+            next_role = r
 
         if not sets:
             return Response({"ok": True})
         q(f"UPDATE users SET {', '.join(sets)} WHERE id = %(id)s", params)
+
+        # Jefe no admite overrides; al entrar/salir de jefe limpiar estado granular.
+        if next_role == "jefe" or prev_role == "jefe":
+            reset_overrides(uid)
         return Response({"ok": True})
 
 
@@ -228,6 +264,7 @@ class CatalogoTecnicosView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        require_permission(request, "action.ingreso.change_assignment")
         rows = q(
             """
             SELECT id, nombre
@@ -239,6 +276,123 @@ class CatalogoTecnicosView(APIView):
         return Response(rows)
 
 
+def _load_user_for_permissions(uid):
+    row = q(
+        """
+        SELECT id, nombre, email, rol, activo
+        FROM users
+        WHERE id=%s
+        """,
+        [uid],
+        one=True,
+    )
+    if not row:
+        raise ValidationError("Usuario no encontrado")
+    row["rol"] = (row.get("rol") or "").strip().lower()
+    return row
+
+
+def _load_override_map(uid):
+    rows = q(
+        """
+        SELECT permission_code, effect
+        FROM user_permission_overrides
+        WHERE user_id=%s
+        ORDER BY permission_code
+        """,
+        [uid],
+    ) or []
+    out = {}
+    for item in rows:
+        code = (item.get("permission_code") or "").strip()
+        effect = (item.get("effect") or "").strip().lower()
+        if code and effect in (EFFECT_ALLOW, EFFECT_DENY):
+            out[code] = effect
+    return out
+
+
+def _serialize_user_permissions(uid):
+    user_row = _load_user_for_permissions(uid)
+    override_map = _load_override_map(uid)
+    effective = resolve_effective_permissions(
+        user_id=user_row["id"],
+        role=user_row["rol"],
+        overrides=override_map,
+    )
+    merged_states = {code: EFFECT_INHERIT for code in PERMISSION_CODES}
+    for code, effect in override_map.items():
+        merged_states[code] = effect
+    return {
+        "user": user_row,
+        "editable": user_row["rol"] != "jefe",
+        "overrides": merged_states,
+        "effective_permissions": effective,
+        "raw_overrides": override_map,
+    }
+
+
+class CatalogoPermisosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        require_roles_strict(request, ["jefe"])
+        require_permission(request, "action.users.manage_permissions")
+        return Response(
+            {
+                "permissions": get_catalog(),
+                "effects": [EFFECT_INHERIT, EFFECT_ALLOW, EFFECT_DENY],
+            }
+        )
+
+
+class UsuarioPermisosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, uid):
+        require_roles_strict(request, ["jefe"])
+        require_permission(request, "action.users.manage_permissions")
+        return Response(_serialize_user_permissions(uid))
+
+    @transaction.atomic
+    def put(self, request, uid):
+        require_roles_strict(request, ["jefe"])
+        require_permission(request, "action.users.manage_permissions")
+        payload = request.data or {}
+        overrides = payload.get("overrides")
+        if not isinstance(overrides, dict):
+            raise ValidationError("overrides requerido y debe ser un objeto")
+
+        user_row = _load_user_for_permissions(uid)
+        if user_row["rol"] == "jefe":
+            raise PermissionDenied("No se pueden editar permisos para rol jefe")
+
+        _set_audit_user(request)
+        try:
+            apply_overrides(
+                user_id=uid,
+                raw_overrides=overrides,
+                updated_by=getattr(request.user, "id", None),
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc))
+        return Response(_serialize_user_permissions(uid))
+
+
+class UsuarioPermisosResetView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, uid):
+        require_roles_strict(request, ["jefe"])
+        require_permission(request, "action.users.manage_permissions")
+        user_row = _load_user_for_permissions(uid)
+        if user_row["rol"] == "jefe":
+            raise PermissionDenied("No se pueden editar permisos para rol jefe")
+        _set_audit_user(request)
+        reset_overrides(uid)
+        return Response(_serialize_user_permissions(uid))
+
+
 __all__ = [
     'UsuariosView',
     'UsuarioActivoView',
@@ -246,5 +400,8 @@ __all__ = [
     'UsuarioRolePermView',
     'UsuarioDeleteView',
     'CatalogoRolesView',
+    'CatalogoPermisosView',
+    'UsuarioPermisosView',
+    'UsuarioPermisosResetView',
     'CatalogoTecnicosView',
 ]

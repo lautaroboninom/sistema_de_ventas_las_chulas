@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api, { getBlob } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { canRelease } from "../lib/authz";
+import { can, PERMISSION_CODES } from "../lib/permissions";
 import { useNavigate } from "react-router-dom";
 import {
   ingresoIdOf,
@@ -26,7 +26,7 @@ export default function Aprobados() {
   const [q, setQ] = useQueryState("q", "");
   const navigate = useNavigate();
   const { user } = useAuth();
-  const release = canRelease(user);
+  const release = can(user, PERMISSION_CODES.ACTION_INGRESO_PRINT_EXIT_ORDER);
 
   async function load() {
     try {

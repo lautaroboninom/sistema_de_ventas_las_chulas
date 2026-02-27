@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from ..pdf import render_quote_pdf
+from ..permissions import user_has_permission
 from ..serializers import (
     QuoteDetailSerializer,
 )
@@ -28,8 +29,7 @@ from ..repuestos import get_repuestos_config, calc_costo_ars, calc_precio_venta
 
 
 def _can_view_costs(user) -> bool:
-    rol = (getattr(user, "rol", "") or "").strip().lower()
-    return rol in ("jefe", "jefe_veedor")
+    return user_has_permission(user, "action.presupuesto.view_costs")
 
 
 def _mask_costs(payload: dict, allow_costs: bool) -> dict:

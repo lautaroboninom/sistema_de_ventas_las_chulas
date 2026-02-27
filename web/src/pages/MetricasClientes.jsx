@@ -101,7 +101,7 @@ export default function MetricasClientes() {
   const periodLabel = useMemo(() => {
     if (!desdeClamped || !hasta) return "";
     if (!rangeDays) return `${desdeClamped} a ${hasta}`;
-    return `${desdeClamped} a ${hasta} (${rangeDays} dias)`;
+    return `${desdeClamped} a ${hasta} (${rangeDays} días)`;
   }, [desdeClamped, hasta, rangeDays]);
 
   function applyQuickRange(days) {
@@ -121,7 +121,7 @@ export default function MetricasClientes() {
 
   const activeFilters = useMemo(() => {
     const items = [];
-    if (tecnicoId) items.push({ key: "tecnico", label: `Tecnico: ${tecnicoMap.get(String(tecnicoId)) || tecnicoId}` });
+    if (tecnicoId) items.push({ key: "tecnico", label: `Técnico: ${tecnicoMap.get(String(tecnicoId)) || tecnicoId}` });
     if (marcaId) items.push({ key: "marca", label: `Marca: ${marcaMap.get(String(marcaId)) || marcaId}` });
     if (tipoEquipo) items.push({ key: "tipo", label: `Tipo: ${tipoMap.get(String(tipoEquipo)) || tipoEquipo}` });
     return items;
@@ -297,8 +297,8 @@ export default function MetricasClientes() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Metricas por clientes</h1>
-          <div className="text-sm text-gray-500">Indicadores por cliente para entender volumen, facturacion y mix.</div>
+          <h1 className="text-xl font-semibold">Métricas por clientes</h1>
+          <div className="text-sm text-gray-500">Indicadores por cliente para entender volumen, facturación y mix.</div>
         </div>
       </div>
 
@@ -315,7 +315,7 @@ export default function MetricasClientes() {
             <input type="date" value={hasta} onChange={e=>setHasta(e.target.value)} className="mt-1 border rounded px-2 py-1" />
           </div>
           <div>
-            <div className="text-sm text-gray-600">Tecnico</div>
+            <div className="text-sm text-gray-600">Técnico</div>
             <select className="mt-1 border rounded px-2 py-1 w-full" value={tecnicoId} onChange={e=>setTecnicoId(e.target.value)}>
               <option value="">Todos</option>
               {tecnicos.map(t => (<option key={t.id} value={t.id}>{t.nombre}</option>))}
@@ -339,9 +339,9 @@ export default function MetricasClientes() {
 
         <div className="flex flex-wrap gap-2 items-center">
           <div className="text-xs text-gray-500 mr-2">Rangos rapidos</div>
-          <QuickRangeButton label="7 dias" active={rangeDays === 7} onClick={() => applyQuickRange(7)} />
-          <QuickRangeButton label="30 dias" active={rangeDays === 30} onClick={() => applyQuickRange(30)} />
-          <QuickRangeButton label="90 dias" active={rangeDays === 90} onClick={() => applyQuickRange(90)} />
+          <QuickRangeButton label="7 días" active={rangeDays === 7} onClick={() => applyQuickRange(7)} />
+          <QuickRangeButton label="30 días" active={rangeDays === 30} onClick={() => applyQuickRange(30)} />
+          <QuickRangeButton label="90 días" active={rangeDays === 90} onClick={() => applyQuickRange(90)} />
           <QuickRangeButton
             label="YTD"
             active={desdeClamped === `${new Date().getFullYear()}-01-01` && hasta === new Date().toISOString().slice(0, 10)}
@@ -384,9 +384,9 @@ export default function MetricasClientes() {
         </div>
       </div>
 
-      {loading && <div className="text-gray-500">Cargando metricas</div>}
+      {loading && <div className="text-gray-500">Cargando métricas</div>}
       {error && (
-        <div className="text-red-600">Error al cargar metricas: {error}</div>
+        <div className="text-red-600">Error al cargar métricas: {error}</div>
       )}
 
       {data && (
@@ -482,3 +482,4 @@ export default function MetricasClientes() {
     </div>
   );
 }
+

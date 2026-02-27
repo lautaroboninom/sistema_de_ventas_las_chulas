@@ -64,7 +64,7 @@ def _parse_date(value, field, required=False):
     try:
         return dt.date.fromisoformat(str(value).strip())
     except Exception:
-        raise ValidationError({field: "fecha invalida (YYYY-MM-DD)"})
+        raise ValidationError({field: "fecha inválida (YYYY-MM-DD)"})
 
 
 def _add_period(base_date, value, unit):
@@ -1013,7 +1013,7 @@ class PreventivoAgendaView(APIView):
         if scope and scope not in ("device", "customer"):
             raise ValidationError({"scope": "debe ser device|customer"})
         if estado and estado not in ("sin_plan", "al_dia", "proximo", "vencido"):
-            raise ValidationError({"estado": "debe ser sin_plan|al_dia|proximo|vencido"})
+            raise ValidationError({"estado": "debe ser sin_plan|al_dia|próximo|vencido"})
         cid = None
         if customer_id not in (None, ""):
             cid = _parse_int(customer_id, "customer_id", required=True, min_value=1)
@@ -1042,7 +1042,7 @@ class PreventivoClientesListView(APIView):
         estado = (request.GET.get("preventivo_estado") or "").strip().lower() or None
         q_text = (request.GET.get("q") or "").strip()
         if estado and estado not in ("sin_plan", "al_dia", "proximo", "vencido"):
-            raise ValidationError({"preventivo_estado": "debe ser sin_plan|al_dia|proximo|vencido"})
+            raise ValidationError({"preventivo_estado": "debe ser sin_plan|al_dia|próximo|vencido"})
 
         params = []
         wh = ["1=1"]
@@ -1150,7 +1150,7 @@ class CustomerPreventivoPlanView(APIView):
         require_roles(request, _PLAN_ROLES)
         _set_audit_user(request)
         if not _require_existing_customer(customer_id):
-            return Response({"detail": "Institucion inexistente"}, status=404)
+            return Response({"detail": "Institución inexistente"}, status=404)
         if _fetch_active_plan("customer", customer_id):
             return Response({"detail": "Ya existe un plan activo"}, status=409)
 
@@ -1271,7 +1271,7 @@ class CustomerPreventivoRevisionesView(APIView):
     def get(self, request, customer_id: int):
         require_roles(request, _VIEW_ROLES)
         if not _require_existing_customer(customer_id):
-            return Response({"detail": "Institucion inexistente"}, status=404)
+            return Response({"detail": "Institución inexistente"}, status=404)
         plan = _fetch_active_plan("customer", customer_id)
         if not plan:
             return Response({"plan": None, "items": []})
@@ -1310,11 +1310,11 @@ class CustomerPreventivoRevisionesView(APIView):
         require_roles(request, _REVISION_ROLES)
         _set_audit_user(request)
         if not _require_existing_customer(customer_id):
-            return Response({"detail": "Institucion inexistente"}, status=404)
+            return Response({"detail": "Institución inexistente"}, status=404)
 
         plan = _fetch_active_plan("customer", customer_id)
         if not plan:
-            return Response({"detail": "La institucion no tiene plan activo"}, status=404)
+            return Response({"detail": "La institución no tiene plan activo"}, status=404)
 
         draft = q(
             """
@@ -1396,7 +1396,7 @@ class PreventivoRevisionDetailView(APIView):
         require_roles(request, _VIEW_ROLES)
         rev = _fetch_revision(revision_id)
         if not rev:
-            return Response({"detail": "Revision inexistente"}, status=404)
+            return Response({"detail": "Revisión inexistente"}, status=404)
         return Response({"revision": _serialize_revision(rev), "items": _fetch_revision_items(revision_id)})
 
 
@@ -1409,7 +1409,7 @@ class PreventivoRevisionItemsView(APIView):
         _set_audit_user(request)
         rev = _fetch_revision(revision_id)
         if not rev:
-            return Response({"detail": "Revision inexistente"}, status=404)
+            return Response({"detail": "Revisión inexistente"}, status=404)
         if rev.get("estado") != "borrador":
             return Response({"detail": "Solo se pueden editar items en borrador"}, status=409)
 
@@ -1621,9 +1621,9 @@ class PreventivoRevisionCerrarView(APIView):
         _set_audit_user(request)
         rev = _fetch_revision(revision_id)
         if not rev:
-            return Response({"detail": "Revision inexistente"}, status=404)
+            return Response({"detail": "Revisión inexistente"}, status=404)
         if rev.get("estado") != "borrador":
-            return Response({"detail": "La revision no esta en borrador"}, status=409)
+            return Response({"detail": "La revisión no esta en borrador"}, status=409)
 
         d = request.data or {}
         fecha_realizada = _parse_date(d.get("fecha_realizada"), "fecha_realizada") or dt.date.today()

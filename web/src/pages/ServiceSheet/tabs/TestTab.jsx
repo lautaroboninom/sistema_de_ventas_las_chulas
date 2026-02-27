@@ -207,9 +207,9 @@ export default function TestTab({ id, setErr }) {
                 <tr className="text-left">
                   <th className="p-2 border">Parámetro</th>
                   <th className="p-2 border">Objetivo / Tolerancia</th>
+                  <th className="p-2 border">Valor a medir</th>
                   <th className="p-2 border">Medido</th>
                   <th className="p-2 border">Resultado</th>
-                  <th className="p-2 border">Observaciones</th>
                   <th className="p-2 border">Ref.</th>
                 </tr>
               </thead>
@@ -225,6 +225,13 @@ export default function TestTab({ id, setErr }) {
                         {item?.unit ? <div className="text-xs text-gray-500">Unidad: {item.unit}</div> : null}
                       </td>
                       <td className="p-2 border">{item?.target || "-"}</td>
+                      <td className="p-2 border">
+                        <input
+                          className="border rounded p-1 w-full"
+                          value={(val?.valor_a_medir || "").toString()}
+                          onChange={(e) => updateValue(key, "valor_a_medir", e.target.value)}
+                        />
+                      </td>
                       <td className="p-2 border">
                         <input
                           className="border rounded p-1 w-full"
@@ -245,13 +252,6 @@ export default function TestTab({ id, setErr }) {
                             </option>
                           ))}
                         </select>
-                      </td>
-                      <td className="p-2 border">
-                        <textarea
-                          className="border rounded p-1 w-full min-h-[60px]"
-                          value={(val?.observaciones || "").toString()}
-                          onChange={(e) => updateValue(key, "observaciones", e.target.value)}
-                        />
                       </td>
                       <td className="p-2 border">
                         <div className="flex flex-wrap gap-1">

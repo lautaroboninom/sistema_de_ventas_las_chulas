@@ -7,7 +7,7 @@ import StatusChip from "../components/StatusChip.jsx";
 import { resolutionLabel } from "../lib/constants";
 import useQueryState from "../hooks/useQueryState";
 import { useAuth } from "../context/AuthContext";
-import { canRelease } from "../lib/authz";
+import { can, PERMISSION_CODES } from "../lib/permissions";
 
 
 // Ajust si tu backend usa otra ruta
@@ -23,7 +23,7 @@ export default function AdminListos() {
   const [remitoBusyId, setRemitoBusyId] = useState(null);
   const navigate = useNavigate();
   const { user } = useAuth();
-  const release = canRelease(user);
+  const release = can(user, PERMISSION_CODES.ACTION_INGRESO_PRINT_EXIT_ORDER);
 
   async function load() {
     try {

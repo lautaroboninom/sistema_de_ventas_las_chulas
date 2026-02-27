@@ -8,7 +8,6 @@ class User(models.Model):
     hash_pw = models.TextField()
     rol = models.TextField()
     activo = models.BooleanField(default=True)
-    perm_ingresar = models.BooleanField(default=False)
 
     class Meta:
         managed = False

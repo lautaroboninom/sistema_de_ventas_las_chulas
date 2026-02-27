@@ -77,7 +77,7 @@ export default function DiagnosticoTab({
 
   async function saveResolucionCambioAware() {
     try {
-      if (!resolucion) { setErr("SeleccionÃ¡ una resoluciÃ³n."); return; }
+      if (!resolucion) { setErr("Seleccioná una resolución."); return; }
       if (String(resolucion) === RESOLUCION.CAMBIO) {
         const s = (serialCambio || "").trim();
         if (!s) { setErr("Ingrese la Serie (Cambio)."); return; }
@@ -98,7 +98,7 @@ export default function DiagnosticoTab({
       } catch {}
       setErr("");
     } catch (e) {
-      setErr(e?.message || "No se pudo guardar la resoluciÃ³n");
+      setErr(e?.message || "No se pudo guardar la resolución");
     } finally {
       setSavingResol(false);
     }
@@ -131,7 +131,7 @@ export default function DiagnosticoTab({
       const resp = await postMarcarParaReparar(id);
       await refreshIngreso();
       const msg = resp?.email_sent
-        ? "Aviso enviado al tecnico para reparar"
+        ? "Aviso enviado al técnico para reparar"
         : "Estado actualizado a 'reparar'";
       setToastMsg(msg);
       setTimeout(() => setToastMsg(""), 3000);
@@ -180,7 +180,7 @@ export default function DiagnosticoTab({
 
   async function saveResolucion() {
     try {
-      if (!resolucion) { setErr("Seleccioná una resolución."); return; }
+      if (!resolucion) { setErr("Seleccione una resolución."); return; }
       setSavingResol(true);
       await postCerrarReparacion(id, { resolucion });
       await refreshIngreso();
@@ -289,7 +289,7 @@ export default function DiagnosticoTab({
               className="bg-amber-600 text-white px-3 py-2 rounded disabled:opacity-60"
               disabled={marcandoReparar || sinTecnicoAsignado || !puedeReparar}
               onClick={marcarParaReparar}
-              title={sinTecnicoAsignado ? "Asigná un tecnico para habilitar reparacion" : undefined}
+              title={sinTecnicoAsignado ? "Asigná un técnico para habilitar reparacion" : undefined}
               type="button"
             >
               {marcandoReparar ? "Avisando..." : "Reparar"}
@@ -395,7 +395,7 @@ export default function DiagnosticoTab({
           placeholder="Ej.: Cambio de turbina; limpieza y secado; resoldado de conector; calibración; pruebas OK."
         />
         <div className="mt-2 text-xs text-gray-500" aria-live="polite">
-          {(savingDiag || savingAll) ? "Guardando..." : "Los cambios se guardan automǭticamente"}
+          {(savingDiag || savingAll) ? "Guardando..." : "Los cambios se guardan automáticamente"}
         </div>
       </div>
 
@@ -411,3 +411,4 @@ export default function DiagnosticoTab({
     </div>
   );
 }
+

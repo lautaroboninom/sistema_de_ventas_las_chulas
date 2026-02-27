@@ -154,7 +154,7 @@ export default function MetricasFinanzas() {
         "tipo_equipo",
         "numero_serie",
         "numero_interno",
-        "tecnico",
+        "técnico",
         "presupuesto_estado",
         "quote_id",
         "quote_estado",
@@ -220,7 +220,7 @@ export default function MetricasFinanzas() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Metricas - Finanzas</h1>
+        <h1 className="text-xl font-semibold">Métricas - Finanzas</h1>
       </div>
 
       <MetricasNav />
@@ -322,9 +322,9 @@ export default function MetricasFinanzas() {
         </div>
       </div>
 
-      {loading && <div className="text-gray-500">Cargando metricas</div>}
+      {loading && <div className="text-gray-500">Cargando métricas</div>}
       {error && (
-        <div className="text-red-600">Error al cargar metricas: {error}</div>
+        <div className="text-red-600">Error al cargar métricas: {error}</div>
       )}
 
       {data && (

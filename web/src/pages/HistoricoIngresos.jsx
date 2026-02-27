@@ -337,7 +337,7 @@ export default function HistoricoIngresos() {
                     onChange={(e) => setSerieFilter(e.target.value)}
                     placeholder="N/S"
                     className="border rounded p-1 w-full text-xs"
-                    aria-label="Filtrar numero de serie"
+                    aria-label="Filtrar número de serie"
                   />
                 </th>
                 <th className="p-2">

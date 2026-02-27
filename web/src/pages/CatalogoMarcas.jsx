@@ -147,14 +147,14 @@ export default function CatalogoMarcas() {
     if (sel) {
       setMarcaTecId(sel?.tecnico_id ?? "");
       loadModelos(sel.id);
-      (async()=>{ try{ setHierLoading(true); const ts = await fetchCatalogTipos(sel.id); setCatalogTipos(ts); setTipoSelId(null); setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]);} catch(e){ setErr(e.message || "No se pudieron cargar tipos del catlogo"); setCatalogTipos([]); setTipoSelId(null); setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]);} finally{ setHierLoading(false);} })();
+      (async()=>{ try{ setHierLoading(true); const ts = await fetchCatalogTipos(sel.id); setCatalogTipos(ts); setTipoSelId(null); setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]);} catch(e){ setErr(e.message || "No se pudieron cargar tipos del catálogo"); setCatalogTipos([]); setTipoSelId(null); setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]);} finally{ setHierLoading(false);} })();
     } else {
       setMarcaTecId("");
       setModelos([]); setMdlTecSel({}); setMdlTipoSel({}); setCatalogTipos([]); setTipoSelId(null); setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]);
     }
   }, [sel?.id]);
 
-  useEffect(() => { if (!sel?.id || !tipoSelId){ setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]); return;} (async()=>{ try{ setHierLoading(true); const ms=await fetchCatalogModelos(sel.id, tipoSelId); setCatalogModelos(ms); setModeloSelId(null); setCatalogVariantes([]);} catch(e){ setErr(e.message||"No se pudieron cargar modelos del catlogo"); setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]);} finally{ setHierLoading(false);} })(); }, [sel?.id, tipoSelId]);
+  useEffect(() => { if (!sel?.id || !tipoSelId){ setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]); return;} (async()=>{ try{ setHierLoading(true); const ms=await fetchCatalogModelos(sel.id, tipoSelId); setCatalogModelos(ms); setModeloSelId(null); setCatalogVariantes([]);} catch(e){ setErr(e.message||"No se pudieron cargar modelos del catálogo"); setCatalogModelos([]); setModeloSelId(null); setCatalogVariantes([]);} finally{ setHierLoading(false);} })(); }, [sel?.id, tipoSelId]);
   useEffect(() => { if (!sel?.id || !modeloSelId){ setCatalogVariantes([]); return;} (async()=>{ try{ setHierLoading(true); const vs=await fetchCatalogVariantes(sel.id, tipoSelId, modeloSelId); setCatalogVariantes(vs);} catch(e){ setErr(e.message||"No se pudieron cargar variantes"); setCatalogVariantes([]);} finally{ setHierLoading(false);} })(); }, [sel?.id, tipoSelId, modeloSelId]);
 
   async function handleAddVariante(e){
@@ -388,7 +388,7 @@ export default function CatalogoMarcas() {
                           <label className="block text-xs text-gray-500">Agregar variante</label>
                           <Input placeholder="Nombre de variante" value={perModelVariants[md.id]?.newName || ""} onChange={(e)=> updatePMV(md.id, (cur)=> ({ ...cur, newName: e.target.value }))}/>
                         </div>
-                        <button type="submit" className="px-3 py-2 border rounded text-sm bg-blue-600 text-white disabled:opacity-60" disabled={perModelVariants[md.id]?.loading || !perModelVariants[md.id]?.serieId || !(perModelVariants[md.id]?.newName||'').trim()} title={!perModelVariants[md.id]?.serieId ? "No se pudo resolver el modelo del catlogo" : ""}>Agregar</button>
+                        <button type="submit" className="px-3 py-2 border rounded text-sm bg-blue-600 text-white disabled:opacity-60" disabled={perModelVariants[md.id]?.loading || !perModelVariants[md.id]?.serieId || !(perModelVariants[md.id]?.newName||'').trim()} title={!perModelVariants[md.id]?.serieId ? "No se pudo resolver el modelo del catálogo" : ""}>Agregar</button>
                       </form>
                     </div>
 

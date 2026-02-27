@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 from ..auth import issue_token, verify_hash, JWT_TTL_MIN
 from ..ip_utils import get_client_ip
 from ..models import User
+from ..permissions import resolve_effective_permissions
 from .helpers import (
     COOLDOWN_MIN,
     TOKEN_TTL_MIN,
@@ -73,6 +74,7 @@ class LoginView(APIView):
 
         _reset_login_failure(key)
         token = issue_token(user)
+        permissions_map = resolve_effective_permissions(user_id=user.id, role=user.rol)
         resp = Response(
             {
                 "token": token,
@@ -80,8 +82,8 @@ class LoginView(APIView):
                     "id": user.id,
                     "nombre": user.nombre,
                     "rol": _normalize_role(user.rol),
-                    "perm_ingresar": getattr(user, "perm_ingresar", False),
                     "email": getattr(user, "email", ""),
+                    "permissions": permissions_map,
                 },
                 # Mantener la misma forma que /auth/session/
                 "features": {},
@@ -223,14 +225,18 @@ class SessionView(APIView):
         u = getattr(request, "user", None)
         if not getattr(u, "id", None):
             return Response({"detail": "no autenticado"}, status=401)
+        permissions_map = resolve_effective_permissions(
+            user_id=getattr(u, "id", None),
+            role=getattr(u, "rol", ""),
+        )
         return Response(
             {
                 "user": {
                     "id": u.id,
                     "nombre": getattr(u, "nombre", ""),
                     "rol": _normalize_role(getattr(u, "rol", "")),
-                    "perm_ingresar": getattr(u, "perm_ingresar", False),
                     "email": getattr(u, "email", ""),
+                    "permissions": permissions_map,
                 },
                 "features": {},
             }

@@ -80,7 +80,7 @@ export default function CatalogoProveedores() {
           <Input value={f.contacto} onChange={on("contacto")} />
         </div>
         <div>
-          <label className="text-sm">Telfono</label>
+          <label className="text-sm">Teléfono</label>
           <Input value={f.telefono} onChange={on("telefono")} />
         </div>
         <div>
@@ -88,7 +88,7 @@ export default function CatalogoProveedores() {
           <Input type="email" value={f.email} onChange={on("email")} />
         </div>
         <div className="md:col-span-2">
-          <label className="text-sm">Direccin</label>
+          <label className="text-sm">Dirección</label>
           <Input value={f.direccion} onChange={on("direccion")} />
         </div>
         <div className="md:col-span-2">
@@ -106,9 +106,9 @@ export default function CatalogoProveedores() {
             <th className="p-2">ID</th>
             <th className="p-2">Nombre</th>
             <th className="p-2">Contacto</th>
-            <th className="p-2">Telfono</th>
+            <th className="p-2">Teléfono</th>
             <th className="p-2">Email</th>
-            <th className="p-2">Direccin</th>
+            <th className="p-2">Dirección</th>
             <th className="p-2">Notas</th>
             <th className="p-2 text-right"></th>
           </tr>
@@ -142,4 +142,5 @@ export default function CatalogoProveedores() {
     </div>
   );
 }
+
 

@@ -1,4 +1,3 @@
-// web/src/main.jsx
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
@@ -43,26 +42,19 @@ import Derivados from "./pages/Derivados.jsx";
 import Metricas from "./pages/Metricas.jsx";
 import MetricasClientes from "./pages/MetricasClientes.jsx";
 import MetricasFinanzas from "./pages/MetricasFinanzas.jsx";
-// import ConfigMetricas from "./pages/ConfigMetricas.jsx"; // unificado dentro de Métricas
 import Garantias from "./pages/Garantias.jsx";
 import Equipos from "./pages/Equipos.jsx";
+import { PERMISSION_CODES } from "./lib/permissions";
 
 function NotFound() {
-  return (
-    <div className="p-8 text-center text-gray-600">
-      Pgina no encontrada
-    </div>
-  );
+  return <div className="p-8 text-center text-gray-600">Página no encontrada</div>;
 }
 
 const router = createBrowserRouter([
-  // pblicas
   { path: "/login", element: <Login /> },
   { path: "/recuperar", element: <ForgotPassword /> },
   { path: "/403", element: <Forbidden /> },
   { path: "/restablecer", element: <ResetPassword /> },
-
-  // privadas (layout App)
   {
     path: "/",
     element: <App />,
@@ -70,9 +62,9 @@ const router = createBrowserRouter([
       {
         index: true,
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_HOME_SEARCH}>
             <div className="p-6">
-              <h1 className="text-2xl font-bold">Bienvenido </h1>
+              <h1 className="text-2xl font-bold">Bienvenido</h1>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <BusquedaNSCard />
                 <BusquedaAccRefCard />
@@ -82,12 +74,10 @@ const router = createBrowserRouter([
           </ProtectedRoute>
         ),
       },
-
-      // Operacin
       {
         path: "buscar-ns",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_HOME_SEARCH}>
             <BuscarNS />
           </ProtectedRoute>
         ),
@@ -95,7 +85,7 @@ const router = createBrowserRouter([
       {
         path: "buscar-accesorio",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_HOME_SEARCH}>
             <BuscarAccesorio />
           </ProtectedRoute>
         ),
@@ -103,7 +93,7 @@ const router = createBrowserRouter([
       {
         path: "tecnico",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
             <Tecnico />
           </ProtectedRoute>
         ),
@@ -111,7 +101,7 @@ const router = createBrowserRouter([
       {
         path: "pendientes",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
             <PendientesGeneral />
           </ProtectedRoute>
         ),
@@ -119,7 +109,7 @@ const router = createBrowserRouter([
       {
         path: "pendientes-por-tecnico",
         element: (
-          <ProtectedRoute roles={["jefe","admin","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
             <PendientesPorTecnico />
           </ProtectedRoute>
         ),
@@ -127,7 +117,7 @@ const router = createBrowserRouter([
       {
         path: "pendientes-presupuesto",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_BUDGET_QUEUES}>
             <PendientesPresupuesto />
           </ProtectedRoute>
         ),
@@ -135,7 +125,7 @@ const router = createBrowserRouter([
       {
         path: "presupuestados",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_BUDGET_QUEUES}>
             <Presupuestados />
           </ProtectedRoute>
         ),
@@ -143,7 +133,7 @@ const router = createBrowserRouter([
       {
         path: "aprobados",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
             <Aprobados />
           </ProtectedRoute>
         ),
@@ -151,7 +141,7 @@ const router = createBrowserRouter([
       {
         path: "reparados",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
             <Reparados />
           </ProtectedRoute>
         ),
@@ -159,7 +149,7 @@ const router = createBrowserRouter([
       {
         path: "derivados",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_LOGISTICS}>
             <Derivados />
           </ProtectedRoute>
         ),
@@ -167,7 +157,7 @@ const router = createBrowserRouter([
       {
         path: "listos",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_LOGISTICS}>
             <AdminListos />
           </ProtectedRoute>
         ),
@@ -175,7 +165,7 @@ const router = createBrowserRouter([
       {
         path: "alquiler/stock",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin","recepcion","tecnico"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_LOGISTICS}>
             <StockAlquiler />
           </ProtectedRoute>
         ),
@@ -183,17 +173,15 @@ const router = createBrowserRouter([
       {
         path: "depositos",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_LOGISTICS}>
             <Depositos />
           </ProtectedRoute>
         ),
       },
-
-      // Tabs superiores
       {
         path: "clientes",
         element: (
-          <ProtectedRoute roles={["admin","jefe","jefe_veedor","recepcion","tecnico"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_INGRESOS_HISTORY}>
             <GeneralPorCliente />
           </ProtectedRoute>
         ),
@@ -201,7 +189,7 @@ const router = createBrowserRouter([
       {
         path: "ingresos/historico",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_INGRESOS_HISTORY}>
             <HistoricoIngresos />
           </ProtectedRoute>
         ),
@@ -209,7 +197,7 @@ const router = createBrowserRouter([
       {
         path: "ingresos",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","jefe_veedor","admin","recepcion"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_INGRESOS_HISTORY}>
             <HistoricoIngresos />
           </ProtectedRoute>
         ),
@@ -217,27 +205,28 @@ const router = createBrowserRouter([
       {
         path: "equipos",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin","tecnico"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_DEVICES_PREVENTIVOS}>
             <Equipos />
           </ProtectedRoute>
         ),
       },
-
-      // Nuevo ingreso
       {
         path: "ingresos/nuevo",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+          <ProtectedRoute
+            permissions={[
+              PERMISSION_CODES.ACTION_INGRESO_CREATE,
+              PERMISSION_CODES.PAGE_NEW_INGRESO,
+            ]}
+          >
             <NuevoIngreso />
           </ProtectedRoute>
         ),
       },
-
-      // Sistema
       {
         path: "metricas",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_METRICS}>
             <Metricas />
           </ProtectedRoute>
         ),
@@ -245,7 +234,7 @@ const router = createBrowserRouter([
       {
         path: "metricas/clientes",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_METRICS}>
             <MetricasClientes />
           </ProtectedRoute>
         ),
@@ -253,7 +242,7 @@ const router = createBrowserRouter([
       {
         path: "metricas/finanzas",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_METRICS}>
             <MetricasFinanzas />
           </ProtectedRoute>
         ),
@@ -261,7 +250,7 @@ const router = createBrowserRouter([
       {
         path: "metricas/config",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_METRICS}>
             <Metricas />
           </ProtectedRoute>
         ),
@@ -269,7 +258,7 @@ const router = createBrowserRouter([
       {
         path: "garantias",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WARRANTY}>
             <Garantias />
           </ProtectedRoute>
         ),
@@ -277,7 +266,7 @@ const router = createBrowserRouter([
       {
         path: "usuarios",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_USERS}>
             <Usuarios />
           </ProtectedRoute>
         ),
@@ -285,7 +274,7 @@ const router = createBrowserRouter([
       {
         path: "catalogo/clientes",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
             <CatalogoClientes />
           </ProtectedRoute>
         ),
@@ -293,7 +282,7 @@ const router = createBrowserRouter([
       {
         path: "catalogo/marcas",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
             <CatalogoMarcas />
           </ProtectedRoute>
         ),
@@ -301,7 +290,7 @@ const router = createBrowserRouter([
       {
         path: "catalogo/tipos-equipo",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
             <TiposEquipo />
           </ProtectedRoute>
         ),
@@ -309,7 +298,7 @@ const router = createBrowserRouter([
       {
         path: "catalogo/accesorios",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
             <Accesorios />
           </ProtectedRoute>
         ),
@@ -317,7 +306,7 @@ const router = createBrowserRouter([
       {
         path: "catalogo/repuestos",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin","tecnico"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_SPARE_PARTS}>
             <Repuestos />
           </ProtectedRoute>
         ),
@@ -325,17 +314,30 @@ const router = createBrowserRouter([
       {
         path: "catalogo/proveedores",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
             <CatalogoProveedores />
           </ProtectedRoute>
         ),
       },
-
-      // Hoja de servicio
       {
         path: "ingresos/:id",
         element: (
-          <ProtectedRoute roles={["jefe","jefe_veedor","admin","tecnico","recepcion"]}>
+          <ProtectedRoute
+            permissions={[
+              PERMISSION_CODES.PAGE_INGRESOS_HISTORY,
+              PERMISSION_CODES.PAGE_WORK_QUEUES,
+              PERMISSION_CODES.PAGE_BUDGET_QUEUES,
+              PERMISSION_CODES.PAGE_LOGISTICS,
+              PERMISSION_CODES.ACTION_PRESUPUESTO_MANAGE,
+              PERMISSION_CODES.ACTION_INGRESO_EDIT_BASICS,
+              PERMISSION_CODES.ACTION_INGRESO_EDIT_DIAGNOSIS,
+              PERMISSION_CODES.ACTION_INGRESO_EDIT_LOCATION,
+              PERMISSION_CODES.ACTION_INGRESO_EDIT_DELIVERY,
+              PERMISSION_CODES.ACTION_INGRESO_MANAGE_DERIVATIONS,
+              PERMISSION_CODES.ACTION_INGRESO_REPAIR_TRANSITIONS,
+              PERMISSION_CODES.ACTION_INGRESO_BAJA_ALTA,
+            ]}
+          >
             <ServiceSheet />
           </ProtectedRoute>
         ),
@@ -343,15 +345,13 @@ const router = createBrowserRouter([
       {
         path: "ingresos/:id/derivar",
         element: (
-          <ProtectedRoute roles={["tecnico","jefe","admin"]}>
+          <ProtectedRoute permissions={PERMISSION_CODES.ACTION_INGRESO_MANAGE_DERIVATIONS}>
             <DerivarIngreso />
           </ProtectedRoute>
         ),
       },
     ],
   },
-
-  // 404
   { path: "*", element: <NotFound /> },
 ]);
 
@@ -362,12 +362,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <RouterProvider router={router} />
       </AuthProvider>
     </ErrorBoundary>
-  </React.StrictMode>
+  </React.StrictMode>,
 );
 
-// Limpieza de Service Workers/caches antiguos para evitar mezclar bundles
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  // Intentar desregistrar cualquier SW previo y limpiar caches de app
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
   try {
     navigator.serviceWorker.getRegistrations?.().then((regs) => {
       regs?.forEach((r) => r.unregister().catch(() => {}));
@@ -378,11 +376,9 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   } catch (_) {}
 }
 
-// Registrar Service Worker (opcional): habilitar solo si VITE_SW=1 en build
-if (import.meta.env.PROD && import.meta.env.VITE_SW === '1' && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
-      // silenciosamente ignoramos errores de registro
-    });
+if (import.meta.env.PROD && import.meta.env.VITE_SW === "1" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
   });
 }
+

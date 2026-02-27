@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { lookupScan, postEntregarIngreso } from "../lib/api";
@@ -121,7 +121,7 @@ export default function QrScanCard() {
       setResult(res);
       setEntrega(emptyEntrega);
     } catch (e2) {
-      setErr(e2?.message || "No se pudo leer el codigo.");
+      setErr(e2?.message || "No se pudo leer el código.");
     } finally {
       setLoading(false);
     }
@@ -166,7 +166,7 @@ export default function QrScanCard() {
     if (!canLive) {
       setCameraError(
         secure
-          ? "La camara no esta disponible en este dispositivo."
+          ? "La cámara no esta disponible en este dispositivo."
           : "La lectura automatica requiere HTTPS."
       );
       return;
@@ -189,7 +189,7 @@ export default function QrScanCard() {
       );
       setCameraActive(true);
     } catch (e2) {
-      setCameraError(e2?.message || "No se pudo abrir la camara.");
+      setCameraError(e2?.message || "No se pudo abrir la cámara.");
       setCameraActive(false);
     } finally {
       startLockRef.current = false;
@@ -300,7 +300,7 @@ export default function QrScanCard() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="font-semibold">Lectura de QR</div>
-          <div className="text-xs text-gray-500">Escanear codigo QR o de barras.</div>
+          <div className="text-xs text-gray-500">Escanear código QR o de barras.</div>
         </div>
         <button
           className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
@@ -332,7 +332,7 @@ export default function QrScanCard() {
             <div className={mediaSupported ? "mb-3" : "mb-3 hidden"}>
               <div className="flex items-center justify-between gap-2">
                 <div className="text-sm text-gray-600">
-                  {cameraActive ? "Camara activa (QR)" : "Camara"}
+                  {cameraActive ? "Cámara activa (QR)" : "Cámara"}
                 </div>
                 <button
                   type="button"
@@ -340,7 +340,7 @@ export default function QrScanCard() {
                   onClick={cameraActive ? () => void stopCamera() : () => void startCamera()}
                   disabled={!cameraSupported}
                 >
-                  {cameraActive ? "Cerrar camara" : "Abrir camara"}
+                  {cameraActive ? "Cerrar cámara" : "Abrir cámara"}
                 </button>
               </div>
               <div className="mt-2 border rounded overflow-hidden bg-black/5">
@@ -350,7 +350,7 @@ export default function QrScanCard() {
 
             {!mediaSupported && (
               <div className="mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                Tu navegador no permite acceso a camara. Podes cargar una imagen con QR.
+                Tu navegador no permite acceso a cámara. Podés cargar una imagen con QR.
                 <div className="mt-2">
                   <button
                     type="button"
@@ -358,7 +358,7 @@ export default function QrScanCard() {
                     onClick={openQrCapture}
                     disabled={fileDecoding}
                   >
-                    {fileDecoding ? "Leyendo QR..." : "Abrir camara (QR)"}
+                    {fileDecoding ? "Leyendo QR..." : "Abrir cámara (QR)"}
                   </button>
                 </div>
               </div>
@@ -378,10 +378,10 @@ export default function QrScanCard() {
               <input
                 ref={inputRef}
                 className="border rounded p-2 w-full"
-                placeholder="Escanear o pegar codigo"
+                placeholder="Escanear o pegar código"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
-                aria-label="Lectura de codigo"
+                aria-label="Lectura de código"
               />
               <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700">
                 Buscar
@@ -456,7 +456,7 @@ export default function QrScanCard() {
                           </label>
                           {requiereSerial && (
                             <label className="block md:col-span-2">
-                              <div className="text-sm text-gray-700 mb-1">Serie confirmacion (cambio)</div>
+                              <div className="text-sm text-gray-700 mb-1">Serie confirmación (cambio)</div>
                               <input
                                 className="border rounded p-2 w-full"
                                 value={entrega.serial_confirm}
@@ -487,7 +487,7 @@ export default function QrScanCard() {
                       <div>Cliente: {safeText(device.customer_nombre)}</div>
                       <div>Serie: {safeText(device.numero_serie || device.numero_interno)}</div>
                       <div>Equipo: {safeText(device.marca)} {safeText(device.modelo)}</div>
-                      <div>Alquilado: {device.alquilado ? "Si" : "No"}</div>
+                      <div>Alquilado: {device.alquilado ? "Sí" : "No"}</div>
                       <div>Alquiler a: {safeText(device.alquiler_a)}</div>
                     </div>
                     <div className="mt-3 flex items-center gap-2">
@@ -536,7 +536,7 @@ export default function QrScanCard() {
                   <div className="border rounded p-3">
                     <div className="font-semibold mb-2">Sin coincidencias</div>
                     <div className="text-sm text-gray-600">
-                      No se encontro un equipo con ese codigo.
+                      No se encontró un equipo con ese código.
                     </div>
                     <div className="mt-3">
                       <button

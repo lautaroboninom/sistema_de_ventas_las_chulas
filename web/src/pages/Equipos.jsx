@@ -29,7 +29,7 @@ import {
   postCliente,
 } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { isAdmin, isJefe, isJefeVeedor } from "../lib/authz";
+import { can, PERMISSION_CODES } from "../lib/permissions";
 
 const TAB_ITEMS = [
   { value: "equipos", label: "Equipos" },
@@ -38,9 +38,9 @@ const TAB_ITEMS = [
 ];
 
 const PERIODICIDAD_UNIDADES = [
-  { value: "dias", label: "Dias" },
+  { value: "dias", label: "Días" },
   { value: "meses", label: "Meses" },
-  { value: "anios", label: "Anios" },
+  { value: "anios", label: "Años" },
 ];
 
 const ITEM_STATES = [
@@ -59,9 +59,12 @@ function todayISO() {
 
 function fmtDate(v) {
   if (!v) return "-";
-  const s = String(v);
-  if (s.includes("T")) return s.slice(0, 10);
-  return s;
+  const s = String(v).trim();
+  const base = s.includes("T") ? s.slice(0, 10) : s;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(base);
+  if (!m) return base;
+  const [, yyyy, mm, dd] = m;
+  return `${dd}-${mm}-${yyyy}`;
 }
 
 function estadoClass(estado) {
@@ -73,9 +76,9 @@ function estadoClass(estado) {
 
 function estadoLabel(estado) {
   if (estado === "vencido") return "Vencido";
-  if (estado === "proximo") return "Proximo";
+  if (estado === "proximo") return "Próximo";
   if (estado === "sin_plan") return "Sin plan";
-  if (estado === "al_dia") return "Al dia";
+  if (estado === "al_dia") return "Al día";
   return estado || "-";
 }
 
@@ -117,7 +120,7 @@ function EditModal({ row, onClose, onSaved, canEdit }) {
         {err && <div className="bg-red-100 text-red-800 border border-red-300 rounded p-2 mb-3">{err}</div>}
         <div className="space-y-3">
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Numero de serie</div>
+            <div className="text-sm text-gray-700 mb-1">Número de serie</div>
             <input
               type="text"
               value={ns}
@@ -127,7 +130,7 @@ function EditModal({ row, onClose, onSaved, canEdit }) {
             />
           </label>
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Numero interno (MG)</div>
+            <div className="text-sm text-gray-700 mb-1">Número interno (MG)</div>
             <input
               type="text"
               value={mg}
@@ -153,8 +156,8 @@ function EditModal({ row, onClose, onSaved, canEdit }) {
                   onClose();
                 } catch (e) {
                   const ctype = e?.data?.conflict_type;
-                  if (ctype === "NS_DUPLICATE") setErr("El numero de serie ya esta asignado a otro equipo.");
-                  else if (ctype === "MG_DUPLICATE") setErr("El numero interno ya esta asignado a otro equipo.");
+                  if (ctype === "NS_DUPLICATE") setErr("El número de serie ya está asignado a otro equipo.");
+                  else if (ctype === "MG_DUPLICATE") setErr("El número interno ya está asignado a otro equipo.");
                   else setErr(e?.message || "No se pudo guardar.");
                 } finally {
                   setSaving(false);
@@ -230,7 +233,7 @@ function PreventivoPlanModal({ title, initialPlan, onClose, onSubmit, saving = f
             </select>
           </label>
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Aviso (dias)</div>
+            <div className="text-sm text-gray-700 mb-1">Aviso (días)</div>
             <input
               type="number"
               min="0"
@@ -241,7 +244,7 @@ function PreventivoPlanModal({ title, initialPlan, onClose, onSubmit, saving = f
             />
           </label>
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Ultima revision</div>
+            <div className="text-sm text-gray-700 mb-1">Última revisión</div>
             <input
               type="date"
               className="border rounded p-2 w-full"
@@ -251,7 +254,7 @@ function PreventivoPlanModal({ title, initialPlan, onClose, onSubmit, saving = f
             />
           </label>
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Proxima revision</div>
+            <div className="text-sm text-gray-700 mb-1">Próxima revisión</div>
             <input
               type="date"
               className="border rounded p-2 w-full"
@@ -343,7 +346,7 @@ function DeviceRevisionModal({ row, onClose, onSubmit, saving = false, error = "
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
       <div className="bg-white rounded shadow-lg w-full max-w-xl p-4">
-        <div className="text-lg font-semibold mb-2">Registrar revision de equipo</div>
+        <div className="text-lg font-semibold mb-2">Registrar revisión de equipo</div>
         <div className="text-sm text-gray-600 mb-3">
           Equipo #{row.id} - {row.marca || "-"} {row.modelo || ""}
         </div>
@@ -373,7 +376,7 @@ function DeviceRevisionModal({ row, onClose, onSubmit, saving = false, error = "
             </label>
           )}
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Ubicacion</div>
+            <div className="text-sm text-gray-700 mb-1">Ubicación</div>
             <input type="text" className="border rounded p-2 w-full" value={form.ubicacion_detalle} onChange={(e) => update("ubicacion_detalle", e.target.value)} />
           </label>
           <label className="block md:flex md:items-end">
@@ -404,7 +407,7 @@ function DeviceRevisionModal({ row, onClose, onSubmit, saving = false, error = "
           <label className="block md:col-span-2">
             <span className="inline-flex items-center gap-2 text-sm">
               <input type="checkbox" checked={!!form.arrastrar_proxima} onChange={(e) => update("arrastrar_proxima", e.target.checked)} />
-              Arrastrar a proxima revision
+              Arrastrar a próxima revisión
             </span>
           </label>
         </div>
@@ -415,7 +418,7 @@ function DeviceRevisionModal({ row, onClose, onSubmit, saving = false, error = "
             onClick={() => onSubmit(form)}
             disabled={saving}
           >
-            Guardar revision
+            Guardar revisión
           </button>
         </div>
       </div>
@@ -437,23 +440,23 @@ function AddInstitutionModal({ onClose, onSubmit, saving = false, error = "" }) 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
       <div className="bg-white rounded shadow-lg w-full max-w-xl p-4">
-        <div className="text-lg font-semibold mb-2">Agregar institucion</div>
+        <div className="text-lg font-semibold mb-2">Agregar institución</div>
         {error && <div className="bg-red-100 border border-red-300 text-red-800 rounded p-2 mb-3">{error}</div>}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="block md:col-span-2">
-            <div className="text-sm text-gray-700 mb-1">Razon social *</div>
+            <div className="text-sm text-gray-700 mb-1">Razón social *</div>
             <input className="border rounded p-2 w-full" value={form.razon_social} onChange={(e) => update("razon_social", e.target.value)} />
           </label>
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Codigo empresa *</div>
+            <div className="text-sm text-gray-700 mb-1">Código de empresa *</div>
             <input className="border rounded p-2 w-full" value={form.cod_empresa} onChange={(e) => update("cod_empresa", e.target.value)} />
           </label>
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Telefono</div>
+            <div className="text-sm text-gray-700 mb-1">Teléfono</div>
             <input className="border rounded p-2 w-full" value={form.telefono} onChange={(e) => update("telefono", e.target.value)} />
           </label>
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Telefono 2</div>
+            <div className="text-sm text-gray-700 mb-1">Teléfono 2</div>
             <input className="border rounded p-2 w-full" value={form.telefono_2} onChange={(e) => update("telefono_2", e.target.value)} />
           </label>
           <label className="block">
@@ -468,7 +471,7 @@ function AddInstitutionModal({ onClose, onSubmit, saving = false, error = "" }) 
             onClick={() => onSubmit(form)}
             disabled={saving}
           >
-            Crear institucion
+            Crear institución
           </button>
         </div>
       </div>
@@ -553,7 +556,7 @@ function AddPreventivoEquipoModal({ onClose, onSelect, onCreateManaged }) {
                   <th className="p-2">MG</th>
                   <th className="p-2">Marca</th>
                   <th className="p-2">Modelo</th>
-                  <th className="p-2">Accion</th>
+                  <th className="p-2">Acción</th>
                 </tr>
               </thead>
               <tbody>
@@ -645,7 +648,7 @@ function AddManagedDeviceModal({ onClose, onSubmit, customers = [], saving = fal
         setTiposEquipo(Array.from(new Set(tipoList)));
       } catch (e) {
         if (!active) return;
-        setCatalogErr(e?.message || "No se pudieron cargar catalogos de equipo.");
+        setCatalogErr(e?.message || "No se pudieron cargar catálogos de equipo.");
         setMarcas([]);
         setTiposEquipo([]);
       }
@@ -805,21 +808,21 @@ function AddManagedDeviceModal({ onClose, onSubmit, customers = [], saving = fal
       <div className="bg-white rounded shadow-lg w-full max-w-xl p-4">
         <div className="text-lg font-semibold mb-2">Agregar equipo al sistema</div>
         <div className="text-sm text-gray-600 mb-3">
-          Este alta registra el equipo en inventario sin generar ingreso ni remito.
+          Esta alta registra el equipo en inventario sin generar ingreso ni remito.
         </div>
         {error && <div className="bg-red-100 border border-red-300 text-red-800 rounded p-2 mb-3">{error}</div>}
         {catalogErr && <div className="bg-amber-100 border border-amber-300 text-amber-900 rounded p-2 mb-3">{catalogErr}</div>}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="block md:col-span-2">
-            <div className="text-sm text-gray-700 mb-1">Institucion / Cliente *</div>
+            <div className="text-sm text-gray-700 mb-1">Institución / Cliente *</div>
             <select
               className="border rounded p-2 w-full"
               value={form.customer_id}
               onChange={(e) => update("customer_id", e.target.value)}
               disabled={saving}
             >
-              <option value="">Selecciona una institucion</option>
+              <option value="">Seleccione una institución</option>
               {customers.map((c) => (
                 <option key={c.customer_id} value={c.customer_id}>
                   {c.razon_social} {c.cod_empresa ? `(${c.cod_empresa})` : ""}
@@ -859,7 +862,7 @@ function AddManagedDeviceModal({ onClose, onSubmit, customers = [], saving = fal
               ))}
             </datalist>
             {marcaTxt && !marcaId && (
-              <div className="text-xs text-red-600 mt-1">Elegi una marca de las sugeridas.</div>
+              <div className="text-xs text-red-600 mt-1">Elija una marca de las sugeridas.</div>
             )}
           </label>
 
@@ -871,7 +874,7 @@ function AddManagedDeviceModal({ onClose, onSubmit, customers = [], saving = fal
               onChange={(e) => update("modelo_id", e.target.value)}
               disabled={!marcaId || !modelos.length || saving}
             >
-              <option value="">{!marcaId ? "Elegi marca primero" : "Selecciona modelo"}</option>
+              <option value="">{!marcaId ? "Seleccione marca primero" : "Seleccione modelo"}</option>
               {modelos.map((m) => (
                 <option key={m.id} value={m.id}>{m.nombre}</option>
               ))}
@@ -895,7 +898,7 @@ function AddManagedDeviceModal({ onClose, onSubmit, customers = [], saving = fal
           </label>
 
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Numero de serie</div>
+            <div className="text-sm text-gray-700 mb-1">Número de serie</div>
             <input
               className="border rounded p-2 w-full"
               value={form.numero_serie}
@@ -904,7 +907,7 @@ function AddManagedDeviceModal({ onClose, onSubmit, customers = [], saving = fal
             />
           </label>
           <label className="block">
-            <div className="text-sm text-gray-700 mb-1">Numero interno (MG)</div>
+            <div className="text-sm text-gray-700 mb-1">Número interno (MG)</div>
             <input
               className="border rounded p-2 w-full"
               value={form.numero_interno}
@@ -968,9 +971,10 @@ function AddManagedDeviceModal({ onClose, onSubmit, customers = [], saving = fal
 
 export default function Equipos() {
   const { user } = useAuth();
-  const canEdit = isJefe(user) || isJefeVeedor(user) || isAdmin(user);
-  const canPlanEdit = isJefe(user) || isJefeVeedor(user) || isAdmin(user);
-  const canRevisionMutate = isJefe(user) || isJefeVeedor(user) || isAdmin(user) || user?.rol === "tecnico";
+  const canManageDevices = can(user, PERMISSION_CODES.ACTION_DEVICES_PREVENTIVOS_MANAGE);
+  const canEdit = canManageDevices;
+  const canPlanEdit = canManageDevices;
+  const canRevisionMutate = canManageDevices;
   const nav = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -1079,6 +1083,11 @@ export default function Equipos() {
   const sortedInstituciones = useMemo(
     () => [...instituciones].sort((a, b) => String(a?.razon_social || "").localeCompare(String(b?.razon_social || ""))),
     [instituciones]
+  );
+
+  const institucionesConPreventivo = useMemo(
+    () => sortedInstituciones.filter((it) => Boolean(it?.preventivo_plan_id || it?.plan?.id)),
+    [sortedInstituciones]
   );
 
   const resetMergeState = () => {
@@ -1242,7 +1251,7 @@ export default function Equipos() {
         resumen: res?.revision?.resumen || "",
       });
     } catch (e) {
-      setRevisionErr(e?.message || "No se pudo cargar la revision.");
+      setRevisionErr(e?.message || "No se pudo cargar la revisión.");
       setRevisionData(null);
     } finally {
       setRevisionLoading(false);
@@ -1266,7 +1275,7 @@ export default function Equipos() {
       await loadInstitucionRevisiones(customerId);
       if (revId) await openRevision(revId);
     } catch (e) {
-      setInstRevisionesErr(e?.message || "No se pudo iniciar la revision institucional.");
+      setInstRevisionesErr(e?.message || "No se pudo iniciar la revisión institucional.");
     }
   }
 
@@ -1322,6 +1331,12 @@ export default function Equipos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedInstitucionId, activeTab]);
 
+  useEffect(() => {
+    if (activeTab !== "instituciones" || !selectedInstitucionId) return;
+    const exists = institucionesConPreventivo.some((it) => String(it.customer_id) === String(selectedInstitucionId));
+    if (!exists) setSelectedInstitucionId("");
+  }, [activeTab, institucionesConPreventivo, selectedInstitucionId]);
+
   const openDevicePlanModal = (row) => {
     setPlanErr("");
     setPlanModalCtx({
@@ -1349,7 +1364,7 @@ export default function Equipos() {
     setPlanModalCtx({
       scope: "customer",
       id: inst?.customer_id,
-      title: `Plan institucional - ${inst?.razon_social || "Institucion"}`,
+      title: `Plan institucional - ${inst?.razon_social || "Institución"}`,
       isEdit: !!plan?.id,
       initialPlan: plan,
     });
@@ -1389,7 +1404,7 @@ export default function Equipos() {
       setReloadDevicesKey(Date.now());
       if (activeTab === "preventivos") loadAgenda();
     } catch (e) {
-      setDeviceRevisionErr(e?.message || "No se pudo registrar la revision.");
+      setDeviceRevisionErr(e?.message || "No se pudo registrar la revisión.");
     } finally {
       setDeviceRevisionSaving(false);
     }
@@ -1402,7 +1417,7 @@ export default function Equipos() {
 
   const onCreateManagedDevice = async (form) => {
     if (!form?.customer_id) {
-      setAddManagedDeviceErr("Debes seleccionar una institucion.");
+      setAddManagedDeviceErr("Debe seleccionar una institución.");
       return;
     }
     if (!form?.marca_id) {
@@ -1414,7 +1429,7 @@ export default function Equipos() {
       return;
     }
     if (!(form?.numero_serie || "").trim() && !(form?.numero_interno || "").trim()) {
-      setAddManagedDeviceErr("Debes cargar numero de serie o numero interno.");
+      setAddManagedDeviceErr("Debe cargar número de serie o número interno.");
       return;
     }
     let alquilerA = "";
@@ -1427,7 +1442,7 @@ export default function Equipos() {
         (c) => String(c.customer_id) === String(form.alquiler_customer_id)
       );
       if (!alquilerCustomer?.razon_social) {
-        setAddManagedDeviceErr("El cliente seleccionado para alquiler no es valido.");
+        setAddManagedDeviceErr("El cliente seleccionado para alquiler no es válido.");
         return;
       }
       alquilerA = String(alquilerCustomer.razon_social || "").trim();
@@ -1469,7 +1484,7 @@ export default function Equipos() {
     const term = (mergeSearch || "").trim();
     if (!term) {
       setMergeSearchResults([]);
-      setMergeSearchErr("Ingresa un N/S o numero interno para buscar.");
+      setMergeSearchErr("Ingrese un N/S o número interno para buscar.");
       return;
     }
     try {
@@ -1479,7 +1494,7 @@ export default function Equipos() {
       const items = Array.isArray(res) ? res : (res.items || []);
       const filtered = items.filter((item) => item.id !== mergeEquipo1?.id);
       setMergeSearchResults(filtered);
-      if (!filtered.length) setMergeSearchErr("No hay resultados para esa busqueda.");
+      if (!filtered.length) setMergeSearchErr("No hay resultados para esa búsqueda.");
     } catch (e) {
       setMergeSearchErr(e?.message || "No se pudo buscar el equipo.");
       setMergeSearchResults([]);
@@ -1497,7 +1512,7 @@ export default function Equipos() {
         <div>
           <div className="h1">Equipos</div>
           <p className="text-sm text-gray-600">
-            Gestion de equipos, mantenimientos preventivos e instituciones.
+            Gestión de equipos, mantenimientos preventivos e instituciones.
           </p>
         </div>
         {canEdit && (
@@ -1541,12 +1556,12 @@ export default function Equipos() {
                   <tr className="text-left">
                     <SortableTh label="ID" field="id" sort={sort} setSort={setSort} />
                     <th className="p-2">Propiedad</th>
-                    <SortableTh label="Ultimo cliente/Dueno" field="cliente" sort={sort} setSort={setSort} />
+                    <SortableTh label="Último cliente/Dueño" field="cliente" sort={sort} setSort={setSort} />
                     <SortableTh label="N/S" field="ns" sort={sort} setSort={setSort} />
                     <SortableTh label="MG" field="mg" sort={sort} setSort={setSort} />
                     <SortableTh label="Marca" field="marca" sort={sort} setSort={setSort} />
                     <SortableTh label="Modelo" field="modelo" sort={sort} setSort={setSort} />
-                    <SortableTh label="Ubicacion" field="ubicacion" sort={sort} setSort={setSort} />
+                    <SortableTh label="Ubicación" field="ubicacion" sort={sort} setSort={setSort} />
                     <th className="p-2">Alquiler</th>
                     <th className="p-2">Acciones</th>
                   </tr>
@@ -1560,8 +1575,8 @@ export default function Equipos() {
                         <td className="p-2"><PropiedadBadge row={row} /></td>
                         <td className="p-2">
                           <div className="font-medium">{row.last_customer_nombre || row.customer_nombre || "-"}</div>
-                          {row.last_ingreso_id ? <div className="text-xs text-gray-500">Ultimo ingreso #{row.last_ingreso_id}</div> : null}
-                          {row.es_propietario_mg && <div className="text-xs text-gray-500">Dueno base (propio MG/BIO)</div>}
+                          {row.last_ingreso_id ? <div className="text-xs text-gray-500">Último ingreso #{row.last_ingreso_id}</div> : null}
+                          {row.es_propietario_mg && <div className="text-xs text-gray-500">Dueño base (propio MG/BIO)</div>}
                         </td>
                         <td className="p-2">{row.numero_serie || "-"}</td>
                         <td className="p-2">{row.numero_interno || "-"}</td>
@@ -1631,10 +1646,10 @@ export default function Equipos() {
                 </tbody>
               </table>
               <div className="text-xs text-gray-500 mt-2">
-                Mostrando {rows.length} {hasNext ? "(hay mas, baja para cargar...)" : ""}
+                Mostrando {rows.length} {hasNext ? "(hay más, desplaza para cargar...)" : ""}
               </div>
               <div ref={sentinelRef} style={{ height: 1 }} />
-              {loadingMore && <div className="text-xs text-gray-500 mt-2">Cargando mas...</div>}
+              {loadingMore && <div className="text-xs text-gray-500 mt-2">Cargando más...</div>}
             </div>
           )}
         </>
@@ -1645,7 +1660,7 @@ export default function Equipos() {
           {agendaErr && <div className="bg-red-100 border border-red-300 text-red-800 p-2 rounded mb-3">{agendaErr}</div>}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
             <div className="border rounded p-3 bg-red-50"><div className="text-xs text-gray-600">Vencidos</div><div className="text-xl font-semibold text-red-700">{agendaCounts.vencido || 0}</div></div>
-            <div className="border rounded p-3 bg-amber-50"><div className="text-xs text-gray-600">Proximos</div><div className="text-xl font-semibold text-amber-700">{agendaCounts.proximo || 0}</div></div>
+            <div className="border rounded p-3 bg-amber-50"><div className="text-xs text-gray-600">Próximos</div><div className="text-xl font-semibold text-amber-700">{agendaCounts.proximo || 0}</div></div>
             <div className="border rounded p-3 bg-slate-50"><div className="text-xs text-gray-600">Sin plan</div><div className="text-xl font-semibold text-slate-700">{agendaCounts.sin_plan || 0}</div></div>
             <div className="border rounded p-3 bg-emerald-50"><div className="text-xs text-gray-600">Total</div><div className="text-xl font-semibold text-emerald-700">{agendaCounts.total || 0}</div></div>
           </div>
@@ -1654,12 +1669,12 @@ export default function Equipos() {
             <select className="border rounded p-2" value={agendaEstado} onChange={(e) => setAgendaEstado(e.target.value)}>
               <option value="">Estado: todos</option>
               <option value="vencido">Vencido</option>
-              <option value="proximo">Proximo</option>
+              <option value="proximo">Próximo</option>
               <option value="sin_plan">Sin plan</option>
-              <option value="al_dia">Al dia</option>
+              <option value="al_dia">Al día</option>
             </select>
             <select className="border rounded p-2" value={agendaCustomerId} onChange={(e) => setAgendaCustomerId(e.target.value)}>
-              <option value="">Institucion: todas</option>
+              <option value="">Institución: todas</option>
               {sortedInstituciones.map((inst) => (
                 <option key={inst.customer_id} value={inst.customer_id}>{inst.razon_social}</option>
               ))}
@@ -1669,7 +1684,7 @@ export default function Equipos() {
               className="border rounded p-2 w-full max-w-md"
               value={agendaQ}
               onChange={(e) => setAgendaQ(e.target.value)}
-              placeholder="Buscar por cliente, codigo, marca, modelo, N/S"
+              placeholder="Buscar por cliente, código, marca, modelo, N/S"
             />
             {canPlanEdit && (
               <button
@@ -1695,9 +1710,9 @@ export default function Equipos() {
                   <tr className="text-left">
                     <th className="p-2">Cliente</th>
                     <th className="p-2">Equipo</th>
-                    <th className="p-2">Proxima</th>
+                    <th className="p-2">Próxima</th>
                     <th className="p-2">Estado</th>
-                    <th className="p-2">Accion</th>
+                    <th className="p-2">Acción</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1722,7 +1737,7 @@ export default function Equipos() {
                               setDeviceRevisionCtx(row);
                             }}
                           >
-                            Registrar revision
+                            Registrar revisión
                           </button>
                         ) : (
                           <div className="flex items-center gap-1">
@@ -1760,10 +1775,10 @@ export default function Equipos() {
         <>
           {institucionesErr && <div className="bg-red-100 border border-red-300 text-red-800 p-2 rounded mb-3">{institucionesErr}</div>}
           <div className="flex flex-wrap items-center gap-2 mb-3">
-            <span className="text-sm">Institucion:</span>
+            <span className="text-sm">Institución:</span>
             <select className="border rounded p-2 min-w-72" value={selectedInstitucionId} onChange={(e) => setSelectedInstitucionId(e.target.value)}>
-              <option value="">Elegi una institucion</option>
-              {sortedInstituciones.map((inst) => (
+              <option value="">Seleccione una institución</option>
+              {institucionesConPreventivo.map((inst) => (
                 <option key={inst.customer_id} value={inst.customer_id}>
                   {inst.razon_social} {inst.cod_empresa ? `(${inst.cod_empresa})` : ""}
                 </option>
@@ -1771,21 +1786,21 @@ export default function Equipos() {
             </select>
             {canPlanEdit && (
               <button className="btn" onClick={() => { setAddInstitutionErr(""); setAddInstitutionOpen(true); }}>
-                Agregar institucion
+                Agregar institución
               </button>
             )}
           </div>
 
           {!selectedInstitucionId ? (
-            <div className="text-sm text-gray-500">Selecciona una institucion para ver su plan y revisiones.</div>
+            <div className="text-sm text-gray-500">Seleccione una institución para ver su plan y revisiones.</div>
           ) : (
             <>
               {selectedInstState === "vencido" || selectedInstState === "proximo" || selectedInstDraftId ? (
                 <div className="border rounded p-3 mb-3 bg-amber-50 border-amber-200 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-amber-900">
                     {selectedInstDraftId
-                      ? "Hay una revision institucional en borrador pendiente de cierre."
-                      : "Esta institucion requiere actualizacion de revision preventiva."}
+                      ? "Hay una revisión institucional en borrador pendiente de cierre."
+                      : "Esta institución requiere actualización de revisión preventiva."}
                   </div>
                   {canRevisionMutate && (
                     <button
@@ -1795,7 +1810,7 @@ export default function Equipos() {
                         else startOrContinueInstitutionRevision(selectedInstitucionId);
                       }}
                     >
-                      {selectedInstDraftId ? "Continuar revision pendiente" : "Actualizar revision ahora"}
+                      {selectedInstDraftId ? "Continuar revisión pendiente" : "Actualizar revisión ahora"}
                     </button>
                   )}
                 </div>
@@ -1813,10 +1828,10 @@ export default function Equipos() {
                     {canRevisionMutate && mergedInstPlan && (
                       <>
                         <button className="px-2 py-1 rounded border text-xs hover:bg-gray-50" onClick={() => startOrContinueInstitutionRevision(selectedInstitucionId)}>
-                          Nueva revision
+                          Nueva revisión
                         </button>
                         <button className="px-2 py-1 rounded border text-xs hover:bg-gray-50" onClick={() => startOrContinueInstitutionRevision(selectedInstitucionId)}>
-                          Actualizar revision ahora
+                          Actualizar revisión ahora
                         </button>
                       </>
                     )}
@@ -1827,9 +1842,9 @@ export default function Equipos() {
                 ) : (
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                     <div><div className="text-xs text-gray-500">Periodicidad</div><div>{mergedInstPlan.periodicidad_valor} {mergedInstPlan.periodicidad_unidad}</div></div>
-                    <div><div className="text-xs text-gray-500">Ultima</div><div>{fmtDate(mergedInstPlan.ultima_revision_fecha)}</div></div>
-                    <div><div className="text-xs text-gray-500">Proxima</div><div>{fmtDate(mergedInstPlan.proxima_revision_fecha)}</div></div>
-                    <div><div className="text-xs text-gray-500">Aviso</div><div>{mergedInstPlan.aviso_anticipacion_dias} dias</div></div>
+                    <div><div className="text-xs text-gray-500">Última</div><div>{fmtDate(mergedInstPlan.ultima_revision_fecha)}</div></div>
+                    <div><div className="text-xs text-gray-500">Próxima</div><div>{fmtDate(mergedInstPlan.proxima_revision_fecha)}</div></div>
+                    <div><div className="text-xs text-gray-500">Aviso</div><div>{mergedInstPlan.aviso_anticipacion_dias} días</div></div>
                     <div><div className="text-xs text-gray-500">Estado</div><div><PreventivoBadge estado={selectedInstState} dias={selectedInstitucion?.preventivo_dias_restantes || mergedInstPlan?.preventivo_dias_restantes} /></div></div>
                   </div>
                 )}
@@ -1853,7 +1868,7 @@ export default function Equipos() {
                           <th className="p-2">Programada</th>
                           <th className="p-2">Realizada</th>
                           <th className="p-2">Items</th>
-                          <th className="p-2">Accion</th>
+                          <th className="p-2">Acción</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1880,14 +1895,14 @@ export default function Equipos() {
               {revisionOpenId && (
                 <div className="border rounded p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                    <div className="font-medium">Editor revision #{revisionOpenId}</div>
+                    <div className="font-medium">Editor de revisión #{revisionOpenId}</div>
                     <button className="px-2 py-1 rounded border text-xs hover:bg-gray-50" onClick={() => { setRevisionOpenId(null); setRevisionData(null); }}>
                       Cerrar editor
                     </button>
                   </div>
                   {revisionErr && <div className="bg-red-100 border border-red-300 text-red-800 p-2 rounded mb-2">{revisionErr}</div>}
                   {revisionLoading || !revisionData ? (
-                    "Cargando revision..."
+                    "Cargando revisión..."
                   ) : (
                     <>
                       <div className="text-sm text-gray-600 mb-3">
@@ -1901,11 +1916,11 @@ export default function Equipos() {
                               <th className="p-2">Item</th>
                               <th className="p-2">Estado</th>
                               <th className="p-2">Motivo no control</th>
-                              <th className="p-2">Ubicacion</th>
+                              <th className="p-2">Ubicación</th>
                               <th className="p-2">Acc. cambiados</th>
                               <th className="p-2">Detalle accesorios</th>
                               <th className="p-2">Observaciones</th>
-                              <th className="p-2">Arrastrar proxima</th>
+                              <th className="p-2">Arrastrar próxima</th>
                               <th className="p-2">Guardar</th>
                             </tr>
                           </thead>
@@ -1975,7 +1990,7 @@ export default function Equipos() {
                                           items: prev.items.map((it) => (it.id === item.id ? { ...it, ...(res?.item || {}) } : it)),
                                         }));
                                       } catch (e) {
-                                        setRevisionErr(e?.message || "No se pudo guardar item.");
+                                        setRevisionErr(e?.message || "No se pudo guardar el elemento.");
                                       } finally {
                                         setSavingItemId(null);
                                       }
@@ -1996,7 +2011,7 @@ export default function Equipos() {
                             <input
                               type="text"
                               className="border rounded p-2 w-full max-w-md"
-                              placeholder="Nuevo item libre (equipo/item)"
+                              placeholder="Nuevo elemento libre (equipo/elemento)"
                               value={newItemName}
                               onChange={(e) => setNewItemName(e.target.value)}
                             />
@@ -2010,16 +2025,16 @@ export default function Equipos() {
                                   setNewItemName("");
                                   await openRevision(revisionOpenId);
                                 } catch (e) {
-                                  setRevisionErr(e?.message || "No se pudo agregar item.");
+                                  setRevisionErr(e?.message || "No se pudo agregar el elemento.");
                                 }
                               }}
                             >
-                              Agregar item
+                              Agregar elemento
                             </button>
                           </div>
 
                           <div className="border rounded p-3 mt-3 bg-gray-50">
-                            <div className="font-medium mb-2">Cerrar revision</div>
+                            <div className="font-medium mb-2">Cerrar revisión</div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                               <label className="block">
                                 <div className="text-xs text-gray-600 mb-1">Fecha realizada</div>
@@ -2046,13 +2061,13 @@ export default function Equipos() {
                                     if (selectedInstitucionId) await loadInstitucionRevisiones(selectedInstitucionId);
                                     if (activeTab === "preventivos") await loadAgenda();
                                   } catch (e) {
-                                    setRevisionErr(e?.message || "No se pudo cerrar la revision.");
+                                    setRevisionErr(e?.message || "No se pudo cerrar la revisión.");
                                   } finally {
                                     setClosingRevision(false);
                                   }
                                 }}
                               >
-                                Cerrar revision
+                                Cerrar revisión
                               </button>
                             </div>
                           </div>
@@ -2099,7 +2114,7 @@ export default function Equipos() {
           error={addInstitutionErr}
           onSubmit={async (form) => {
             if (!form.razon_social.trim() || !form.cod_empresa.trim()) {
-              setAddInstitutionErr("Razon social y codigo empresa son requeridos.");
+              setAddInstitutionErr("Razón social y código de empresa son obligatorios.");
               return;
             }
             try {
@@ -2115,7 +2130,7 @@ export default function Equipos() {
               setAddInstitutionOpen(false);
               await loadInstituciones();
             } catch (e) {
-              setAddInstitutionErr(e?.message || "No se pudo crear la institucion.");
+              setAddInstitutionErr(e?.message || "No se pudo crear la institución.");
             } finally {
               setAddInstitutionSaving(false);
             }
@@ -2200,7 +2215,7 @@ export default function Equipos() {
                           checked={mergeNsChoice === "equipo1"}
                           onChange={() => setMergeNsChoice("equipo1")}
                         />
-                        Equipo 1: {mergeEquipo1?.numero_serie || "(vacio)"}
+                        Equipo 1: {mergeEquipo1?.numero_serie || "(vacío)"}
                       </label>
                       <label className="flex items-center gap-2 mt-2">
                         <input
@@ -2210,7 +2225,7 @@ export default function Equipos() {
                           checked={mergeNsChoice === "equipo2"}
                           onChange={() => setMergeNsChoice("equipo2")}
                         />
-                        Equipo 2: {mergeEquipo2?.numero_serie || "(vacio)"}
+                        Equipo 2: {mergeEquipo2?.numero_serie || "(vacío)"}
                       </label>
                     </div>
                     <div className="border rounded p-3">
@@ -2223,7 +2238,7 @@ export default function Equipos() {
                           checked={mergeMgChoice === "equipo1"}
                           onChange={() => setMergeMgChoice("equipo1")}
                         />
-                        Equipo 1: {mergeEquipo1?.numero_interno || "(vacio)"}
+                        Equipo 1: {mergeEquipo1?.numero_interno || "(vacío)"}
                       </label>
                       <label className="flex items-center gap-2 mt-2">
                         <input
@@ -2233,7 +2248,7 @@ export default function Equipos() {
                           checked={mergeMgChoice === "equipo2"}
                           onChange={() => setMergeMgChoice("equipo2")}
                         />
-                        Equipo 2: {mergeEquipo2?.numero_interno || "(vacio)"}
+                        Equipo 2: {mergeEquipo2?.numero_interno || "(vacío)"}
                       </label>
                     </div>
                   </>

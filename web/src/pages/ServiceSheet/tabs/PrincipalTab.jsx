@@ -1,5 +1,5 @@
 import Row from "../../../components/Row";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { formatDateTime as formatDateTimeHelper, resolveFechaIngreso } from "../../../lib/ui-helpers";
 import { resolutionLabel, estadoLabel } from "../../../lib/constants";
 import { isJefe } from "../../../lib/authz";
@@ -139,7 +139,7 @@ export default function PrincipalTab(props) {
 
   useEffect(() => {
     try {
-      console.log('[PrincipalTab] tecnicos options', { count: (tecnicos || []).length, ids: (tecnicos || []).map(t => t.id) });
+      console.log('[PrincipalTab] técnicos options', { count: (tecnicos || []).length, ids: (tecnicos || []).map(t => t.id) });
     } catch {}
   }, [tecnicos]);
   const _selUb = (ubicacionId ? Number(ubicacionId) : null);
@@ -159,23 +159,42 @@ export default function PrincipalTab(props) {
     return `Ya hay una solicitud pendiente para ${quien}.`;
   })();
 
-  // Cliente: validaci?n contra cat?logo (igual que en NuevoIngreso)
+  // Cliente: validacion contra catalogo (igual que en NuevoIngreso)
+  const normClient = useCallback(
+    (val) =>
+      String(val || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " "),
+    [],
+  );
+  const hasClienteCodCatalog = useMemo(
+    () => (clientes || []).some((c) => String(c?.cod_empresa || "").trim() !== ""),
+    [clientes],
+  );
   const rsMatch = useMemo(() => {
     if (!clienteRsInput) return null;
-    return (clientes || []).find((c) => (c?.razon_social || "").toLowerCase() === clienteRsInput.trim().toLowerCase()) || null;
-  }, [clienteRsInput, clientes]);
+    const needle = normClient(clienteRsInput);
+    if (!needle) return null;
+    return (clientes || []).find((c) => normClient(c?.razon_social) === needle) || null;
+  }, [clienteRsInput, clientes, normClient]);
   const codMatch = useMemo(() => {
-    if (!clienteCodInput) return null;
-    return (clientes || []).find((c) => String(c?.cod_empresa || "").toLowerCase() === clienteCodInput.trim().toLowerCase()) || null;
-  }, [clienteCodInput, clientes]);
+    if (!clienteCodInput || !hasClienteCodCatalog) return null;
+    const needle = normClient(clienteCodInput);
+    if (!needle) return null;
+    return (clientes || []).find((c) => normClient(c?.cod_empresa) === needle) || null;
+  }, [clienteCodInput, clientes, hasClienteCodCatalog, normClient]);
   const clienteMismatch = useMemo(() => {
+    if (!hasClienteCodCatalog) return false;
     return !!(rsMatch && codMatch && rsMatch.id !== codMatch.id);
-  }, [rsMatch, codMatch]);
+  }, [rsMatch, codMatch, hasClienteCodCatalog]);
   const alquilerMatch = useMemo(() => {
-    const val = (data?.alquiler_a || "").trim().toLowerCase();
+    const val = normClient(data?.alquiler_a);
     if (!val) return null;
-    return (clientes || []).find((c) => (c?.razon_social || "").trim().toLowerCase() === val) || null;
-  }, [data?.alquiler_a, clientes]);
+    return (clientes || []).find((c) => normClient(c?.razon_social) === val) || null;
+  }, [data?.alquiler_a, clientes, normClient]);
 
   // Catálogo de accesorios (para alquiler)
   const [accesCatalogo, setAccesCatalogo] = useState([]);
@@ -257,7 +276,7 @@ export default function PrincipalTab(props) {
       await patch({ ubicacion_id: _selUb });
       setErr("");
     } catch (e) {
-      setErr(e?.message || "No se pudo actualizar la ubicacion");
+      setErr(e?.message || "No se pudo actualizar la ubicación.");
     } finally {
       setSavingUb(false);
     }
@@ -294,7 +313,7 @@ export default function PrincipalTab(props) {
         <div className="border rounded p-4">
           <h2 className="font-semibold mb-2">Cliente</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
-            <Row label="Razón  social">
+            <Row label="Razón social">
               {editBasics ? (
                 <>
                   <input
@@ -305,11 +324,15 @@ export default function PrincipalTab(props) {
                       const v = e.target.value;
                       setClienteRsInput(v);
                       const c = syncClienteFromInputs(v, clienteCodInput);
-                      if (c && String(clienteCodInput || "").toLowerCase() !== String(c.cod_empresa || "").toLowerCase()) {
+                      if (
+                        hasClienteCodCatalog
+                        && c
+                        && normClient(clienteCodInput) !== normClient(c.cod_empresa)
+                      ) {
                         setClienteCodInput(c.cod_empresa || "");
                       }
                     }}
-                    placeholder="Elegi de la lista"
+                    placeholder="Elegí de la lista"
                   />
                   {clientesPerm && (
                     <datalist id="service_clientes_rs">
@@ -318,8 +341,8 @@ export default function PrincipalTab(props) {
                       ))}
                     </datalist>
                   )}
-                  {clienteRsInput && !rsMatch && (
-                    <div className="text-xs text-amber-700 mt-1">Selecciona una razón social v?lida de la lista.</div>
+                  {clientesPerm && clienteRsInput && !rsMatch && (
+                    <div className="text-xs text-amber-700 mt-1">Selecciona una razón social válida de la lista.</div>
                   )}
                 </>
               ) : (
@@ -331,29 +354,29 @@ export default function PrincipalTab(props) {
                 <>
                   <input
                     className="border rounded p-1 w-40"
-                    list={clientesPerm ? "service_clientes_cod" : undefined}
+                    list={clientesPerm && hasClienteCodCatalog ? "service_clientes_cod" : undefined}
                     value={clienteCodInput}
                     onChange={(e) => {
                       const v = e.target.value;
                       setClienteCodInput(v);
                       const c = syncClienteFromInputs(clienteRsInput, v);
-                      if (c && clienteRsInput.trim().toLowerCase() !== (c.razon_social || "").toLowerCase()) {
+                      if (c && normClient(clienteRsInput) !== normClient(c.razon_social)) {
                         setClienteRsInput(c.razon_social || "");
                       }
                     }}
-                    placeholder="Elegi de la lista"
+                    placeholder="Elegí de la lista"
                   />
-                  {clientesPerm && (
+                  {clientesPerm && hasClienteCodCatalog && (
                     <datalist id="service_clientes_cod">
                       {(clientes || []).map((c) => (
                         <option key={c.id} value={c.cod_empresa} />
                       ))}
                     </datalist>
                   )}
-                  {clienteCodInput && !codMatch && (
-                    <div className="text-xs text-amber-700 mt-1">Selecciona un código v?lido de la lista.</div>
+                  {clientesPerm && hasClienteCodCatalog && clienteCodInput && !codMatch && (
+                    <div className="text-xs text-amber-700 mt-1">Selecciona un código válido de la lista.</div>
                   )}
-                  {clienteMismatch && (
+                  {clientesPerm && hasClienteCodCatalog && clienteMismatch && (
                     <div className="text-xs text-amber-700 mt-1">La razón social y el código no coinciden.</div>
                   )}
                 </>
@@ -619,6 +642,9 @@ export default function PrincipalTab(props) {
             <Row label="Fecha ingreso">{formatDateTimeHelper(resolveFechaIngreso(data))}</Row>
             <Row label="Fecha servicio">{data.fecha_servicio ? formatDateTimeHelper(data.fecha_servicio) : "-"}</Row>
           </div>
+          <div className="mt-1 text-xs text-gray-500">
+            Ingresado por: {data?.ingresado_por_nombre || (data?.ingresado_por_id ? `ID ${data.ingresado_por_id}` : "-")}
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
             <div>
@@ -631,7 +657,7 @@ export default function PrincipalTab(props) {
                       value={selTecnicoId == null ? "" : String(selTecnicoId)}
                       onChange={(e) => {
                         const v = e.target.value === "" ? null : Number(e.target.value);
-                        console.log('[PrincipalTab] select tecnico change', { prev: selTecnicoId, next: v });
+                        console.log('[PrincipalTab] select técnico change', { prev: selTecnicoId, next: v });
                         setSelTecnicoId(v);
                         setTecnicoId(v);
                       }}
@@ -992,14 +1018,14 @@ export default function PrincipalTab(props) {
             }}
           />
         </Row>
-        <Row label="A quien?">
+        <Row label="¿A quién?">
           <div>
             <input
               className="border rounded p-1 w-80"
               list={clientesPerm ? "alquiler_clientes_rs" : undefined}
               value={data.alquiler_a || ""}
               onChange={(e) => patch({ alquiler_a: e.target.value })}
-              placeholder="Elegi de la lista"
+              placeholder="Elegí de la lista"
             />
             {clientesPerm && (
               <datalist id="alquiler_clientes_rs">
@@ -1009,7 +1035,7 @@ export default function PrincipalTab(props) {
               </datalist>
             )}
             {clientesPerm && (data.alquiler_a || "").trim() && !alquilerMatch && (
-              <div className="text-xs text-amber-700 mt-1">Selecciona un cliente valido de la lista.</div>
+              <div className="text-xs text-amber-700 mt-1">Selecciona un cliente válido de la lista.</div>
             )}
           </div>
         </Row>

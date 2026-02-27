@@ -77,7 +77,7 @@ import { MOTIVO_OPTIONS } from "./constants";
         msg.includes("no autenticado") ||
         msg.includes("token expirado") ||
         msg.includes("token inválido") ||
-        msg.includes("token invalido");
+        msg.includes("token inválido");
       if (looksUnauth) {
         const p = window.location.pathname || "";
         const publicAuth = p.startsWith("/restablecer") || p.startsWith("/recuperar") || p === "/login";
@@ -101,8 +101,10 @@ import { MOTIVO_OPTIONS } from "./constants";
   export const api = {
     get: (p, opts) => http(p, { ...opts, method: "GET" }),
     post: (p, body, opts) => http(p, { ...opts, method: "POST", body }),
+    put: (p, body, opts) => http(p, { ...opts, method: "PUT", body }),
     patch: (p, body, opts) => http(p, { ...opts, method: "PATCH", body }),
     del: (p, opts) => http(p, { ...opts, method: "DELETE" }),
+    delete: (p, opts) => http(p, { ...opts, method: "DELETE" }),
   };
   export default api;
 
@@ -128,6 +130,12 @@ import { MOTIVO_OPTIONS } from "./constants";
   export const patchUsuarioRolePerm = (id, payload) =>
     api.patch(`/api/usuarios/${id}/roleperm/`, payload);
   export const deleteUsuario = (id) => api.del(`/api/usuarios/${id}/`);
+  export const getPermisosCatalogo = () => api.get("/api/permisos/catalogo/");
+  export const getUsuarioPermisos = (id) => api.get(`/api/usuarios/${id}/permisos/`);
+  export const putUsuarioPermisos = (id, payload) =>
+    api.put(`/api/usuarios/${id}/permisos/`, payload);
+  export const postUsuarioPermisosReset = (id) =>
+    api.post(`/api/usuarios/${id}/permisos/reset/`, {});
 
   /* =============== catalogos =============== */
 
@@ -206,7 +214,21 @@ export async function getCatalogVariantes(marcaId, tipoId, modeloId, force = fal
 // Variantes por marca (sugerencias simples)
 export async function getVariantesPorMarca(marcaId) {
   if (!marcaId) return [];
-  return api.get(`/api/catalogo/marcas/${encodeURIComponent(marcaId)}/variantes/`);
+  const rows = await api.get(`/api/catalogo/marcas/${encodeURIComponent(marcaId)}/variantes/`);
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((item) => {
+      if (typeof item === "string") return item;
+      return (
+        item?.variante ??
+        item?.label ??
+        item?.name ??
+        item?.nombre ??
+        ""
+      );
+    })
+    .map((s) => String(s || "").trim())
+    .filter(Boolean);
 }
 
 // Marcas que soportan un tipo dado (por nombre)
@@ -513,7 +535,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   // Bsqueda por referencia de accesorio
   export const buscarAccesorioPorRef = (ref) =>
     api.get(`/api/accesorios/buscar/?ref=${encodeURIComponent(ref||"")}`);
-  // Lectura de QR / codigo de barras
+  // Lectura de QR / código de barras
   export const lookupScan = (code) =>
     api.get(`/api/scan/lookup/?code=${encodeURIComponent(code||"")}`);
   // Entregar (requiere remito; opcional factura y fecha; si resolucion=cambio: serial_confirm requerido)
@@ -654,7 +676,7 @@ export const postModelo = (brandId, payloadOrNombre) => {
   }
 
   export const patchIngresoTecnico = (ingresoId, tecnico_id) =>
-    api.patch(`/api/ingresos/${ingresoId}/asignar-tecnico/`, { tecnico_id });
+    api.patch(`/api/ingresos/${ingresoId}/asignar-técnico/`, { tecnico_id });
 
   // Solicitud de asignacin por tcnico
   export const postSolicitarAsignacion = (ingresoId) =>
@@ -662,23 +684,23 @@ export const postModelo = (brandId, payloadOrNombre) => {
 
   export const patchModeloTecnico = (marcaId, modeloId, tecnico_id) =>
     api.patch(
-      `/api/catalogos/marcas/${marcaId}/modelos/${modeloId}/tecnico/`,
+      `/api/catálogos/marcas/${marcaId}/modelos/${modeloId}/técnico/`,
       { tecnico_id }
     );
 
   // Variante simple por modelo (v1)
   export const patchModeloVariante = (marcaId, modeloId, variante) =>
     api.patch(
-      `/api/catalogos/marcas/${marcaId}/modelos/${modeloId}/variante/`,
+      `/api/catálogos/marcas/${marcaId}/modelos/${modeloId}/variante/`,
       { variante }
     );
 
   export const patchMarcaTecnico = (marcaId, tecnico_id) =>
-    api.patch(`/api/catalogos/marcas/${marcaId}/tecnico/`, { tecnico_id });
+    api.patch(`/api/catálogos/marcas/${marcaId}/técnico/`, { tecnico_id });
 
   // Aplica el tcnico de la marca a TODOS los modelos (sobrescribe)
   export const postMarcaAplicarTecnico = (marcaId) =>
-    api.post(`/api/catalogos/marcas/${marcaId}/tecnico/aplicar-a-modelos/`);
+    api.post(`/api/catálogos/marcas/${marcaId}/técnico/aplicar-a-modelos/`);
 
   /* =============== PRESUPUESTOS =============== */
   export const getQuote = (ingresoId) => api.get(`/api/quotes/${ingresoId}/`);

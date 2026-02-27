@@ -162,7 +162,7 @@ export default function Metricas() {
 
   const activeFilters = useMemo(() => {
     const items = [];
-    if (tecnicoId) items.push({ key: "tecnico", label: `Tecnico: ${tecnicoMap.get(String(tecnicoId)) || tecnicoId}` });
+    if (tecnicoId) items.push({ key: "tecnico", label: `Técnico: ${tecnicoMap.get(String(tecnicoId)) || tecnicoId}` });
     if (marcaId) items.push({ key: "marca", label: `Marca: ${marcaMap.get(String(marcaId)) || marcaId}` });
     if (tipoEquipo) items.push({ key: "tipo", label: `Tipo: ${tipoMap.get(String(tipoEquipo)) || tipoEquipo}` });
     if (!slaExclDer) items.push({ key: "sla", label: "SLA: incluye derivados" });
@@ -505,8 +505,8 @@ export default function Metricas() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Metricas</h1>
-          <div className="text-sm text-gray-500">Indicadores operativos para tecnicos, con foco en tiempos, SLA y volumen.</div>
+          <h1 className="text-xl font-semibold">Métricas</h1>
+          <div className="text-sm text-gray-500">Indicadores operativos para técnicos, con foco en tiempos, SLA y volumen.</div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={openConfig} className="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">Configurar</button>
@@ -518,7 +518,7 @@ export default function Metricas() {
             <button
               onClick={() => setShowCharts(true)}
               className={`px-3 py-1.5 border-l ${showCharts ? "bg-gray-100 font-semibold" : "bg-white hover:bg-gray-50"}`}
-            >Graficos</button>
+            >Gráficos</button>
           </div>
         </div>
       </div>
@@ -583,10 +583,10 @@ export default function Metricas() {
         </div>
 
         <div className="flex flex-wrap gap-2 items-center">
-          <div className="text-xs text-gray-500 mr-2">Rangos rapidos</div>
-          <QuickRangeButton label="7 dias" active={rangeDays === 7} onClick={() => applyQuickRange(7)} />
-          <QuickRangeButton label="30 dias" active={rangeDays === 30} onClick={() => applyQuickRange(30)} />
-          <QuickRangeButton label="90 dias" active={rangeDays === 90} onClick={() => applyQuickRange(90)} />
+          <div className="text-xs text-gray-500 mr-2">Rangos rápidos</div>
+          <QuickRangeButton label="7 días" active={rangeDays === 7} onClick={() => applyQuickRange(7)} />
+          <QuickRangeButton label="30 días" active={rangeDays === 30} onClick={() => applyQuickRange(30)} />
+          <QuickRangeButton label="90 días" active={rangeDays === 90} onClick={() => applyQuickRange(90)} />
           <QuickRangeButton
             label="YTD"
             active={desdeClamped === `${new Date().getFullYear()}-01-01` && hasta === new Date().toISOString().slice(0, 10)}
@@ -651,16 +651,16 @@ export default function Metricas() {
           <button onClick={exportTablasExcel} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Tablas (Excel)</button>
           <button onClick={() => exportSeriesExcel("monthly")} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Series mensuales</button>
           <button onClick={() => exportSeriesExcel("yearly")} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Series anuales</button>
-          <button onClick={exportDetalleTecnicoMensual} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Detalle tecnico</button>
+          <button onClick={exportDetalleTecnicoMensual} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Detalle técnico</button>
           <button onClick={exportDetalleMarcaMensual} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Detalle marca</button>
           <button onClick={exportDetalleTipoMensual} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Detalle tipo</button>
-          <button onClick={exportCalibracionExcel} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Calibracion</button>
+          <button onClick={exportCalibracionExcel} className="px-2.5 py-1 border rounded text-xs bg-white hover:bg-gray-50">Calibración</button>
         </div>
       </div>
 
-      {loading && <div className="text-gray-500">Cargando metricas</div>}
+      {loading && <div className="text-gray-500">Cargando métricas</div>}
       {error && (
-        <div className="text-red-600">Error al cargar metricas</div>
+        <div className="text-red-600">Error al cargar métricas</div>
       )}
 
       {data && (
@@ -717,7 +717,7 @@ export default function Metricas() {
             <StatCard
               label="WIP total"
               value={formatNumber(totalWip)}
-              help="Suma por tecnico"
+              help="Suma por técnico"
             />
             <StatCard
               label="Derivados externos (WIP)"
@@ -1119,6 +1119,7 @@ function MiniSpark({ title, values = [], fmt = (v)=>v }) {
     </div>
   );
 }
+
 
 
 

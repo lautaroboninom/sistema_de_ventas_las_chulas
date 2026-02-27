@@ -35,7 +35,7 @@ def _parse_decimal_field(val, label, allow_none=False):
     try:
         return Decimal(s)
     except InvalidOperation:
-        raise ValidationError(f"{label} invalido")
+        raise ValidationError(f"{label} inválido")
 
 
 def _parse_int_decimal_field(val, label, allow_none=False):
@@ -92,7 +92,7 @@ def _parse_date_field(val, label):
     try:
         return dt.date.fromisoformat(s)
     except ValueError:
-        raise ValidationError(f"{label} invalido")
+        raise ValidationError(f"{label} inválido")
 
 
 def _parse_int_field(val, label):
@@ -101,7 +101,7 @@ def _parse_int_field(val, label):
     try:
         return int(val)
     except (TypeError, ValueError):
-        raise ValidationError(f"{label} invalido")
+        raise ValidationError(f"{label} inválido")
 
 
 def _parse_subrubro_codigo(val):
@@ -109,7 +109,7 @@ def _parse_subrubro_codigo(val):
     if not code:
         raise ValidationError("subrubro_codigo requerido")
     if not (code.isdigit() and len(code) == 4):
-        raise ValidationError("subrubro_codigo invalido")
+        raise ValidationError("subrubro_codigo inválido")
     return code
 
 
@@ -458,7 +458,7 @@ class RepuestosSubrubrosView(APIView):
                 raise ValidationError("nombre ya existe")
 
             if row and row.get("activo"):
-                raise ValidationError("codigo ya existe")
+                raise ValidationError("código ya existe")
             if row:
                 exec_void(
                     """
@@ -737,7 +737,7 @@ class RepuestosView(APIView):
             if forbidden:
                 raise PermissionDenied("No autorizado para editar detalles")
         if _clean_text(d.get("codigo")):
-            raise ValidationError("codigo no permitido; use subrubro_codigo")
+            raise ValidationError("código no permitido; use subrubro_codigo")
         subrubro_codigo = _parse_subrubro_codigo(d.get("subrubro_codigo"))
         nombre = _clean_text(d.get("nombre"))
         if not nombre:
@@ -756,7 +756,7 @@ class RepuestosView(APIView):
         if is_manager:
             mult = _parse_decimal_field(d.get("multiplicador"), "multiplicador", allow_none=True)
             if mult is not None and mult <= 0:
-                raise ValidationError("multiplicador invalido")
+                raise ValidationError("multiplicador inválido")
             if mult is not None:
                 mult = mult.quantize(FOUR_DEC)
 
@@ -765,7 +765,7 @@ class RepuestosView(APIView):
             costo_usd = _parse_decimal_field(d.get("costo_usd"), "costo_usd", allow_none=True)
             if costo_usd is not None:
                 if costo_usd < 0:
-                    raise ValidationError("costo_usd invalido")
+                    raise ValidationError("costo_usd inválido")
                 costo_usd = money(costo_usd)
 
         detail_text_fields = [
@@ -793,7 +793,7 @@ class RepuestosView(APIView):
         with transaction.atomic():
             subrubro = _lock_subrubro(subrubro_codigo)
             if not subrubro:
-                raise ValidationError("subrubro invalido")
+                raise ValidationError("subrubro inválido")
             next_num = _get_next_subrubro_num(subrubro_codigo)
             if not next_num:
                 raise ValidationError("Sin codigos disponibles para el subrubro")
@@ -804,7 +804,7 @@ class RepuestosView(APIView):
                 one=True,
             )
             if exists:
-                raise ValidationError("codigo ya existe")
+                raise ValidationError("código ya existe")
             new_id = exec_returning(
                 """
                 INSERT INTO catalogo_repuestos
@@ -895,7 +895,7 @@ class RepuestoDetailView(APIView):
             raw = d.get("multiplicador")
             mult = _parse_decimal_field(raw, "multiplicador", allow_none=True)
             if mult is not None and mult <= 0:
-                raise ValidationError("multiplicador invalido")
+                raise ValidationError("multiplicador inválido")
             if mult is not None:
                 mult = mult.quantize(FOUR_DEC)
             sets.append("multiplicador=%s"); params.append(mult)
@@ -906,7 +906,7 @@ class RepuestoDetailView(APIView):
             costo = _parse_decimal_field(d.get("costo_usd"), "costo_usd", allow_none=True)
             if costo is not None:
                 if costo < 0:
-                    raise ValidationError("costo_usd invalido")
+                    raise ValidationError("costo_usd inválido")
                 costo = money(costo)
             sets.append("costo_usd=%s"); params.append(costo)
 
@@ -1145,9 +1145,9 @@ class RepuestosConfigView(APIView):
         if dolar is None or mult is None:
             raise ValidationError("Valores invalidos")
         if dolar <= 0:
-            raise ValidationError("dolar_ars invalido")
+            raise ValidationError("dolar_ars inválido")
         if mult <= 0:
-            raise ValidationError("multiplicador_general invalido")
+            raise ValidationError("multiplicador_general inválido")
         dolar = Decimal(dolar).quantize(FOUR_DEC)
         mult = Decimal(mult).quantize(FOUR_DEC)
 
@@ -1219,9 +1219,9 @@ class RepuestosStockPermisosView(APIView):
             one=True,
         )
         if not trow or not trow.get("activo"):
-            raise ValidationError("tecnico no encontrado")
+            raise ValidationError("técnico no encontrado")
         if (trow.get("rol") or "").strip().lower() != "tecnico":
-            raise ValidationError("usuario no es tecnico")
+            raise ValidationError("usuario no es técnico")
 
         expires_at = timezone.now() + dt.timedelta(hours=24)
         exec_void(
@@ -1301,7 +1301,7 @@ class RepuestosCompraMovimientoView(APIView):
         if not repuesto_id:
             raise ValidationError("repuesto_id requerido")
         if repuesto_id <= 0:
-            raise ValidationError("repuesto_id invalido")
+            raise ValidationError("repuesto_id inválido")
 
         cantidad = _parse_int_decimal_field(d.get("cantidad"), "cantidad")
         if cantidad <= 0:
@@ -1314,7 +1314,7 @@ class RepuestosCompraMovimientoView(APIView):
         proveedor_raw = d.get("proveedor_id")
         proveedor_id = _parse_int_field(proveedor_raw, "proveedor_id")
         if proveedor_raw not in (None, "") and (not proveedor_id or proveedor_id <= 0):
-            raise ValidationError("proveedor_id invalido")
+            raise ValidationError("proveedor_id inválido")
         proveedor_nombre = _clean_text(d.get("proveedor_nombre"))
         if proveedor_id and proveedor_nombre:
             raise ValidationError("proveedor_id y proveedor_nombre son excluyentes")
@@ -1345,7 +1345,7 @@ class RepuestosCompraMovimientoView(APIView):
                     one=True,
                 )
                 if not proveedor_row:
-                    raise ValidationError("proveedor_id invalido")
+                    raise ValidationError("proveedor_id inválido")
             elif proveedor_nombre:
                 proveedor_id = _get_or_create_proveedor(proveedor_nombre)
                 proveedor_row = q(
@@ -1470,7 +1470,7 @@ class RepuestosMovimientosView(APIView):
             try:
                 rep_id = int(rep_id_raw)
             except ValueError:
-                raise ValidationError("repuesto_id invalido")
+                raise ValidationError("repuesto_id inválido")
             where.append("m.repuesto_id=%s")
             params.append(rep_id)
 

@@ -118,6 +118,29 @@ class CatalogoModelosView(APIView):
         return Response(rows)
 
 
+class CatalogoVariantesPorMarcaView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, bid):
+        try:
+            marca_id = int(bid)
+        except (TypeError, ValueError):
+            return Response({"detail": "marca_id inválido"}, status=400)
+
+        rows = q(
+            """
+            SELECT DISTINCT TRIM(variante) AS variante
+            FROM models
+            WHERE marca_id=%s
+              AND NULLIF(TRIM(COALESCE(variante, '')), '') IS NOT NULL
+            ORDER BY TRIM(variante)
+            """,
+            [marca_id],
+        ) or []
+        out = [r.get("variante") for r in rows if (r.get("variante") or "").strip()]
+        return Response(out)
+
+
 class CatalogoUbicacionesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
@@ -928,6 +951,7 @@ class MarcaDeleteCascadeView(APIView):
 __all__ = [
     'CatalogoMarcasView',
     'CatalogoModelosView',
+    'CatalogoVariantesPorMarcaView',
     'CatalogoUbicacionesView',
     'ModeloVarianteView',
     'ModelosPorMarcaView',

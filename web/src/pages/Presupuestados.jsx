@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import api, { downloadAuth, getBlob } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { can, PERMISSION_CODES } from "../lib/permissions";
 import {
   catalogEquipmentLabel,
   formatDateOnly,
@@ -32,7 +33,7 @@ export default function JefePresupuestos() {
   const [exporting, setExporting] = useState(false);
 
   const navigate = useNavigate();
-  const canApprove = user?.rol === "jefe";
+  const canApprove = can(user, PERMISSION_CODES.ACTION_PRESUPUESTO_MANAGE);
 
   async function load() {
     try {

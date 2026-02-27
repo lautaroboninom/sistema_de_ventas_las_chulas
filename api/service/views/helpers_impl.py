@@ -1,4 +1,4 @@
-﻿from django.db import connection
+from django.db import connection
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
@@ -12,6 +12,8 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 
 from ..constants import DEFAULT_LOCATION_NAMES, LOCATION_NAME_REMAPS
+from ..permission_policy import resolve_permission_code_for_request
+from ..permissions import permissions_v2_enabled, require_any_permission, require_permission
 
 
 # ---- Auth/login throttling constants ----
@@ -209,14 +211,14 @@ def _set_audit_user(request):
             cur.execute("SET app.user_role = %s;", [role])
 
 
-_SUSPECT_UTF8 = ("\ufffd", "Ãƒ", "Ã‚")  # U+FFFD replacement char and common mojibake lead bytes
+_SUSPECT_UTF8 = ("\ufffd", "Ã", "Â")  # U+FFFD replacement char and common mojibake lead bytes
 
 
 def _fix_text_value(val):
     """Best-effort decode/fix for mojibake coming from legacy DB enum/latin1.
 
     - If bytes, try utf-8 then latin1, finally utf-8 with ignore.
-    - If str contains obvious mojibake (ï¿½ / Ãƒ / Ã‚), attempt latin1->utf8 roundtrip.
+    - If str contains obvious mojibake (� / Ã / Â), attempt latin1->utf8 roundtrip.
     """
     if isinstance(val, bytes):
         for enc in ("utf-8", "latin1"):
@@ -332,11 +334,11 @@ def _get_motivo_enum_values() -> list:
         pass
     return [
         "urgente control",
-        "reparación",
+        "reparacion",
         "service preventivo",
         "baja alquiler",
-        "reparación alquiler",
-        "devolución demo",
+        "reparacion alquiler",
+        "devolucion demo",
         "otros",
     ]
 
@@ -409,7 +411,22 @@ def _rol(request):
     return getattr(request.user, "rol", None) or (getattr(request.user, "data", {}) or {}).get("rol")
 
 
+def _require_mapped_permission(request):
+    if not permissions_v2_enabled():
+        return False
+    code = resolve_permission_code_for_request(request)
+    if not code:
+        return False
+    if isinstance(code, (list, tuple, set)):
+        require_any_permission(request, code)
+        return True
+    require_permission(request, code)
+    return True
+
+
 def require_roles(request, roles):
+    if _require_mapped_permission(request):
+        return
     r = _rol(request)
     expanded = set(roles)
     if "jefe" in expanded:
@@ -420,6 +437,8 @@ def require_roles(request, roles):
 
 
 def require_roles_strict(request, roles):
+    if _require_mapped_permission(request):
+        return
     r = _rol(request)
     if r not in set(roles):
         from rest_framework.exceptions import PermissionDenied

@@ -4,6 +4,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from ..permissions import require_any_permission
 from .helpers import exec_void, q, require_roles, _set_audit_user
 
 
@@ -11,6 +12,10 @@ class CustomersListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        require_any_permission(
+            request,
+            ["page.home_search", "action.ingreso.edit_basics", "action.ingreso.create", "page.new_ingreso"],
+        )
         return Response(q("SELECT id, razon_social FROM customers ORDER BY razon_social;"))
 
 

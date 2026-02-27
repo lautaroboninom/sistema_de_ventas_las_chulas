@@ -1,5 +1,5 @@
 // web/src/pages/ServiceSheet.jsx (container)
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   getIngreso, getUbicaciones, patchIngreso,
@@ -10,6 +10,7 @@ import {
   postBajaIngreso,
   postAltaIngreso,
   getClientes,
+  getClientesBasico,
   getMotivos,
 } from "../lib/api";
 import { getMarcas, getModelosByBrand, getVariantesPorMarca, checkGarantiaFabrica, patchModeloTipoEquipo } from "../lib/api";
@@ -21,7 +22,8 @@ import {
   resolveFechaCreacion,
 } from "../lib/ui-helpers";
 import { estadoLabel } from "../lib/constants";
-import { canActAsTech, canRelease, hasAnyRole, ROLES } from "../lib/authz";
+import { canActAsTech, ROLES } from "../lib/authz";
+import { can, PERMISSION_CODES } from "../lib/permissions";
 import ArchivosTab from "./ServiceSheet/tabs/ArchivosTab";
 import HistorialTab from "./ServiceSheet/tabs/HistorialTab";
 import PresupuestoTab from "./ServiceSheet/tabs/PresupuestoTab";
@@ -54,18 +56,18 @@ export default function ServiceSheet() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  const isJefe = user?.rol === ROLES.JEFE;
-  const isJefeVeedor = user?.rol === ROLES.JEFE_VEEDOR;
-  const isAdmin = user?.rol === ROLES.ADMIN;
   const isTech = user?.rol === ROLES.TECNICO;
 
   const actAsTech = canActAsTech(user);
-  const release = canRelease(user);
-  const canEditBasics = isJefe || isAdmin || isJefeVeedor;
-  const canAssignTecnico = isJefe || isAdmin || isJefeVeedor;
-  const canManagePresupuesto = isJefe;
-  const canSeeCosts = isJefe || isJefeVeedor;
-  const canSeeHistory = isJefe || isAdmin || isJefeVeedor || isTech;
+  const canEditBasics = can(user, PERMISSION_CODES.ACTION_INGRESO_EDIT_BASICS);
+  const canAssignTecnico = can(user, PERMISSION_CODES.ACTION_INGRESO_CHANGE_ASSIGNMENT);
+  const canManagePresupuesto = can(user, PERMISSION_CODES.ACTION_PRESUPUESTO_MANAGE);
+  const canSeeCosts = can(user, PERMISSION_CODES.ACTION_PRESUPUESTO_VIEW_COSTS);
+  const canSeeHistory = can(user, PERMISSION_CODES.PAGE_INGRESOS_HISTORY);
+  const canEditDiagPermission = can(user, PERMISSION_CODES.ACTION_INGRESO_EDIT_DIAGNOSIS);
+  const canRepairTransitions = can(user, PERMISSION_CODES.ACTION_INGRESO_REPAIR_TRANSITIONS);
+  const canReleaseOrder = can(user, PERMISSION_CODES.ACTION_INGRESO_PRINT_EXIT_ORDER);
+  const canBajaAltaPermission = can(user, PERMISSION_CODES.ACTION_INGRESO_BAJA_ALTA);
 
   // pestañas
   const [tab, setTab] = useState("principal");
@@ -103,7 +105,7 @@ export default function ServiceSheet() {
 
   // entrega
   const [entrega, setEntrega] = useState({ remito_salida: "", factura_numero: "", fecha_entrega: "", serial_confirm: "" });
-  const canEditEntrega = hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.RECEPCION]);
+  const canEditEntrega = can(user, PERMISSION_CODES.ACTION_INGRESO_EDIT_DELIVERY);
   const [editEntrega, setEditEntrega] = useState(false);
   const [savingEntrega, setSavingEntrega] = useState(false);
 
@@ -154,7 +156,7 @@ export default function ServiceSheet() {
   const [relatedErr, setRelatedErr] = useState("");
   const [relatedRows, setRelatedRows] = useState([]);
 
-  // Catlogo de Equipo (para editar Marca/Modelo/Variante)
+  // Catalogo de Equipo (para editar Marca/Modelo/Variante)
   const [marcas, setMarcas] = useState([]);
   const [marcaIdSel, setMarcaIdSel] = useState(null);
   const [modelos, setModelos] = useState([]);
@@ -163,7 +165,7 @@ export default function ServiceSheet() {
   const [varSugeridas, setVarSugeridas] = useState([]);
   const [motivos, setMotivos] = useState([]);
 
-  // edición bsica
+  // edicion basica
   const [editBasics, setEditBasics] = useState(false);
   const [formBasics, setFormBasics] = useState(null);
   const [savingBasics, setSavingBasics] = useState(false);
@@ -173,24 +175,47 @@ export default function ServiceSheet() {
   const [savingAlta, setSavingAlta] = useState(false);
 
   // Helpers de clientes (validación de selección)
+  const normalizeClientText = useCallback(
+    (val) =>
+      String(val || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " "),
+    [],
+  );
+  const hasClienteCodCatalog = useMemo(
+    () => (clientes || []).some((c) => String(c?.cod_empresa || "").trim() !== ""),
+    [clientes],
+  );
   const findClienteByRS = useCallback(
-    (v) => (clientes || []).find((c) => (c?.razon_social || "").toLowerCase() === String(v || "").trim().toLowerCase()),
-    [clientes]
+    (v) => {
+      const needle = normalizeClientText(v);
+      if (!needle) return null;
+      return (clientes || []).find((c) => normalizeClientText(c?.razon_social) === needle) || null;
+    },
+    [clientes, normalizeClientText],
   );
   const findClienteByCod = useCallback(
-    (v) => (clientes || []).find((c) => String(c?.cod_empresa || "").toLowerCase() === String(v || "").trim().toLowerCase()),
-    [clientes]
+    (v) => {
+      if (!hasClienteCodCatalog) return null;
+      const needle = normalizeClientText(v);
+      if (!needle) return null;
+      return (clientes || []).find((c) => normalizeClientText(c?.cod_empresa) === needle) || null;
+    },
+    [clientes, hasClienteCodCatalog, normalizeClientText],
   );
   const resolveCliente = useCallback(
     (rsVal, codVal) => {
       const byRs = rsVal ? findClienteByRS(rsVal) : null;
       const byCod = codVal ? findClienteByCod(codVal) : null;
-      if (byRs && !codVal) return byRs;
+      if (byRs && (!codVal || !hasClienteCodCatalog)) return byRs;
       if (byCod && !rsVal) return byCod;
       if (byRs && byCod && byRs.id === byCod.id) return byRs;
       return null;
     },
-    [findClienteByCod, findClienteByRS]
+    [findClienteByCod, findClienteByRS, hasClienteCodCatalog]
   );
   const syncClienteFromInputs = useCallback(
     (rsVal, codVal) => {
@@ -208,6 +233,28 @@ export default function ServiceSheet() {
     },
     [resolveCliente]
   );
+
+  const loadClientesCatalogo = useCallback(async () => {
+    try {
+      const full = await getClientes();
+      const rows = Array.isArray(full) ? full : [];
+      setClientes(rows);
+      setClientesPerm(true);
+      return rows;
+    } catch (_) {
+      try {
+        const basic = await getClientesBasico();
+        const rows = Array.isArray(basic) ? basic : [];
+        setClientes(rows);
+        setClientesPerm(true);
+        return rows;
+      } catch (e) {
+        setClientesPerm(false);
+        setClientes([]);
+        throw e;
+      }
+    }
+  }, []);
 
   function money(n) {
     if (n == null) return "-";
@@ -334,7 +381,7 @@ export default function ServiceSheet() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [actionsOpen]);
 
-  // Activar edición bsica
+  // Activar edicion basica
   function startEditBasics() {
     setFormBasics({
       razon_social: data?.razon_social || "",
@@ -359,9 +406,7 @@ export default function ServiceSheet() {
     (async () => {
       try {
         if (!clientes.length) {
-          const list = await getClientes();
-          setClientesPerm(true);
-          setClientes(Array.isArray(list) ? list : []);
+          await loadClientesCatalogo();
         }
       } catch (e) {
         setClientesPerm(false);
@@ -412,33 +457,50 @@ export default function ServiceSheet() {
   async function saveEditBasics() {
     if (!formBasics) { setEditBasics(false); return; }
     let clienteSel = resolveCliente(clienteRsInput, clienteCodInput);
+    let hasCodCatalogRuntime = hasClienteCodCatalog;
     if (!clienteSel) {
       try {
-        const list = await getClientes();
-        setClientesPerm(true);
-        setClientes(Array.isArray(list) ? list : []);
+        const list = await loadClientesCatalogo();
         const arr = Array.isArray(list) ? list : [];
+        const hasCodInArr = arr.some((c) => String(c?.cod_empresa || "").trim() !== "");
+        hasCodCatalogRuntime = hasCodInArr;
         const byRs = clienteRsInput
-          ? arr.find((c) => (c?.razon_social || "").toLowerCase() === clienteRsInput.trim().toLowerCase())
+          ? arr.find((c) => normalizeClientText(c?.razon_social) === normalizeClientText(clienteRsInput))
           : null;
-        const byCod = clienteCodInput
-          ? arr.find((c) => String(c?.cod_empresa || "").toLowerCase() === clienteCodInput.trim().toLowerCase())
+        const byCod = hasCodInArr && clienteCodInput
+          ? arr.find((c) => normalizeClientText(c?.cod_empresa) === normalizeClientText(clienteCodInput))
           : null;
-        if (byRs && !clienteCodInput) clienteSel = byRs;
+        if (byRs && (!clienteCodInput || !hasCodInArr)) clienteSel = byRs;
         else if (byCod && !clienteRsInput) clienteSel = byCod;
         else if (byRs && byCod && byRs.id === byCod.id) clienteSel = byRs;
       } catch (e) {
         setClientesPerm(false);
       }
     }
+    const rsInputNorm = normalizeClientText(clienteRsInput);
+    const rsCurrentNorm = normalizeClientText(data?.razon_social);
+    const codInputNorm = normalizeClientText(clienteCodInput);
+    const codCurrentNorm = normalizeClientText(data?.cod_empresa);
+    const clienteInputsUnchanged =
+      rsInputNorm === rsCurrentNorm &&
+      (!hasCodCatalogRuntime || codInputNorm === codCurrentNorm);
+    if (!clienteSel && clienteInputsUnchanged) {
+      clienteSel = {
+        id: data?.customer_id ?? data?.cliente_id ?? data?.customerId ?? null,
+        razon_social: data?.razon_social || clienteRsInput || "",
+        cod_empresa: data?.cod_empresa || clienteCodInput || "",
+      };
+    }
     if (!clienteSel) {
-      setErr("Debes seleccionar un cliente válido de la lista (razón social y código).");
+      setErr("Debes seleccionar un cliente valido de la lista.");
       return;
     }
     const diff = {};
     const cmp = (a, b) => (a ?? "") !== (b ?? "");
     if (cmp(clienteSel.razon_social, data?.razon_social)) diff.razon_social = clienteSel.razon_social;
-    if (cmp(clienteSel.cod_empresa, data?.cod_empresa)) diff.cod_empresa = clienteSel.cod_empresa;
+    if (hasCodCatalogRuntime && cmp(clienteSel.cod_empresa, data?.cod_empresa)) {
+      diff.cod_empresa = clienteSel.cod_empresa;
+    }
     const currentCid = data?.customer_id ?? data?.cliente_id ?? data?.customerId ?? data?.customerId ?? null;
     if (clienteSel.id && Number(clienteSel.id) !== Number(currentCid)) diff.customer_id = Number(clienteSel.id);
     const telefonoNuevo = (formBasics.telefono || "").trim();
@@ -505,7 +567,7 @@ export default function ServiceSheet() {
 
   async function marcarBaja() {
     if (savingBaja || savingAlta) return;
-    const ok = window.confirm("Dar BAJA al equipo? Esta accion marcara el ingreso como baja.");
+    const ok = window.confirm("Dar BAJA al equipo? Esta acción marcará el ingreso como baja.");
     if (!ok) return;
     try {
       setSavingBaja(true);
@@ -523,7 +585,7 @@ export default function ServiceSheet() {
 
   async function marcarAlta() {
     if (savingAlta || savingBaja) return;
-    const ok = window.confirm("Dar ALTA al equipo? Esta accion cambiara el ingreso a estado ingresado.");
+    const ok = window.confirm("Dar ALTA al equipo? Esta acción cambiará el ingreso a estado ingresado.");
     if (!ok) return;
     try {
       setSavingAlta(true);
@@ -539,7 +601,7 @@ export default function ServiceSheet() {
     }
   }
 
-  // cargar catlogos base
+  // cargar catalogos base
   useEffect(() => { (async () => { try { setAccesCatalogo(await getAccesoriosCatalogo()); } catch {} })(); }, []);
   useEffect(() => { (async () => { try { setMarcas(await getMarcas()); } catch {} })(); }, []);
   useEffect(() => { (async () => { try { const list = await getMotivos(); setMotivos(Array.isArray(list) ? list : []); } catch { setMotivos([]); } })(); }, []);
@@ -548,14 +610,12 @@ export default function ServiceSheet() {
     clientesLoadedRef.current = true;
     (async () => {
       try {
-        const list = await getClientes();
-        setClientesPerm(true);
-        setClientes(Array.isArray(list) ? list : []);
+        await loadClientesCatalogo();
       } catch (e) {
         setClientesPerm(false);
       }
     })();
-  }, []);
+  }, [loadClientesCatalogo]);
   useEffect(() => {
     if (!editBasics) return;
     if (!marcaIdSel) { setModelos([]); setModeloIdSel(null); setVarSugeridas([]); return; }
@@ -627,7 +687,7 @@ export default function ServiceSheet() {
     // respetar permisos de edición
     const userId = Number(user?.id || 0);
     const assignedToMe = userId && data?.asignado_a === userId;
-    const canEditDiagLocal = isJefe || isAdmin || ((isTech || isJefeVeedor) && assignedToMe);
+    const canEditDiagLocal = canEditDiagPermission && (canAssignTecnico || assignedToMe);
     if (!canEditDiagLocal) return;
     if (isEntregadoOBaja) return;
 
@@ -659,16 +719,16 @@ export default function ServiceSheet() {
   }, [descripcion, trabajos, fechaServStr, data, user]);
 
   if (!data) return <div className="p-4">Cargando...</div>;
-  const isAprobado = data.presupuesto_estado === "aprobado";
   const numeroSerie = (data?.numero_serie || "").trim();
   const userId = Number(user?.id || 0);
   const assignedToMe = userId && data?.asignado_a === userId;
-  const canManagePhotos = isJefe || isAdmin || isJefeVeedor || (isTech && userId);
-  const canEditDiag = isJefe || isAdmin || ((isTech || isJefeVeedor) && assignedToMe);
-  const canMarkReparado = canEditDiag;
-  const canResolve = isJefe || isAdmin || (isJefeVeedor && assignedToMe);
-  const canAutorizarReparar = isJefe || isAdmin || (isJefeVeedor && assignedToMe);
-  const canDarBaja = hasAnyRole(user, [ROLES.JEFE, ROLES.JEFE_VEEDOR, ROLES.ADMIN, ROLES.RECEPCION]);
+  const canEditDiag = canEditDiagPermission && (canAssignTecnico || assignedToMe);
+  const canManagePhotos = canEditDiag;
+  const canMarkReparado = canRepairTransitions && (canAssignTecnico || assignedToMe);
+  const canResolve = canRepairTransitions && (canAssignTecnico || assignedToMe);
+  const canAutorizarReparar = canRepairTransitions && (canAssignTecnico || assignedToMe);
+  const canDarBaja = canBajaAltaPermission;
+  const canEditAccesorios = canEditDiag;
   const hasMenuActions = Boolean(canSeeHistory || numeroSerie || canDarBaja);
 
   return (
@@ -690,7 +750,7 @@ export default function ServiceSheet() {
               aria-expanded={actionsOpen ? "true" : "false"}
               aria-label="Acciones"
             >
-              <span aria-hidden className="text-xl leading-none">⋮</span>
+              <span aria-hidden className="text-xl leading-none">{"\u22EE"}</span>
             </button>
             {actionsOpen && (
               <div className="absolute right-0 mt-2 w-56 rounded border bg-white shadow-lg z-20">
@@ -701,7 +761,7 @@ export default function ServiceSheet() {
                       onClick={() => { setRelatedOpen(true); setActionsOpen(false); }}
                       className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
                     >
-                      Ingresos del equipos
+                      Ingresos del equipo
                     </button>
                   )}
                   {canSeeHistory && (
@@ -765,7 +825,7 @@ export default function ServiceSheet() {
           id={id}
           data={data}
           user={user}
-          release={release}
+          release={canReleaseOrder}
           numeroSerie={numeroSerie}
           editBasics={editBasics}
           formBasics={formBasics}
@@ -816,7 +876,7 @@ export default function ServiceSheet() {
         <DiagnosticoTab
           id={id}
           data={data}
-          canEditAcc={hasAnyRole(user, [ROLES.JEFE, ROLES.ADMIN, ROLES.JEFE_VEEDOR, ROLES.TECNICO, ROLES.RECEPCION]) && !isEntregadoOBaja}
+          canEditAcc={canEditAccesorios && !isEntregadoOBaja}
           accesCatalogo={accesCatalogo}
           nuevoAcc={nuevoAcc}
           setNuevoAcc={setNuevoAcc}
@@ -946,7 +1006,7 @@ export default function ServiceSheet() {
         <HistorialTab hErr={hErr} hLoading={hLoading} hist={hist} />
       )}
 
-      {/* Botón flotante para edición bsica */}
+      {/* Boton flotante para edicion basica */}
       {canEditBasics && (
         <div className="fixed bottom-4 right-4 z-20 flex gap-2">
           {!editBasics ? (

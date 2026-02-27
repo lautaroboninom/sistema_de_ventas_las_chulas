@@ -242,9 +242,9 @@ export default function NuevoIngreso() {
     if (prefill.alquilado && prefill.alquiler_a) {
       setNotice(`Equipo alquilado a ${prefill.alquiler_a}. Completa los datos restantes.`);
     } else if (prefill.customer_nombre) {
-      setNotice("Datos cargados desde lectura de codigo.");
+      setNotice("Datos cargados desde lectura de código.");
     } else if (prefill.numero_serie || prefill.numero_interno) {
-      setNotice("Serie cargada desde lectura de codigo.");
+      setNotice("Serie cargada desde lectura de código.");
     }
   }, [location, searchParams]);
 

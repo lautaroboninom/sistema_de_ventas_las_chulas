@@ -20,7 +20,8 @@ from ..test_protocols import (
     get_protocol_by_template_key,
     resolve_protocol_for_equipo,
 )
-from .helpers import _rol, _set_audit_user, exec_void, q
+from ..permissions import require_any_permission
+from .helpers import _rol, _set_audit_user, exec_void, q, require_permission
 
 
 _EDIT_ROLES = {"tecnico", "jefe", "jefe_veedor", "admin"}
@@ -57,6 +58,10 @@ def _trim_text(value: Any, max_len: int = 2000) -> str:
     if len(s) > max_len:
         return s[:max_len]
     return s
+
+
+def _default_instrumentos_for_protocol(protocol: dict[str, Any] | None) -> str:
+    return _trim_text((protocol or {}).get("default_instrumentos"), max_len=2000)
 
 
 def _has_ingreso_tests_table() -> bool:
@@ -184,12 +189,14 @@ def _normalize_values_for_protocol(raw_values: Any, protocol: dict[str, Any]) ->
         src = incoming.get(key) if isinstance(incoming, dict) else None
         if not isinstance(src, dict):
             continue
+        valor_a_medir = _trim_text(src.get("valor_a_medir"), max_len=250)
         measured = _trim_text(src.get("measured"), max_len=250)
         result = _trim_text(src.get("result"), max_len=40).lower()
         if result not in _VALID_ITEM_RESULTS:
             result = ""
         observaciones = _trim_text(src.get("observaciones"), max_len=900)
         out[key] = {
+            "valor_a_medir": valor_a_medir,
             "measured": measured,
             "result": result,
             "observaciones": observaciones,
@@ -372,7 +379,12 @@ def _protocol_sections_with_values(protocol: dict[str, Any], values: dict[str, A
     for section in sections:
         for item in section.get("items", []) or []:
             key = (item.get("key") or "").strip()
-            item["value"] = values.get(key) or defaults.get(key) or {"measured": "", "result": "", "observaciones": ""}
+            item["value"] = values.get(key) or defaults.get(key) or {
+                "valor_a_medir": "",
+                "measured": "",
+                "result": "",
+                "observaciones": "",
+            }
             if not isinstance(item.get("ref_ids"), list):
                 item["ref_ids"] = []
     return sections
@@ -382,6 +394,16 @@ class IngresoTestView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, ingreso_id: int):
+        require_any_permission(
+            request,
+            [
+                "page.ingresos_history",
+                "page.work_queues",
+                "page.budget_queues",
+                "page.logistics",
+                "action.ingreso.edit_diagnosis",
+            ],
+        )
         if not _has_ingreso_tests_table():
             return Response({"detail": "Tabla ingreso_tests inexistente. Ejecuta schema."}, status=503)
 
@@ -409,6 +431,7 @@ class IngresoTestView(APIView):
 
         template_key = (row or {}).get("template_key") or protocol.get("template_key")
         template_version = (row or {}).get("template_version") or protocol.get("template_version")
+        instrumentos = (row or {}).get("instrumentos") or _default_instrumentos_for_protocol(protocol)
 
         return Response(
             {
@@ -425,7 +448,7 @@ class IngresoTestView(APIView):
                 "values": values,
                 "resultado_global": (row or {}).get("resultado_global") or "pendiente",
                 "conclusion": (row or {}).get("conclusion") or "",
-                "instrumentos": (row or {}).get("instrumentos") or "",
+                "instrumentos": instrumentos,
                 "firmado_por": (row or {}).get("firmado_por") or "",
                 "fecha_ejecucion": (row or {}).get("fecha_ejecucion"),
                 "references_snapshot": references_snapshot,
@@ -434,6 +457,7 @@ class IngresoTestView(APIView):
         )
 
     def patch(self, request, ingreso_id: int):
+        require_permission(request, "action.ingreso.edit_diagnosis")
         if not _has_ingreso_tests_table():
             return Response({"detail": "Tabla ingreso_tests inexistente. Ejecuta schema."}, status=503)
 
@@ -459,12 +483,14 @@ class IngresoTestView(APIView):
 
         resultado_global = _trim_text(d.get("resultado_global") if "resultado_global" in d else (row or {}).get("resultado_global"), 50).lower()
         if resultado_global not in _VALID_GLOBAL_RESULTS:
-            return Response({"detail": "resultado_global invalido"}, status=400)
+            return Response({"detail": "resultado_global inválido"}, status=400)
         if not resultado_global:
             resultado_global = "pendiente"
 
         conclusion = _trim_text(d.get("conclusion") if "conclusion" in d else (row or {}).get("conclusion"), 2000)
         instrumentos = _trim_text(d.get("instrumentos") if "instrumentos" in d else (row or {}).get("instrumentos"), 2000)
+        if not instrumentos:
+            instrumentos = _default_instrumentos_for_protocol(protocol)
         firmado_por = _trim_text(d.get("firmado_por") if "firmado_por" in d else (row or {}).get("firmado_por"), 250)
 
         # Freeze references on first save to keep historical traceability stable.
@@ -506,6 +532,16 @@ class IngresoTestPdfView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, ingreso_id: int):
+        require_any_permission(
+            request,
+            [
+                "page.ingresos_history",
+                "page.work_queues",
+                "page.budget_queues",
+                "page.logistics",
+                "action.ingreso.edit_diagnosis",
+            ],
+        )
         if not _has_ingreso_tests_table():
             return Response({"detail": "Tabla ingreso_tests inexistente. Ejecuta schema."}, status=503)
 
@@ -551,7 +587,7 @@ class IngresoTestPdfView(APIView):
             "template_version": row.get("template_version") or protocol.get("template_version") or "",
             "resultado_global": resultado_global or "pendiente",
             "conclusion": row.get("conclusion") or "",
-            "instrumentos": row.get("instrumentos") or "",
+            "instrumentos": row.get("instrumentos") or _default_instrumentos_for_protocol(protocol),
             "firmado_por": row.get("firmado_por") or "",
             "references": references_snapshot,
             "sections": _protocol_sections_with_values(protocol, values),

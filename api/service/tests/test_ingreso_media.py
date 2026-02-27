@@ -41,8 +41,7 @@ class IngresoMediaAPITest(TestCase):
                 email VARCHAR(320) UNIQUE,
                 hash_pw TEXT,
                 rol TEXT,
-                activo {bool_type} DEFAULT 1,
-                perm_ingresar {bool_type} DEFAULT 0
+                activo {bool_type} DEFAULT 1
             ){engine_suffix}
         """
 

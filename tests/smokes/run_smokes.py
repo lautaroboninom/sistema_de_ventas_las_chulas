@@ -57,7 +57,7 @@ def seed_db() -> Seed:
                 tech_id = row[0]
             else:
                 cur.execute(
-                    "INSERT INTO users(nombre,email,rol,activo,perm_ingresar) VALUES (%s,%s,'tecnico',true,false) RETURNING id",
+                    "INSERT INTO users(nombre,email,rol,activo) VALUES (%s,%s,'tecnico',true) RETURNING id",
                     ("Smoke Tech", "smoke-tech@local"),
                 )
                 tech_id = cur.fetchone()[0]

@@ -161,6 +161,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
+        "service.permissions.MappedPermissionGuard",
     ],
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
     "UNAUTHENTICATED_USER": "django.contrib.auth.models.AnonymousUser",
@@ -168,6 +169,9 @@ REST_FRAMEWORK = {
     # Normaliza 401/403 y agrega WWW-Authenticate en 401
     "EXCEPTION_HANDLER": "service.exceptions.handler",
 }
+
+# Feature flag para permisos granulares por usuario.
+PERMISSIONS_V2_ENABLED = os.getenv("PERMISSIONS_V2_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 
 # CORS
 CORS_ALLOW_CREDENTIALS = True

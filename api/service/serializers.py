@@ -146,6 +146,8 @@ class IngresoDetailSerializer(serializers.Serializer):
     # Asignación y propietario (opcionales)
     asignado_a = serializers.IntegerField(allow_null=True, required=False)
     asignado_a_nombre = serializers.CharField(allow_blank=True, allow_null=True, required=False)
+    ingresado_por_id = serializers.IntegerField(allow_null=True, required=False)
+    ingresado_por_nombre = serializers.CharField(allow_blank=True, allow_null=True, required=False)
     propietario_nombre = serializers.CharField(allow_blank=True, allow_null=True, required=False)
     propietario_contacto = serializers.CharField(allow_blank=True, allow_null=True, required=False)
     propietario_doc = serializers.CharField(allow_blank=True, allow_null=True, required=False)

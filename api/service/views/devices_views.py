@@ -1,4 +1,4 @@
-﻿from django.db import connection, transaction
+from django.db import connection, transaction
 from rest_framework import permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -150,7 +150,7 @@ class DevicesListView(APIView):
         )
 
         if preventivo_estado_raw and preventivo_estado_raw not in ("sin_plan", "al_dia", "proximo", "vencido"):
-            return Response({"detail": "preventivo_estado invalido"}, status=400)
+            return Response({"detail": "preventivo_estado inválido"}, status=400)
 
         con_plan_val = None
         if con_plan_raw in ("1", "true", "yes", "y", "t"):
@@ -482,7 +482,7 @@ class DeviceDirectCreateView(APIView):
             one=True,
         )
         if not customer:
-            return Response({"detail": "Institucion/cliente inexistente"}, status=404)
+            return Response({"detail": "Institución/cliente inexistente"}, status=404)
 
         marca_id = _parse_int_or_none(data.get("marca_id"))
         model_id = _parse_int_or_none(data.get("model_id"))
@@ -541,7 +541,7 @@ class DeviceDirectCreateView(APIView):
             if other_ns:
                 return Response(
                     {
-                        "detail": "El numero de serie ya esta asignado a otro equipo.",
+                        "detail": "El número de serie ya esta asignado a otro equipo.",
                         "conflict_type": "NS_DUPLICATE",
                         "conflict_device_id": other_ns["id"],
                     },
@@ -573,7 +573,7 @@ class DeviceDirectCreateView(APIView):
             if other_mg:
                 return Response(
                     {
-                        "detail": "El numero interno ya esta asignado a otro equipo.",
+                        "detail": "El número interno ya esta asignado a otro equipo.",
                         "conflict_type": "MG_DUPLICATE",
                         "conflict_device_id": other_mg["id"],
                     },
@@ -697,7 +697,7 @@ class DevicesMergeView(APIView):
                 if not desired_mg:
                     return Response(
                         {
-                            "detail": "numero_interno invalido para unificar.",
+                            "detail": "numero_interno inválido para unificar.",
                             "conflict_type": "MG_INVALID",
                         },
                         status=400,
@@ -705,7 +705,7 @@ class DevicesMergeView(APIView):
             if desired_mg not in (None, mg_target, mg_source):
                 return Response(
                     {
-                        "detail": "numero_interno invalido para unificar.",
+                        "detail": "numero_interno inválido para unificar.",
                         "conflict_type": "MG_INVALID",
                     },
                     status=400,
@@ -740,7 +740,7 @@ class DevicesMergeView(APIView):
         if ns_conflict:
             return Response(
                 {
-                    "detail": "El numero de serie ya esta asignado a otro equipo.",
+                    "detail": "El número de serie ya esta asignado a otro equipo.",
                     "conflict_type": "NS_DUPLICATE",
                     "conflict_device_id": ns_conflict["id"],
                 },
@@ -774,7 +774,7 @@ class DevicesMergeView(APIView):
             if mg_conflict:
                 return Response(
                     {
-                        "detail": "El numero interno ya esta asignado a otro equipo.",
+                        "detail": "El número interno ya esta asignado a otro equipo.",
                         "conflict_type": "MG_DUPLICATE",
                         "conflict_device_id": mg_conflict["id"],
                     },
@@ -794,7 +794,7 @@ class DevicesMergeView(APIView):
                 except Exception as e:
                     return Response(
                         {
-                            "detail": "No se pudo asignar el numero interno al destino (posible duplicado).",
+                            "detail": "No se pudo asignar el número interno al destino (posible duplicado).",
                             "conflict_type": "MG_UNIQUE_CONSTRAINT",
                             "numero_interno_input": mg_to_apply,
                             "error": str(e),

@@ -66,11 +66,11 @@ class WarrantyRulesView(APIView):
             # validar modelo
             ok = q("SELECT 1 FROM models WHERE id=%s", [model_id], one=True)
             if not ok:
-                raise ValidationError("model_id invalido")
+                raise ValidationError("model_id inválido")
         if brand_id is not None:
             ok = q("SELECT 1 FROM marcas WHERE id=%s", [brand_id], one=True)
             if not ok:
-                raise ValidationError("brand_id invalido")
+                raise ValidationError("brand_id inválido")
 
         new_id = exec_returning(
             """

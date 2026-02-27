@@ -33,7 +33,7 @@ class DerivarIngresoView(APIView):
 
         prov = q("SELECT id FROM proveedores_externos WHERE id=%s", [proveedor_id], one=True)
         if not prov:
-            return Response({"detail": "Proveedor externo invalido"}, status=400)
+            return Response({"detail": "Proveedor externo inválido"}, status=400)
 
         # Regla: no puede existir mas de una derivacion ABIERTA por ingreso
         open_any = q(

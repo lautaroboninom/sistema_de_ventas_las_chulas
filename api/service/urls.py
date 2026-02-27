@@ -24,7 +24,7 @@ from .views import (
     
 
     # catálogos
-    CatalogoMarcasView, CatalogoModelosView, CatalogoUbicacionesView,
+    CatalogoMarcasView, CatalogoModelosView, CatalogoVariantesPorMarcaView, CatalogoUbicacionesView,
     CatalogoAccesoriosView, IngresoAccesoriosView, IngresoAccesorioDetailView,
     BuscarAccesorioPorReferenciaView,
     IngresoAlquilerAccesoriosView, IngresoAlquilerAccesorioDetailView,
@@ -45,7 +45,7 @@ from .views import (
 
     # administración de usuarios
     UsuariosView, UsuarioActivoView, UsuarioResetPassView, UsuarioRolePermView, UsuarioDeleteView,
-    CatalogoRolesView, CerrarReparacionView,
+    CatalogoRolesView, CatalogoPermisosView, UsuarioPermisosView, UsuarioPermisosResetView, CerrarReparacionView,
 
     # clientes / marcas-modelos / proveedores externos
     ClientesView, ClienteDeleteView, ClienteMergeView,
@@ -121,7 +121,7 @@ urlpatterns = [
     path("listos-para-retiro/", ListosParaRetiroView.as_view()),  # alias de compat
     path("scan/lookup/", ScanLookupView.as_view()),
 
-    # ALIAS de compatibilidad con el front (si exist�an)
+    # ALIAS de compatibilidad con el front (si existian)
     path("ingresos/aprobados/", AprobadosView.as_view()),
     path("ingresos/reparados/", AprobadosYReparadosView.as_view()),
     path("ingresos/pendientes-presupuesto/", PendientesPresupuestoView.as_view()),
@@ -180,11 +180,13 @@ urlpatterns = [
     path("catalogos/proveedores-externos/<int:pid>/", ProveedoresExternosView.as_view()),
     # variante simple por modelo (v1)
     path('catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/variante/', ModeloVarianteView.as_view()),
+    path("catalogos/marcas/<int:bid>/variantes/", CatalogoVariantesPorMarcaView.as_view()),
 
     # catálogo jerárquico (marca -> tipo -> modelo -> variante)
     path("catalogo/marcas/", CatalogoMarcasView.as_view()),
     path("catalogo/marcas/<int:bid>/tipos/", CatalogoTiposView.as_view()),
     path("catalogo/marcas/<int:bid>/tipos/<int:tid>/modelos/", CatalogoModelosDeTipoView.as_view()),
+    path("catalogo/marcas/<int:bid>/variantes/", CatalogoVariantesPorMarcaView.as_view()),
     path("catalogo/marcas/<int:bid>/modelos/<int:mid>/variantes/", CatalogoVariantesView.as_view()),
     path("catalogo/tipos/<str:tipo_nombre>/marcas/", CatalogoMarcasPorTipoView.as_view()),
     
@@ -222,15 +224,18 @@ urlpatterns = [
     path("usuarios/", UsuariosView.as_view()),                                   # GET lista, POST upsert
     path("usuarios/<int:uid>/activar/", UsuarioActivoView.as_view()),            # PATCH {activo}
     path("usuarios/<int:uid>/reset-pass/", UsuarioResetPassView.as_view()),      # PATCH {password}
-    path("usuarios/<int:uid>/roleperm/", UsuarioRolePermView.as_view()),         # PATCH {rol, perm_ingresar}
+    path("usuarios/<int:uid>/roleperm/", UsuarioRolePermView.as_view()),         # PATCH {rol}
     path("usuarios/<int:uid>/", UsuarioDeleteView.as_view()),                    # DELETE
     path("catalogos/roles/", CatalogoRolesView.as_view()),
+    path("permisos/catalogo/", CatalogoPermisosView.as_view()),
+    path("usuarios/<int:uid>/permisos/", UsuarioPermisosView.as_view()),
+    path("usuarios/<int:uid>/permisos/reset/", UsuarioPermisosResetView.as_view()),
     path("ingresos/<int:ingreso_id>/asignar-tecnico/", IngresoAsignarTecnicoView.as_view()),
     path("catalogos/tecnicos/", CatalogoTecnicosView.as_view()),
 
 
 
-    # (si us�s los endpoints para asignar ténico y setear ténico de marca/modelo)
+    # (si usas los endpoints para asignar ténico y setear ténico de marca/modelo)
     path('catalogos/marcas/<int:bid>/tecnico/', MarcaTecnicoView.as_view()),
     path('catalogos/marcas/<int:bid>/tecnico/aplicar-a-modelos/', MarcaAplicarTecnicoAModelosView.as_view()),
     path('catalogos/marcas/<int:bid>/modelos/<int:mid>/tecnico/', ModeloTecnicoView.as_view()),
@@ -253,7 +258,7 @@ urlpatterns = [
 
     # tipos de equipo
     # tipos de equipo
-    # - listado general (sugerencias para asignaci�n): plural "catalogos"
+    # - listado general (sugerencias para asignacion): plural "catalogos"
     # - listado general (sugerencias): plural "catalogos"
     path("catalogos/tipos-equipo/", TiposEquipoView.as_view()),
     # - ABM catálogos general (no por marca)
@@ -264,7 +269,7 @@ urlpatterns = [
     path("catalogo/modelos/<int:serie_id>/", CatalogoModeloDetailView.as_view()),
     path("catalogo/variantes/", CatalogoVariantesCreateView.as_view()),
     path("catalogo/variantes/<int:variante_id>/", CatalogoVarianteDetailView.as_view()),
-    # asignaci�n de tipo de equipo al modelo (alias singular/plural por compat)
+    # asignacion de tipo de equipo al modelo (alias singular/plural por compat)
     path("catalogos/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
     path("catalogo/marcas/<int:marca_id>/modelos/<int:modelo_id>/tipo-equipo/", ModeloTipoEquipoView.as_view()),
 
@@ -273,7 +278,7 @@ urlpatterns = [
     # historial de cambios por ingreso
     path("ingresos/<int:ingreso_id>/historial/", IngresoHistorialView.as_view()),
     # historial de cambios por ingreso
-    # m�tricas
+    # metricas
     path("metricas/resumen/", MetricasResumenView.as_view()),
     path("metricas/series/", MetricasSeriesView.as_view()),
     path("metricas/finanzas/", MetricasFinanzasView.as_view()),

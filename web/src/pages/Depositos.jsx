@@ -66,7 +66,7 @@ export default function Depositos() {
       <div className="flex items-center gap-2 mb-3">
         <span className="text-sm">Depósito / Ubicación:</span>
         <select className="border rounded p-2" value={ubicacionId} onChange={(e)=>setUbicacionId(e.target.value)}>
-          <option value="">Elegí una Ubicación</option>
+          <option value="">Seleccione una ubicación</option>
           <option value="bajas">Bajas</option>
           {ubicacionesFiltradas.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}
         </select>
@@ -109,3 +109,4 @@ export default function Depositos() {
     </div>
   );
 }
+

@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 
 const TABS = [
-  { key: "tecnicos", label: "Tecnicos", to: "/metricas" },
+  { key: "tecnicos", label: "Técnicos", to: "/metricas" },
   { key: "clientes", label: "Clientes", to: "/metricas/clientes" },
   { key: "finanzas", label: "Finanzas", to: "/metricas/finanzas" },
 ];
@@ -33,3 +33,4 @@ export default function MetricasNav({ extraRight }) {
     </div>
   );
 }
+

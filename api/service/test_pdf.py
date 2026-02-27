@@ -213,13 +213,13 @@ def render_ingreso_test_pdf(report: dict, printed_by: str = "") -> tuple[bytes, 
 
     def draw_sections() -> None:
         nonlocal y
-        columns_mm = [30, 44, 18, 12, 18, 48, 16]
+        columns_mm = [30, 50, 24, 18, 12, 18, 34]
         col_widths = [w * mm for w in columns_mm]
         table_x = margin
         header_h = 6.5 * mm
         row_font = 7.4
         row_inner_pad = 1.2 * mm
-        col_titles = ["Parámetro", "Objetivo / Tolerancia", "Medido", "Unidad", "Resultado", "Observaciones", "Ref."]
+        col_titles = ["Parámetro", "Objetivo / Tolerancia", "Valor a medir", "Medido", "Unidad", "Resultado", "Ref."]
 
         for section in report.get("sections") or []:
             items = section.get("items") or []
@@ -248,10 +248,10 @@ def render_ingreso_test_pdf(report: dict, printed_by: str = "") -> tuple[bytes, 
                 cells = [
                     _safe_text(item.get("label")),
                     _safe_text(item.get("target")),
+                    _safe_text(value.get("valor_a_medir")),
                     _safe_text(value.get("measured")),
                     _safe_text(item.get("unit")),
                     result_label,
-                    _safe_text(value.get("observaciones")),
                     ", ".join(item.get("ref_ids") or []),
                 ]
                 wrapped_cells = []

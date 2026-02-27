@@ -573,7 +573,7 @@ export default function PresupuestoTab({ id, data, canManagePresupuesto, canSeeC
                   <div className="relative">
                     <input
                       className="border rounded p-1 w-28"
-                      placeholder="Codigo"
+                      placeholder="Código"
                       value={nuevoRep.repuesto_codigo}
                       onFocus={(e) => openRepList("code-new", nuevoRep.repuesto_codigo || "", e.currentTarget)}
                       onKeyDown={(e) => handleRepKeyDown(e, "code-new", selectRepuestoForNew, e.currentTarget.value)}

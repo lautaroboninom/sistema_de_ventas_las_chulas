@@ -31,6 +31,7 @@ from .helpers import (
     os_label,
     q,
     require_roles,
+    require_permission,
     ensure_default_locations,
 )
 
@@ -40,6 +41,7 @@ from ..serializers import (
     IngresoDetailWithAccesoriosSerializer,
     IngresoListItemSerializer,
 )
+from ..permissions import require_any_permission
 from ..warranty import compute_warranty
 
 
@@ -355,7 +357,7 @@ class PresupuestadosExportView(APIView):
         try:
             ids = [int(x) for x in ids_raw.split(",") if x.strip()]
         except Exception:
-            return Response({"detail": "Parametro 'ids' invalido"}, status=400)
+            return Response({"detail": "Parametro 'ids' inválido"}, status=400)
 
         # Evitar excesos accidentales
         if len(ids) > 1000:
@@ -671,7 +673,7 @@ class MarcarParaRepararView(APIView):
             if int(asignado_a or 0) != int(uid or 0):
                 raise PermissionDenied("Solo el tecnico asignado puede editar diagnostico y reparacion")
         if not asignado_a:
-            raise ValidationError("Antes de reparar, asigna un tecnico al ingreso")
+            raise ValidationError("Antes de reparar, asigna un técnico al ingreso")
         if estado_cur in ("reparado", "liberado", "entregado", "baja", "alquilado", "controlado_sin_defecto"):
             raise ValidationError("No se puede marcar para reparar desde el estado actual")
 
@@ -1370,7 +1372,7 @@ class GeneralPorClienteExportView(APIView):
             try:
                 ids = [int(x) for x in ids_raw.split(",") if x.strip()]
             except Exception:
-                return Response({"detail": "Parametro 'ids' invalido"}, status=400)
+                return Response({"detail": "Parametro 'ids' inválido"}, status=400)
             if len(ids) > 1000:
                 return Response({"detail": "Demasiados IDs (maximo 1000)"}, status=400)
         with connection.cursor() as cur:
@@ -1913,7 +1915,7 @@ class IngresoAsignarTecnicoView(APIView):
         ok = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                 [tecnico_id], one=True)
         if not ok:
-            return Response({"detail": "tecnico invalido"}, status=400)
+            return Response({"detail": "técnico inválido"}, status=400)
         try:
             prev = q("SELECT asignado_a FROM ingresos WHERE id=%s", [ingreso_id], one=True)
             logger.info(f"[AsignarTecnico] ingreso={ingreso_id} prev={prev and prev.get('asignado_a')} new={tecnico_id}")
@@ -2078,7 +2080,7 @@ class IngresoSolicitarAsignacionView(APIView):
         require_roles(request, ["tecnico"])
         uid = getattr(getattr(request, "user", None), "id", None) or getattr(request, "user_id", None)
         if not uid:
-            return Response({"detail": "Usuario invalido"}, status=400)
+            return Response({"detail": "Usuario inválido"}, status=400)
 
         # Si ya está asignado a este técnico, responder OK y no hacer nada
         try:
@@ -2441,7 +2443,7 @@ class CerrarReparacionView(APIView):
                 raise PermissionDenied("Solo el tecnico asignado puede editar diagnostico y reparacion")
         r = (request.data or {}).get("resolucion")
         if r not in ("reparado","no_reparado","no_se_encontro_falla","presupuesto_rechazado","cambio"):
-            return Response({"detail": "resolucion invalida"}, status=400)
+            return Response({"detail": "resolucion inválida"}, status=400)
 
         serial_cambio = (request.data or {}).get("serial_cambio")
         if r == "cambio":
@@ -2488,6 +2490,7 @@ class NuevoIngresoView(APIView):
 
     @transaction.atomic
     def post(self, request):
+        require_any_permission(request, ["action.ingreso.create", "page.new_ingreso"])
         # Best-effort: ensure PK sequences are aligned to prevent duplicate key
         # errors due to out-of-sync sequences after legacy imports.
         try:
@@ -2512,7 +2515,7 @@ class NuevoIngresoView(APIView):
         motivo_label_raw = _map_motivo_to_db_label(motivo_raw)
         if not motivo_label_raw:
             valid_motivos = _get_motivo_enum_values()
-            return Response({"detail": "motivo invalido", "valid_values": valid_motivos}, status=400)
+            return Response({"detail": "motivo inválido", "valid_values": valid_motivos}, status=400)
 
         raw_vals = _get_motivo_enum_values_raw() or []
         if raw_vals:
@@ -2536,7 +2539,7 @@ class NuevoIngresoView(APIView):
         if not ubicacion_id:
             t = q("SELECT id FROM locations WHERE LOWER(nombre)=LOWER(%s) LIMIT 1", ["taller"], one=True)
             if not t:
-                return Response({"detail": "No se encontro la ubicacion 'Taller' en el catalogo. Creala en 'locations'."}, status=400)
+                return Response({"detail": "No se encontro la ubicación 'Taller' en el catalogo. Creala en 'locations'."}, status=400)
             ubicacion_id = t["id"]
 
         informe_preliminar = (data.get("informe_preliminar") or "").strip()
@@ -2550,7 +2553,7 @@ class NuevoIngresoView(APIView):
         if _fi_raw is not None and str(_fi_raw).strip() != "":
             _dt = _parse_datetime_or_date(_fi_raw)
             if not _dt:
-                return Response({"detail": "fecha_ingreso invalida (use YYYY-MM-DD o DD/MM/AAAA)"}, status=400)
+                return Response({"detail": "fecha_ingreso inválida (use YYYY-MM-DD o DD/MM/AAAA)"}, status=400)
             if timezone.is_naive(_dt):
                 _dt = timezone.make_aware(_dt, timezone.get_current_timezone())
             fecha_ingreso_dt = _dt
@@ -2572,9 +2575,9 @@ class NuevoIngresoView(APIView):
             return Response({"detail": "Cliente inexistente"}, status=400)
 
         if cliente.get("cod_empresa") and c["cod_empresa"] != cliente["cod_empresa"]:
-            return Response({"detail": "El codigo no corresponde a la razon social seleccionada."}, status=400)
+            return Response({"detail": "El código no corresponde a la razón social seleccionada."}, status=400)
         if cliente.get("razon_social") and c["razon_social"].lower() != (cliente["razon_social"] or "").lower():
-            return Response({"detail": "La razon social no corresponde al codigo seleccionado."}, status=400)
+            return Response({"detail": "La razón social no corresponde al código seleccionado."}, status=400)
 
         customer_id = c["id"]
 
@@ -2899,7 +2902,7 @@ class NuevoIngresoView(APIView):
             tech = q("SELECT id FROM users WHERE id=%s AND activo=true AND rol IN ('tecnico','jefe')",
                      [tecnico_id], one=True)
             if not tech:
-                return Response({"detail": "Tecnico invalido o inactivo"}, status=400)
+                return Response({"detail": "Técnico inválido o inactivo"}, status=400)
 
         uid = getattr(request.user, "id", None) or getattr(request, "user_id", None)
         if not uid:
@@ -3196,6 +3199,8 @@ class IngresoDetalleView(APIView):
               COALESCE(l.nombre,'') AS ubicacion_nombre,
               t.asignado_a,
               COALESCE(u.nombre,'') AS asignado_a_nombre,
+              t.recibido_por AS ingresado_por_id,
+              COALESCE(ur.nombre,'') AS ingresado_por_nombre,
               COALESCE(d.propietario_nombre, d.propietario) AS propietario_nombre,
               COALESCE(d.propietario_contacto, '') AS propietario_contacto,
               COALESCE(d.propietario_doc, '') AS propietario_doc,
@@ -3219,6 +3224,7 @@ class IngresoDetalleView(APIView):
             LEFT JOIN models m ON m.id = d.model_id
             LEFT JOIN locations l ON l.id = t.ubicacion_id
             LEFT JOIN users u ON u.id = t.asignado_a
+            LEFT JOIN users ur ON ur.id = t.recibido_por
             WHERE t.id = %s
             """,
             [ingreso_id],
@@ -3359,13 +3365,32 @@ class IngresoDetalleView(APIView):
         return Response(IngresoDetailWithAccesoriosSerializer(row).data)
 
     def patch(self, request, ingreso_id: int):
-        ROL_EDIT_DIAG = {"tecnico", "jefe", "jefe_veedor", "admin"}
-        ROL_EDIT_UBIC = {"tecnico", "jefe", "jefe_veedor", "admin", "recepcion"}
-        ROL_EDIT_BASICS = {"jefe", "jefe_veedor", "admin"}
-
         rol = _rol(request)
         d = request.data or {}
         _set_audit_user(request)
+        basic_fields = {
+            "propietario_nombre", "propietario_contacto", "propietario_doc",
+            "customer_id", "cliente_id", "razon_social", "cod_empresa", "telefono",
+            "numero_serie", "equipo_variante", "remito_ingreso", "informe_preliminar",
+            "motivo", "garantia", "comentarios", "marca_id", "modelo_id",
+        }
+        diagnosis_fields = {
+            "descripcion_problema", "trabajos_realizados", "fecha_servicio",
+            "garantia_reparacion", "etiq_garantia_ok", "faja_garantia", "numero_interno",
+        }
+        location_fields = {
+            "ubicacion_id", "accesorios", "alquilado", "alquiler_a", "alquiler_remito", "alquiler_fecha",
+        }
+        delivery_fields = {"remito_salida", "factura_numero", "fecha_entrega"}
+
+        if any(k in d for k in basic_fields):
+            require_permission(request, "action.ingreso.edit_basics")
+        if any(k in d for k in diagnosis_fields):
+            require_permission(request, "action.ingreso.edit_diagnosis")
+        if any(k in d for k in location_fields):
+            require_permission(request, "action.ingreso.edit_location")
+        if any(k in d for k in delivery_fields):
+            require_permission(request, "action.ingreso.edit_delivery")
         if connection.vendor == "postgresql":
             exec_void("SET LOCAL app.ingreso_id = %s", [ingreso_id])
 
@@ -3380,14 +3405,12 @@ class IngresoDetalleView(APIView):
         needs_warranty_recompute = False
 
         if "ubicacion_id" in d:
-            if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado para modificar ubicacion")
             ubicacion_id = d.get("ubicacion_id")
             if not ubicacion_id:
                 raise ValidationError("ubicacion_id requerido")
             u = q("SELECT id FROM locations WHERE id=%s", [ubicacion_id], one=True)
             if not u:
-                raise ValidationError("Ubicacion inexistente")
+                raise ValidationError("Ubicación inexistente")
             sets_no_estado.append("ubicacion_id=%s")
             params_no_estado.append(ubicacion_id)
 
@@ -3395,33 +3418,25 @@ class IngresoDetalleView(APIView):
         trab_present = False
         fecha_present = False
         if "descripcion_problema" in d:
-            if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado para modificar diagnostico")
             desc = (d.get("descripcion_problema") or "").strip()
             desc_present = bool(desc)
             sets_no_estado.append("descripcion_problema=%s")
             params_no_estado.append(desc)
         if "trabajos_realizados" in d:
-            if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado para modificar trabajos")
             trab_present = bool((d.get("trabajos_realizados") or "").strip())
             sets_no_estado.append("trabajos_realizados=%s")
             params_no_estado.append(d.get("trabajos_realizados"))
         if "accesorios" in d:
-            if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado para modificar accesorios")
             sets_no_estado.append("accesorios=%s")
             params_no_estado.append(d.get("accesorios"))
         if "fecha_servicio" in d:
-            if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado para modificar fecha de servicio")
             val = d.get("fecha_servicio")
             if val is None or (isinstance(val, str) and val.strip() == ""):
                 sets_no_estado.append("fecha_servicio=NULL")
             else:
                 dt = parse_datetime(val)
                 if not dt:
-                    raise ValidationError("fecha_servicio invalida")
+                    raise ValidationError("fecha_servicio inválida")
                 if timezone.is_naive(dt):
                     dt = timezone.make_aware(dt, timezone.get_current_timezone())
                 sets_no_estado.append("fecha_servicio=%s")
@@ -3433,8 +3448,6 @@ class IngresoDetalleView(APIView):
             if int(asignado_a or 0) != int(uid or 0):
                 raise PermissionDenied("Solo el tecnico asignado puede editar diagnostico y reparacion")
         if any(k in d for k in ("remito_salida", "factura_numero", "fecha_entrega")):
-            if _rol(request) not in {"jefe", "jefe_veedor", "admin", "recepcion"}:
-                raise PermissionDenied("No autorizado para editar datos de entrega")
             if "remito_salida" in d:
                 sets_no_estado.append("remito_salida = NULLIF(%s,'')")
                 params_no_estado.append((d.get("remito_salida") or "").strip())
@@ -3448,29 +3461,21 @@ class IngresoDetalleView(APIView):
                 else:
                     dt = parse_datetime(val)
                     if not dt:
-                        raise ValidationError("fecha_entrega invalida")
+                        raise ValidationError("fecha_entrega inválida")
                     if timezone.is_naive(dt):
                         dt = timezone.make_aware(dt, timezone.get_current_timezone())
                     sets_no_estado.append("fecha_entrega=%s")
                     params_no_estado.append(dt)
         if "garantia_reparacion" in d:
-            if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado")
             sets_no_estado.append("garantia_reparacion=%s")
             params_no_estado.append(bool(d.get("garantia_reparacion")))
         if "etiq_garantia_ok" in d:
-            if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado")
             sets_no_estado.append("etiq_garantia_ok=%s")
             params_no_estado.append(bool(d.get("etiq_garantia_ok")))
         if "faja_garantia" in d:
-            if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado")
             sets_no_estado.append("faja_garantia = NULLIF(%s,'')")
             params_no_estado.append((d.get("faja_garantia") or "").strip())
         if "numero_interno" in d:
-            if rol not in ROL_EDIT_DIAG:
-                raise PermissionDenied("No autorizado")
             val_raw = (d.get("numero_interno") or "").strip()
             val = val_raw
             if val and not val.upper().startswith(("MG", "NM", "NV", "CE")):
@@ -3523,8 +3528,6 @@ class IngresoDetalleView(APIView):
                     status=400,
                 )
         if any(k in d for k in ("propietario_nombre", "propietario_contacto", "propietario_doc")):
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar datos del propietario")
             if "propietario_nombre" in d:
                 sets_no_estado.append("propietario_nombre = NULLIF(%s,'')")
                 params_no_estado.append((d.get("propietario_nombre") or "").strip())
@@ -3548,14 +3551,12 @@ class IngresoDetalleView(APIView):
             except Exception:
                 pass
         if "customer_id" in d or "cliente_id" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar cliente")
             try:
                 new_cid = int(d.get("customer_id") or d.get("cliente_id"))
             except Exception:
-                return Response({"detail": "customer_id invalido"}, status=400)
+                return Response({"detail": "customer_id inválido"}, status=400)
             if new_cid <= 0:
-                return Response({"detail": "customer_id invalido"}, status=400)
+                return Response({"detail": "customer_id inválido"}, status=400)
             c_row = q("SELECT id FROM customers WHERE id=%s", [new_cid], one=True)
             if not c_row:
                 return Response({"detail": "Cliente inexistente"}, status=404)
@@ -3564,8 +3565,6 @@ class IngresoDetalleView(APIView):
                 [new_cid, ingreso_id],
             )
         if any(k in d for k in ("razon_social", "cod_empresa", "telefono")):
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar datos del cliente")
             rs = d.get("razon_social")
             ce = d.get("cod_empresa")
             tel = d.get("telefono")
@@ -3594,8 +3593,6 @@ class IngresoDetalleView(APIView):
                     params,
                 )
         if "numero_serie" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar N/S")
             ns = (d.get("numero_serie") or "").strip()
             needs_warranty_recompute = True
             ns_key = (ns or "").replace(" ", "").replace("-", "").upper()
@@ -3657,30 +3654,22 @@ class IngresoDetalleView(APIView):
                 # (bloque removido)
         # Permitir actualizar variante de equipo (texto libre)
         if "equipo_variante" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar variante del equipo")
             sets_no_estado.append("equipo_variante = NULLIF(%s,'')")
             params_no_estado.append((d.get("equipo_variante") or "").strip())
         if "remito_ingreso" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar remito de ingreso")
             sets_no_estado.append("remito_ingreso = NULLIF(%s,'')")
             params_no_estado.append((d.get("remito_ingreso") or "").strip())
         if "informe_preliminar" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar informe preliminar")
             sets_no_estado.append("informe_preliminar = NULLIF(%s,'')")
             params_no_estado.append((d.get("informe_preliminar") or "").strip())
         if "motivo" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar motivo")
             motivo_raw = (d.get("motivo") or "").strip()
             if not motivo_raw:
                 raise ValidationError("motivo requerido")
             motivo_label_raw = _map_motivo_to_db_label(motivo_raw)
             if not motivo_label_raw:
                 valid_motivos = _get_motivo_enum_values()
-                return Response({"detail": "motivo invalido", "valid_values": valid_motivos}, status=400)
+                return Response({"detail": "motivo inválido", "valid_values": valid_motivos}, status=400)
             raw_vals = _get_motivo_enum_values_raw() or []
             if raw_vals:
                 target = None
@@ -3705,19 +3694,13 @@ class IngresoDetalleView(APIView):
 
         # Actualizar garantia de fábrica a nivel de ingreso cuando se enví­a en el PATCH
         if "garantia" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar garantia de fabrica")
             sets_no_estado.append("garantia_fabrica=%s")
             params_no_estado.append(bool(d.get("garantia")))
         if "comentarios" in d:
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar comentarios")
             sets_no_estado.append("comentarios = NULLIF(%s,'')")
             params_no_estado.append((d.get("comentarios") or "").strip())
         # Actualizar marca/modelo del dispositivo asociado al ingreso
         if ("marca_id" in d) or ("modelo_id" in d):
-            if rol not in ROL_EDIT_BASICS:
-                raise PermissionDenied("No autorizado para editar marca/modelo")
             needs_warranty_recompute = True
             marca_id = d.get("marca_id")
             modelo_id = d.get("modelo_id")
@@ -3730,7 +3713,7 @@ class IngresoDetalleView(APIView):
                 # Validar modelo y obtener su marca
                 md = q("SELECT id, marca_id FROM models WHERE id=%s", [modelo_id], one=True)
                 if not md:
-                    raise ValidationError("modelo_id invalido")
+                    raise ValidationError("modelo_id inválido")
                 modelo_marca = md["marca_id"]
                 if marca_id is not None and int(marca_id) != int(modelo_marca):
                     raise ValidationError("modelo_id no pertenece a la marca_id indicada")
@@ -3740,7 +3723,7 @@ class IngresoDetalleView(APIView):
                 # Validar marca
                 mk = q("SELECT id FROM marcas WHERE id=%s", [marca_id], one=True)
                 if not mk:
-                    raise ValidationError("marca_id invalida")
+                    raise ValidationError("marca_id inválida")
                 # Si el modelo actual no corresponde a la nueva marca, ponerlo en NULL
                 row = q("SELECT model_id FROM devices WHERE id=%s", [device_id], one=True)
                 cur_model = row and row.get("model_id")
@@ -3751,8 +3734,6 @@ class IngresoDetalleView(APIView):
                     else:
                         exec_void("UPDATE devices SET marca_id=%s WHERE id=%s", [marca_id, device_id])
         if "alquilado" in d:
-            if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado")
             new_alquilado = bool(d.get("alquilado"))
             if alquilado_actual and not new_alquilado and rol != "jefe":
                 raise PermissionDenied("Solo jefe puede destildar alquiler")
@@ -3768,18 +3749,12 @@ class IngresoDetalleView(APIView):
             except Exception:
                 pass
         if "alquiler_a" in d:
-            if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado")
             sets_no_estado.append("alquiler_a=NULLIF(%s,'')")
             params_no_estado.append((d.get("alquiler_a") or "").strip())
         if "alquiler_remito" in d:
-            if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado")
             sets_no_estado.append("alquiler_remito=NULLIF(%s,'')")
             params_no_estado.append((d.get("alquiler_remito") or "").strip())
         if "alquiler_fecha" in d:
-            if rol not in ROL_EDIT_UBIC:
-                raise PermissionDenied("No autorizado")
             sets_no_estado.append("alquiler_fecha=%s")
             params_no_estado.append(d.get("alquiler_fecha") or None)
 
@@ -3818,7 +3793,7 @@ class IngresoDetalleView(APIView):
         promote_from_asignado = diag_present and estado_actual == "asignado"
         if promote_from_ingresado:
             if not asignado_a:
-                raise ValidationError("Antes de diagnosticar, asigne un tecnico al ingreso")
+                raise ValidationError("Antes de diagnosticar, asigne un técnico al ingreso")
             with transaction.atomic():
                 # Auto-setear fecha_servicio solo en la transición ingresado -> diagnosticado
                 # si no vino explí­cita en el payload y aún está NULL en DB.
