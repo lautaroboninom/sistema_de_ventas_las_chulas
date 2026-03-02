@@ -1,12 +1,16 @@
 ﻿from .settings import *  # noqa
 import os
 
-# Ajustes para despliegue estricto por dominio
+# Ajustes para despliegue por dominio (LAN / sin Traefik)
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
 
-ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "sistemadereparaciones.tail7bb880.ts.net").split(",") if h.strip()]
+_default_host = os.getenv("PUBLIC_HOST", "").strip()
+if not _default_host:
+    _default_host = (os.getenv("DJANGO_ALLOWED_HOSTS", "example.com").split(",")[0].strip() or "example.com")
 
-_default_origin = "https://sistemadereparaciones.tail7bb880.ts.net"
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", _default_host).split(",") if h.strip()]
+
+_default_origin = f"https://{_default_host}"
 CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", _default_origin).split(",") if o.strip()]
 CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 

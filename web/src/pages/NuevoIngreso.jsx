@@ -95,8 +95,6 @@ export default function NuevoIngreso() {
   const [propietario, setPropietario] = useState({ nombre: "", contacto: "", doc: "" });
   const [tecnicos, setTecnicos] = useState([]);
   const [tecnicoId, setTecnicoId] = useState(null);
-  // Empresa a facturar (SEPID por defecto)
-  const [empresaFact, setEmpresaFact] = useState("SEPID");
 
   const [loading, setLoading] = useState(false);
   const [out, setOut] = useState(null);
@@ -182,7 +180,6 @@ export default function NuevoIngreso() {
     setAccItems([]);
     setPropietario({ nombre: "", contacto: "", doc: "" });
     setTecnicoId(null);
-    setEmpresaFact("SEPID");
     setVarianteTxt("");
     setMgLookup({ loading: false, notFound: false, checkedNs: "" });
     setMgAutoFilled(false);
@@ -694,7 +691,6 @@ export default function NuevoIngreso() {
           contacto: propietario.contacto || "",
           doc: propietario.doc || "",
         },
-        empresa_facturar: (empresaFact || "SEPID").toUpperCase(),
         // Checkbox representa "fajas abiertas" => etiq_garantia_ok debe ser la negaci?n
         etiq_garantia_ok: !form.etiq_garantia_ok,
       };
@@ -871,16 +867,6 @@ export default function NuevoIngreso() {
           <div className="text-xs text-gray-500 mt-1">
             Obligatorio cuando el cliente es "Particular".
           </div>
-        </div>
-
-        {/* Empresa a facturar */}
-        <div className="border rounded p-3">
-          <label className="text-sm">Empresa a facturar</label>
-          <Select value={empresaFact} onChange={(e) => setEmpresaFact((e.target.value || "SEPID").toUpperCase())}>
-            <option value="SEPID">SEPID SA</option>
-            <option value="MGBIO">MG BIO</option>
-          </Select>
-          <div className="text-xs text-gray-500 mt-1">Por defecto: SEPID SA</div>
         </div>
 
         {/* Equipo */}

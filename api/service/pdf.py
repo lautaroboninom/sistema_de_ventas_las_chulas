@@ -405,7 +405,7 @@ def render_remito_derivacion_pdf(ingreso_id: int, deriv_id: int | None = None, p
 
 # Logo: detectar primera ruta disponible (permite logo-app.png)
 def _detect_logo_path():
-    env = os.environ.get("LOGO_PATH") or os.environ.get("SEPID_LOGO_PATH")
+    env = os.environ.get("LOGO_PATH")
     candidates = [
         env,
         # rutas comunes en contenedor
@@ -428,8 +428,14 @@ def _detect_logo_path():
 LOGO_PATH = _detect_logo_path()
 
 # --- Empresa/branding helpers ---
+DEFAULT_COMPANY_CODE = (os.environ.get("COMPANY_CODE") or "DEFAULT").strip().upper() or "DEFAULT"
+
 def _get_empresa_facturar(ingreso_id: int) -> str:
-    """Returns 'SEPID' (default) or 'MGBIO' from ingresos. Safe if column is missing."""
+    """Returns a company code from `ingresos.empresa_facturar` if the column exists.
+
+    This is best-effort and safe: if the column doesn't exist or there's an error,
+    returns `DEFAULT_COMPANY_CODE`.
+    """
     try:
         with connection.cursor() as cur:
             cur.execute(
@@ -443,13 +449,14 @@ def _get_empresa_facturar(ingreso_id: int) -> str:
             )
             exists = cur.fetchone() is not None
             if not exists:
-                return "SEPID"
+                return DEFAULT_COMPANY_CODE
             cur.execute("SELECT empresa_facturar FROM ingresos WHERE id=%s", [ingreso_id])
             row = cur.fetchone()
-            val = (row[0] if row else None) or "SEPID"
-            return "MGBIO" if str(val).strip().upper() == "MGBIO" else "SEPID"
+            val = (row[0] if row else None) or DEFAULT_COMPANY_CODE
+            code = str(val).strip().upper()
+            return code or DEFAULT_COMPANY_CODE
     except Exception:
-        return "SEPID"
+        return DEFAULT_COMPANY_CODE
 
 
 def _logo_path_for_company(code: str) -> str | None:
@@ -460,7 +467,7 @@ def _logo_path_for_company(code: str) -> str | None:
     """
     candidates: list[str | None] = []
 
-    if code == "MGBIO":
+    if code and code != DEFAULT_COMPANY_CODE:
         # override especí­fica para la segunda marca
         candidates.append(os.environ.get("LOGO_PATH_2"))
         # variantes habituales del nombre del archivo
@@ -498,14 +505,15 @@ def _company_header_lines(code: str):
 
     Safe defaults are provided and variables are always defined to avoid runtime errors.
     """
-    if code == "MGBIO":
-        name = os.environ.get("COMPANY_NAME_2", "MG BIO")
-        addr = os.environ.get("COMPANY_HEADER_L1_2") or os.environ.get("COMPANY_HEADER_L1", "")
-        cuit = os.environ.get("COMPANY_FOOTER_CUIT_2", "")
-        return addr, name, (f"CUIT {cuit}" if cuit else "")
-    name = os.environ.get("COMPANY_NAME", "SEPID SA")
-    addr = os.environ.get("COMPANY_HEADER_L1", "")
-    cuit = os.environ.get("COMPANY_FOOTER_CUIT", "")
+    if code and code != DEFAULT_COMPANY_CODE:
+        name = (os.environ.get("COMPANY_NAME_2") or "").strip()
+        addr = (os.environ.get("COMPANY_HEADER_L1_2") or getattr(settings, "COMPANY_HEADER_L1", "") or "").strip()
+        cuit = (os.environ.get("COMPANY_FOOTER_CUIT_2") or "").strip()
+        return addr, (name or code), (f"CUIT {cuit}" if cuit else "")
+
+    name = (getattr(settings, "COMPANY_NAME", None) or os.environ.get("COMPANY_NAME") or "Sistema de Reparaciones").strip()
+    addr = (getattr(settings, "COMPANY_HEADER_L1", None) or os.environ.get("COMPANY_HEADER_L1") or "").strip()
+    cuit = (getattr(settings, "COMPANY_FOOTER_CUIT", None) or os.environ.get("COMPANY_FOOTER_CUIT") or "").strip()
     return addr, name, (f"CUIT {cuit}" if cuit else "")
 
 def _wrap_lines(text, font, size, max_width):
@@ -617,27 +625,10 @@ def render_quote_pdf(ingreso_id: int):
     # Empresa para logo/pie, pero los headers permanecen fijos como antes
     empresa = _get_empresa_facturar(ingreso_id)
     _LOGO_THIS = _logo_path_for_company(empresa)
-    # Encabezado de empresa (fijo, indiferente de la empresa seleccionada)
-    EMPRESA_LINEA1 = getattr(settings, "COMPANY_HEADER_L1", "Valdenegro 4578 C.A.B.A (1430)")
-    EMPRESA_LINEA2 = getattr(settings, "COMPANY_HEADER_L2", "IMPORTADORES DE EQUIPOS")
-    EMPRESA_LINEA3 = getattr(settings, "COMPANY_HEADER_L3", "MEDICOS Y REPARACIONES")
-
-    
-    # Ajustes de cliente/propietario para visualizacion (MGBIO y Particular)
-    try:
-        _cliente_rs = (head.get('cliente') or '').strip()
-        _cl_norm = _cliente_rs.lower()
-        _is_mgbio = ('mg' in _cl_norm and 'bio' in _cl_norm)
-        _is_particular = (_cl_norm == 'particular')
-        _has_owner = bool((head.get('propietario_nombre') or '').strip())
-        if (_is_mgbio or _is_particular) and _has_owner:
-            head['cliente'] = head.get('propietario_nombre') or head.get('cliente')
-            if (head.get('propietario_doc') or '').strip():
-                head['cliente_cuit'] = (head.get('propietario_doc') or '').strip()
-            if (head.get('propietario_contacto') or '').strip():
-                head['cliente_contacto'] = (head.get('propietario_contacto') or '').strip()
-    except Exception:
-        pass
+    # Encabezado de empresa
+    EMPRESA_LINEA1 = getattr(settings, "COMPANY_HEADER_L1", "")
+    EMPRESA_LINEA2 = getattr(settings, "COMPANY_HEADER_L2", "") or getattr(settings, "COMPANY_NAME", "")
+    EMPRESA_LINEA3 = getattr(settings, "COMPANY_HEADER_L3", "")
 
     cliente_display = (head.get("cliente") or "Cliente").strip()
     os_label = f"OS {str(head['ingreso_id']).zfill(5)}"
@@ -934,22 +925,6 @@ def render_remito_salida_pdf(ingreso_id: int, printed_by: str = ""):
         head["subtotal"], head["iva_21"], head["total"] = subtotal_calc, iva_21_calc, total_calc
     except Exception:
         # Si falla el calculo, continuamos con los valores existentes
-        pass
-
-        # Ajustes de cliente/propietario para visualizacion (MGBIO y Particular)
-    try:
-        _cliente_rs = (head.get('cliente') or '').strip()
-        _cl_norm = _cliente_rs.lower()
-        _is_mgbio = ('mg' in _cl_norm and 'bio' in _cl_norm)
-        _is_particular = (_cl_norm == 'particular')
-        _has_owner = bool((head.get('propietario_nombre') or '').strip())
-        if (_is_mgbio or _is_particular) and _has_owner:
-            head['cliente'] = head.get('propietario_nombre') or head.get('cliente')
-            if (head.get('propietario_doc') or '').strip():
-                head['cliente_cuit'] = (head.get('propietario_doc') or '').strip()
-            if (head.get('propietario_contacto') or '').strip():
-                head['cliente_contacto'] = (head.get('propietario_contacto') or '').strip()
-    except Exception:
         pass
 
     empresa = _get_empresa_facturar(ingreso_id)

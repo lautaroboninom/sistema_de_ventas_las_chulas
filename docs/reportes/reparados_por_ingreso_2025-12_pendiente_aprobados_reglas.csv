@@ -1,8 +1,0 @@
-﻿"os","marca","modelo","variante","repuestos_presupuesto","accion_pendiente","detalle"
-"28790","BMC","PolyWatch YH-600B","PRO","Cable kit x1.00","sin_repuesto","Cable kit no importa (usuario)"
-"28875","AirSep","NewLife Elite","5L","RECAMBIO CEOLITA AIRSEP (PAR) x1.00 [1504008] || Electroválvulas x1.00 || PLACA PRINCIPAL AIRSEP x1.00 [1502012]","sin_codigo","Electroválvulas NewLife sin código (usuario)"
-"28876","Longfian","JAY-5","","CANISTER CEOLITA LONGFIAN JAY-5 (EL PAR) x1.00 [1504004] || Cooler x1.00","requiere_codigo","Falta definir código para ítem Cooler (JAY-5)"
-"28899","Inogen","ONE","G2","Cambio de ceolitas x1.00","requiere_codigo","Falta definir código para Cambio de ceolitas (Inogen ONE G2)"
-"28907","Longfian","JAY-5","","CANISTER CEOLITA LONGFIAN JAY-5 (EL PAR) x1.00 [1504004] || Base plastica x1.00","sin_repuesto","Base plástica no importa (usuario)"
-"28915","Movi-vac","A-550","","BATERÍA GEL 6V 4AH x2.00 [ME-041] || Vacuómetro diámetro 52MM Fij. Frontal x1.00 [IN-001] || diagnostico prioritario x1.00","sin_costo","Diagnóstico prioritario sin costo (usuario)"
-"28918","BMC","PolyWatch YH-600B","PRO","CAble x1.00 || Canula x1.00 || CR1632 POLYWACH x1.00 [ME-075]","sin_repuesto","Cable/Canula no importan (usuario)"

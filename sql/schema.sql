@@ -482,7 +482,6 @@ DECLARE
   v_faja TEXT;
   v_ubic_id INTEGER;
   v_is_own BOOLEAN;
-  v_mgbio_id INTEGER;
 BEGIN
   v_device_id := COALESCE(NEW.device_id, OLD.device_id);
 
@@ -500,24 +499,16 @@ BEGIN
     FROM devices d
    WHERE d.id = v_device_id;
 
-  -- Buscar id de MGBIO si aplica (heurístico por nombre)
-  IF v_is_own THEN
-    SELECT id INTO v_mgbio_id FROM customers
-     WHERE LOWER(razon_social) LIKE '%mg%bio%'
-     ORDER BY id ASC LIMIT 1;
-  END IF;
-
   -- Actualizar snapshot en devices
   UPDATE devices d
      SET alquilado = COALESCE(v_alquilado, FALSE),
-         alquiler_a = v_alquiler_a,
-         ubicacion_id = COALESCE(v_ubic_id, d.ubicacion_id),
-         n_de_control = COALESCE(NULLIF(v_faja, ''), d.n_de_control),
-         propietario = CASE WHEN v_is_own THEN COALESCE(NULLIF(v_propietario_nombre, ''), d.propietario) ELSE d.propietario END,
-         propietario_nombre = COALESCE(NULLIF(v_propietario_nombre, ''), d.propietario_nombre),
-         propietario_contacto = COALESCE(NULLIF(v_propietario_contacto, ''), d.propietario_contacto),
-         propietario_doc = COALESCE(NULLIF(v_propietario_doc, ''), d.propietario_doc),
-         customer_id = CASE WHEN v_is_own AND v_mgbio_id IS NOT NULL THEN v_mgbio_id ELSE d.customer_id END
+          alquiler_a = v_alquiler_a,
+          ubicacion_id = COALESCE(v_ubic_id, d.ubicacion_id),
+          n_de_control = COALESCE(NULLIF(v_faja, ''), d.n_de_control),
+          propietario = CASE WHEN v_is_own THEN COALESCE(NULLIF(v_propietario_nombre, ''), d.propietario) ELSE d.propietario END,
+          propietario_nombre = COALESCE(NULLIF(v_propietario_nombre, ''), d.propietario_nombre),
+          propietario_contacto = COALESCE(NULLIF(v_propietario_contacto, ''), d.propietario_contacto),
+          propietario_doc = COALESCE(NULLIF(v_propietario_doc, ''), d.propietario_doc)
    WHERE d.id = v_device_id;
 
   RETURN NULL;

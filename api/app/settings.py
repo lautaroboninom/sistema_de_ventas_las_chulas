@@ -31,30 +31,29 @@ AUDIT_LOG_EXCLUDE_PREFIXES = _csv("AUDIT_LOG_EXCLUDE_PREFIXES", "")
 # Branding / URLs públicas
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 PUBLIC_WEB_URL = os.getenv("PUBLIC_WEB_URL", FRONTEND_ORIGIN)
-LOGO_PATH = os.getenv("LOGO_PATH", "/code/service/static/logo.png")  # usado por PDF
+LOGO_PATH = os.getenv("LOGO_PATH", "/app/staticfiles/branding/logo-app.png")  # usado por PDF
+
+# Nombre de la empresa (para emails/PDFs)
+COMPANY_NAME = os.getenv("COMPANY_NAME", "Sistema de Reparaciones")
+COMPANY_CODE = (os.getenv("COMPANY_CODE") or "DEFAULT").strip().upper() or "DEFAULT"
 
 # Company header for PDFs (static across companies)
-COMPANY_HEADER_L1 = os.getenv("COMPANY_HEADER_L1", "Valdenegro 4578 C.A.B.A (1430)")
-COMPANY_HEADER_L2 = os.getenv("COMPANY_HEADER_L2", "IMPORTADORES DE EQUIPOS")
-COMPANY_HEADER_L3 = os.getenv("COMPANY_HEADER_L3", "MEDICOS Y REPARACIONES")
+COMPANY_HEADER_L1 = os.getenv("COMPANY_HEADER_L1", "")
+COMPANY_HEADER_L2 = os.getenv("COMPANY_HEADER_L2", COMPANY_NAME)
+COMPANY_HEADER_L3 = os.getenv("COMPANY_HEADER_L3", "")
 
 # Datos de contacto para pie de página del presupuesto (pueden cambiar vía entorno)
-COMPANY_FOOTER_EMAIL = os.getenv("COMPANY_FOOTER_EMAIL", "tecnica@sepid.com.ar")
-COMPANY_FOOTER_CUIT = os.getenv("COMPANY_FOOTER_CUIT", "30-71006956-1")
-COMPANY_FOOTER_WEB = os.getenv("COMPANY_FOOTER_WEB", "https://sepid.com.ar")
-COMPANY_FOOTER_WHATSAPP = os.getenv("COMPANY_FOOTER_WHATSAPP", "+54 9 11 6675-4115")
-
-COMPANY_FOOTER_EMAIL_2 = os.getenv("COMPANY_FOOTER_EMAIL_2", "serviciotecnicomgbio@gmail.com")
-COMPANY_FOOTER_CUIT_2 = os.getenv("COMPANY_FOOTER_CUIT_2", "30-71227174-0")
-COMPANY_FOOTER_WEB_2 = os.getenv("COMPANY_FOOTER_WEB_2", "https://sepid.com.ar")
-COMPANY_FOOTER_WHATSAPP_2 = os.getenv("COMPANY_FOOTER_WHATSAPP_2", "+54 9 11 6675-4115")
+COMPANY_FOOTER_EMAIL = os.getenv("COMPANY_FOOTER_EMAIL", "")
+COMPANY_FOOTER_CUIT = os.getenv("COMPANY_FOOTER_CUIT", "")
+COMPANY_FOOTER_WEB = os.getenv("COMPANY_FOOTER_WEB", "")
+COMPANY_FOOTER_WHATSAPP = os.getenv("COMPANY_FOOTER_WHATSAPP", "")
 
 
 # Directorio opcional donde guardar copias de PDFs de presupuestos
 # Si existe, se escriben allí además de devolverse al cliente
 QUOTES_SAVE_DIR = os.getenv(
     "QUOTES_SAVE_DIR",
-    r"Z:\MG BIO\1 PRESUPUESTOS MGBIO SA\2025\Pendientes de envío"
+    ""
 )
 
 # Email
@@ -67,7 +66,7 @@ EMAIL_USE_TLS = _bool_env("EMAIL_USE_TLS", "1")
 EMAIL_USE_SSL = _bool_env("EMAIL_USE_SSL", "0")
 EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", "20"))
 EMAIL_INSECURE_SKIP_VERIFY = _bool_env("EMAIL_INSECURE_SKIP_VERIFY", "0")
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@sepid.com.ar")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@example.com")
 EMAIL_LEGAL_FOOTER = os.getenv(
     "EMAIL_LEGAL_FOOTER",
     (
@@ -82,7 +81,7 @@ EMAIL_LEGAL_FOOTER = os.getenv(
 # Notificaciones: solicitudes de asignación de técnico
 ASSIGNMENT_REQUEST_RECIPIENTS = _csv("ASSIGNMENT_REQUEST_RECIPIENTS", "")
 # Notificaciones: bajas de equipos (otros sistemas)
-BAJA_NOTIFY_RECIPIENTS = _csv("BAJA_NOTIFY_RECIPIENTS", "eduardo@sepid.com.ar")
+BAJA_NOTIFY_RECIPIENTS = _csv("BAJA_NOTIFY_RECIPIENTS", "")
 # Notificaciones: presupuestos pendientes (solo rol jefe)
 PRESUPUESTO_ALERT_ENABLED = os.getenv("PRESUPUESTO_ALERT_ENABLED", "1").lower() in ("1", "true", "yes")
 PRESUPUESTO_ALERT_FIRST_DAYS = int(os.getenv("PRESUPUESTO_ALERT_FIRST_DAYS", "7"))
@@ -137,8 +136,8 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.getenv("POSTGRES_DB", os.getenv("PGDATABASE", "servicio_tecnico")),
-        "USER": os.getenv("POSTGRES_USER", os.getenv("PGUSER", "sepid")),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "supersegura")),
+        "USER": os.getenv("POSTGRES_USER", os.getenv("PGUSER", "postgres")),
+        "PASSWORD": os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "")),
         "HOST": os.getenv("POSTGRES_HOST", os.getenv("PGHOST", "postgres")),
         "PORT": os.getenv("POSTGRES_PORT", os.getenv("PGPORT", "5432")),
         "ATOMIC_REQUESTS": True,
@@ -213,26 +212,10 @@ INGRESO_MEDIA_ALLOWED_MIME = [
     ).split(',') if m.strip()
 ]
 
-# Ruta al repositorio de trazabilidad (Excels con ventas)
-# Se puede sobreescribir con la variable de entorno TRAZABILIDAD_ROOT
-TRAZABILIDAD_ROOT = os.getenv(
-    "TRAZABILIDAD_ROOT",
-    r"\\SERVERDATA\Datos\MG BIO\TRAZABILIDAD"
-)
-"""
-Ruta absoluta del Excel principal de trazabilidad (GENERAL).
-Se puede sobreescribir con la variable TRAZABILIDAD_GENERAL_FILE.
-Si no se define, se intenta resolver a partir de TRAZABILIDAD_ROOT.
-"""
-TRAZABILIDAD_GENERAL_FILE = os.getenv(
-    "TRAZABILIDAD_GENERAL_FILE",
-    os.path.join(TRAZABILIDAD_ROOT, "@GENERAL.xlsx")
-)
-
 # Catalogo de repuestos (costos)
 REPUESTOS_COSTOS_ROOT = os.getenv(
     "REPUESTOS_COSTOS_ROOT",
-    r"\\SERVERDATA\Datos\Servicio Tecnico"
+    "/repuestos"
 )
 
 REPUESTOS_COSTOS_FILE = os.getenv(
@@ -247,12 +230,6 @@ REPUESTOS_UNIFICADOS_FILE = os.getenv(
 )
 
 INGRESO_MEDIA_STORAGE_PREFIX = os.getenv('INGRESO_MEDIA_STORAGE_PREFIX', 'ingresos')
-
-# Catalogo de repuestos (listado unificado: codigo/descripcion/proveedor)
-REPUESTOS_UNIFICADOS_FILE = os.getenv(
-    "REPUESTOS_UNIFICADOS_FILE",
-    os.path.join(REPUESTOS_COSTOS_ROOT, "repuestos_unificados.xlsx")
-)
 
 
 # --- Seguridad / Autenticación (vistas) ---

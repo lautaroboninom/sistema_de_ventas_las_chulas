@@ -207,14 +207,6 @@ class DevicesListView(APIView):
             """
 
         with connection.cursor() as cur:
-            # Identificar id de cliente propio (MG BIO) si existe
-            cur.execute(
-                "SELECT id FROM customers WHERE LOWER(razon_social) LIKE %s ORDER BY id ASC LIMIT 1",
-                ["%mg%bio%"],
-            )
-            row_mg_owner = cur.fetchone()
-            mg_owner_id = row_mg_owner[0] if row_mg_owner else None
-
             wh, params = [], []
             if q_raw:
                 like = f"%{q_raw}%"
@@ -402,14 +394,13 @@ class DevicesListView(APIView):
                               OR d.numero_serie ~* '^(MG|NM|NV|CE)\\s*\\d{{1,4}}$')
                              AND COALESCE(d.alquilado,false) = false
                              AND d.customer_id IS NOT NULL
-                             AND (%s IS NULL OR d.customer_id <> %s)
-                        THEN TRUE ELSE FALSE END) AS vendido
+                         THEN TRUE ELSE FALSE END) AS vendido
                 {from_sql}
                 {where_sql}
                 ORDER BY {order_sql}
                 {limit_sql}
             """
-            cur.execute(sql, [mg_owner_id, mg_owner_id] + params + limit_params)
+            cur.execute(sql, params + limit_params)
             rows = _fetchall_dicts(cur)
 
         with connection.cursor() as cur2:

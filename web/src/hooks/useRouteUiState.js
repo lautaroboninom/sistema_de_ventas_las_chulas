@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "react-router-dom";
 
-const STORAGE_KEY = "sepid:route-ui-state:v1";
+const STORAGE_KEY = "reparaciones:route-ui-state:v1";
 const MAX_ROUTES = 60;
 const MAX_CONTROLS_PER_ROUTE = 220;
 const SAVE_THROTTLE_MS = 120;

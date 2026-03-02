@@ -12,6 +12,7 @@ export default function App() {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const rol = user?.rol;
+  const appName = import.meta.env.VITE_APP_NAME || "Sistema de Reparaciones";
 
   const canSeeHistorico = can(user, PERMISSION_CODES.PAGE_INGRESOS_HISTORY);
   const canSeeEquipos = can(user, PERMISSION_CODES.PAGE_DEVICES_PREVENTIVOS);
@@ -67,7 +68,7 @@ export default function App() {
           </button>
 
           <Link to="/" className="font-semibold">
-            SEPID Reparaciones
+            {appName}
           </Link>
 
           <nav className="hidden md:flex items-center gap-6 ml-6">

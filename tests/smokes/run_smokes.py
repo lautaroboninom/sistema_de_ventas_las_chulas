@@ -29,7 +29,7 @@ def pg_connect():
         f"host={env('POSTGRES_HOST','127.0.0.1')} "
         f"port={env('POSTGRES_PORT','5432')} "
         f"dbname={env('POSTGRES_DB','servicio_tecnico')} "
-        f"user={env('POSTGRES_USER','sepid')} "
+        f"user={env('POSTGRES_USER','postgres')} "
         f"password={env('POSTGRES_PASSWORD','')}"
     )
     return psycopg.connect(dsn)

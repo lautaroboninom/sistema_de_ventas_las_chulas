@@ -21,7 +21,7 @@ Manual del Sistema de Reparaciones
   - Diagnóstico y resolución: se setea `resolucion` al cerrar reparación; también se autocompleta en impresión de remito si estado=‘reparado’.
   - Presupuestos: emitir/enviar, aprobar/rechazar, “no aplica”; ver pestaña Presupuesto de la Hoja de Servicio.
   - Reparación y liberación: botón de orden de salida (remito) que libera; entrega con remito/factura/fecha.
-  - Derivaciones: crear, devolver; estados y unicidad de derivación abierta (ver `api/service/views/derivaciones_views.py`, `sql/ops/add_unique_open_derivacion_index.sql`).
+- Derivaciones: crear, devolver; estados y unicidad de derivación abierta (ver `api/service/views/derivaciones_views.py`, `sql/schema.sql`).
   - Listos para retiro (liberados): listado operativo para marcar ENTREGADO.
 
 - Operativa de remitos y presupuestos
@@ -50,7 +50,7 @@ Manual del Sistema de Reparaciones
 ### Derivados
 - Vistas: `web/src/pages/Derivados.jsx` y pestaña Derivaciones en la Hoja de Servicio.
 - Crear derivación: `POST /api/ingresos/:id/derivar/`.
-  - Reglas: una sola derivación abierta por ingreso (índice único condicional en `sql/ops/add_unique_open_derivacion_index.sql`).
+  - Reglas: una sola derivación abierta por ingreso (índice único condicional en `sql/schema.sql`).
   - Transición: `ingresos.estado` pasa a `derivado`.
 - Remito de derivación (PDF): `GET /api/ingresos/:id/derivaciones/:deriv_id/remito/`.
 - Devolver derivación: `POST /api/ingresos/:id/derivaciones/:deriv_id/devolver/`.
@@ -129,8 +129,8 @@ Manual del Sistema de Reparaciones
   - Ver endpoints en `api/service/urls.py` y vistas en `api/service/views`.
 
 - Configuración
-  - Variables de entorno: ver `.env`, `.env.prod`.
-  - Deploy: `docker-compose*.yml`, `nginx.conf`.
+  - Variables de entorno: copiar `.env.example` a `.env` y `.env.prod.example` a `.env.prod` (y, si aplica, `.env.prod.internet.example` a `.env.prod.internet`).
+  - Deploy: `docker-compose*.yml`, `web/deploy/web.nginx.conf` (HTTP) y `web/deploy/web.nginx.tls.conf` (TLS).
 
 - Glosario
   - OS: Orden de Servicio (ID de ingreso).

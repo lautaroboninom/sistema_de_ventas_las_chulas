@@ -115,16 +115,17 @@ class UsuariosView(APIView):
                     )
                     base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
                     url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-                    subj = "Bienvenido a SEPID - Configura tu contrasena"
+                    company = getattr(settings, "COMPANY_NAME", "Sistema de Reparaciones")
+                    subj = f"Bienvenido a {company} - Configura tu contrasena"
                     txt = (
                         f"Hola {user['nombre']},\n\n"
-                        f"Te damos la bienvenida al sistema de reparaciones de SEPID. "
+                        f"Te damos la bienvenida a {company}. "
                         f"Usa este enlace para establecer tu contrasena (valido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
                         f"Si no esperabas este correo, ignoralo."
                     )
                     html = f"""
                         <p>Hola {user['nombre']},</p>
-                        <p>Bienvenido al sistema de reparaciones de <strong>SEPID</strong>.</p>
+                        <p>Bienvenido a <strong>{company}</strong>.</p>
                         <p>Usa este enlace para establecer tu contrasena (valido {TOKEN_TTL_MIN} minutos):</p>
                         <p><a href="{url}">{url}</a></p>
                         <p>Si no esperabas este correo, ignoralo.</p>
@@ -176,7 +177,8 @@ class UsuarioResetPassView(APIView):
         )
         base = getattr(settings, "PUBLIC_WEB_URL", None) or getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
         url = f"{(base or '').rstrip('/')}/restablecer?t={token}"
-        subj = "SEPID - Enlace para establecer tu contrasena"
+        company = getattr(settings, "COMPANY_NAME", "Sistema de Reparaciones")
+        subj = f"{company} - Enlace para establecer tu contrasena"
         txt = (
             f"Hola {user['nombre']},\n\n"
             f"Solicitaron un enlace para establecer o restablecer tu contrasena. "

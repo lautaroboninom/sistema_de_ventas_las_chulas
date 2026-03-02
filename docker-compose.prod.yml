@@ -43,10 +43,6 @@ services:
         source: ${REPUESTOS_COSTOS_HOST_DIR:-./repuestos}
         target: /repuestos
         read_only: true
-      - type: bind
-        source: "C:/trazabilidad_general"
-        target: /trazabilidad
-        read_only: true
     restart: unless-stopped
 
   web:
@@ -73,7 +69,8 @@ services:
       - "443:443"
     volumes:
       - staticfiles:/static:ro
-      - C:/sepid_certs:/etc/nginx/certs:ro
+      - ${TLS_CERTS_HOST_DIR:-./certs}:/etc/nginx/certs:ro
+      - ./web/deploy/web.nginx.tls.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
 
   nginx:

@@ -602,9 +602,8 @@ class MarcarReparadoView(APIView):
             if not isinstance(_recips, (list, tuple)):
                 _recips = [str(_recips)] if _recips else []
             if not _recips:
-                _fb1 = getattr(settings, "COMPANY_FOOTER_EMAIL_2", None)
-                _fb2 = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
-                _recips = [x for x in [_fb1, _fb2] if x]
+                _fb = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
+                _recips = [x for x in [_fb] if x]
 
             def _send_repair_email():
                 if not _recips:
@@ -2163,9 +2162,8 @@ class IngresoSolicitarAsignacionView(APIView):
             if not isinstance(recips, (list, tuple)):
                 recips = [str(recips)] if recips else []
             if not recips:
-                fallback1 = getattr(settings, "COMPANY_FOOTER_EMAIL_2", None)
-                fallback2 = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
-                recips = [x for x in [fallback1, fallback2] if x]
+                fallback = getattr(settings, "COMPANY_FOOTER_EMAIL", None)
+                recips = [x for x in [fallback] if x]
 
             # Debug info (sin secretos)
             try:
@@ -2503,10 +2501,10 @@ class NuevoIngresoView(APIView):
         cliente = data.get("cliente") or {}
         equipo = data.get("equipo") or {}
 
-        # Empresa a facturar (branding de PDFs). Default SEPID; valida solo dos valores.
-        empresa_facturar = (data.get("empresa_facturar") or "SEPID").strip().upper()
-        if empresa_facturar not in ("SEPID", "MGBIO"):
-            empresa_facturar = "SEPID"
+        # Empresa a facturar (branding de PDFs) - opcional. Solo se persiste si existe la columna.
+        empresa_facturar = (data.get("empresa_facturar") or getattr(settings, "COMPANY_CODE", "DEFAULT")).strip().upper()
+        if not empresa_facturar:
+            empresa_facturar = getattr(settings, "COMPANY_CODE", "DEFAULT")
 
         motivo_raw = (data.get("motivo") or "").strip()
         if not motivo_raw:
@@ -3039,11 +3037,9 @@ class GarantiaReparacionCheckView(APIView):
         within = (timezone.now() - last_out).days <= 90
         return Response({"within_90_days": within, "last_ingreso": last_out})
 
-#TODO: chequear porqué en GarantiaFabricaCheckView hay código muerto
 class GarantiaFabricaCheckView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
-        # Cálculo basado en Excel GENERAL (Parte 1)
         ns = (request.GET.get("numero_serie") or "").strip()
         mg = (request.GET.get("numero_interno") or request.GET.get("mg") or "").strip()
         if mg and not mg.upper().startswith(("MG", "NM", "NV", "CE")):
@@ -3087,26 +3083,22 @@ class GarantiaFabricaCheckView(APIView):
         except Exception:
             calc = {"garantia": None, "fecha_venta": None, "vence_el": None, "meta": {}}
 
-        en_garantia = bool(calc.get("garantia")) if calc.get("garantia") is not None else False
-        fecha_venta = calc.get("fecha_venta")
-        vence = calc.get("vence_el")
-        meta = calc.get("meta") or {}
+        # Si hay un vencimiento o una garantía calculada, devolver eso.
+        if (calc.get("garantia") is not None) or calc.get("vence_el"):
+            en_garantia = bool(calc.get("garantia")) if calc.get("garantia") is not None else False
+            fecha_venta = calc.get("fecha_venta")
+            vence = calc.get("vence_el")
+            meta = calc.get("meta") or {}
 
-        return Response({
-            "within_365_days": en_garantia,
-            "fecha_venta": (fecha_venta.isoformat() if fecha_venta else None),
-            "garantia_vence": (vence.isoformat() if vence else None),
-            "found": bool(fecha_venta),
-            "meta": meta,
-        })
-        # Fuente de verdad: último ingreso del equipo
-        ns = (request.GET.get("numero_serie") or "").strip()
-        mg = (request.GET.get("numero_interno") or request.GET.get("mg") or "").strip()
-        if mg and not mg.upper().startswith(("MG", "NM", "NV", "CE")):
-            mg = "MG " + mg
+            return Response({
+                "within_365_days": en_garantia,
+                "fecha_venta": (fecha_venta.isoformat() if fecha_venta else None),
+                "garantia_vence": (vence.isoformat() if vence else None),
+                "found": bool(fecha_venta) or bool(vence),
+                "meta": meta,
+            })
 
-        if not ns and not mg:
-            return Response({"within_365_days": False, "fecha_venta": None, "found": False})
+        # Fallback: último ingreso del equipo (si existe)
 
         wh = []
         params = []

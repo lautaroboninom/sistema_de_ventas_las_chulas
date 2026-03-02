@@ -9,7 +9,7 @@ Alcance auditado por change_log
 - Tablas con trigger activo:
   - ingresos, devices, ingreso_accesorios, quotes, quote_items
   - marcas, models, customers, users, proveedores_externos
-    - Se agregan con `sql/ops/add_audit_triggers_catalogs.sql` y `scripts/install_audit_pg.py`.
+    - Requiere instalar triggers en la base (no se incluyen utilidades específicas en esta versión base).
 
 Historial de Hoja de Servicio (ServiceSheet)
 - Endpoint: `GET /api/ingresos/:id/historial/`
@@ -25,10 +25,9 @@ Cuándo usar cada fuente
 - `audit_log`: depurar llamadas HTTP (qué endpoint y payload se enviaron).
 
 Operación/Deploy
-- Producción: ejecutar `scripts/install_audit_pg.py` o aplicar `sql/ops/add_audit_triggers_catalogs.sql` para activar triggers en catálogos/usuarios.
+- Producción: crear esquema `audit` + tabla `audit.change_log` y agregar triggers en las tablas auditables (según necesidades del cliente).
 - Rollback: `DROP TRIGGER ... ON <tabla>` (mantiene `audit.change_log` y datos existentes).
 
 Notas
 - La UI de ServiceSheet no muestra `audit_log` por defecto para mantener el historial legible.
 - `include_audit` está pensado como toggle de diagnóstico o para una vista separada de auditoría.
-

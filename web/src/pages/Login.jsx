@@ -11,6 +11,7 @@ export default function Login() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [backendOk, setBackendOk] = useState(true);
+  const appName = import.meta.env.VITE_APP_NAME || "Sistema de Reparaciones";
 
   const nav = useNavigate();
   const loc = useLocation();
@@ -65,7 +66,7 @@ export default function Login() {
           <div className="flex justify-center mb-4">
             <img
               src="/branding/logo-app.png"
-              alt="SEPID Reparaciones"
+              alt={appName}
               className="h-12 object-contain"
               onError={(e) => {
                 e.currentTarget.onerror = null;
@@ -83,7 +84,7 @@ export default function Login() {
             <input
               className="input"
               type="email"
-              placeholder="...@sepid.com.ar"
+              placeholder="...@empresa.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="email"
