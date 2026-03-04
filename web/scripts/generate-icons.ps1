@@ -1,11 +1,11 @@
-param(
-  [string]$Source = "web/public/branding/logo-app.png"
+﻿param(
+  [string]$Source = "web/public/branding/las-chulas-mark.png"
 )
 
 $ErrorActionPreference = 'Stop'
 
 if (-not (Test-Path $Source)) {
-  Write-Error "No se encontró la imagen de origen: $Source. Copiá tu logo como 'web/public/logo-app.png' o pasá -Source."
+  Write-Error "No se encontro la imagen de origen: $Source. Copia el logo PNG y pasa -Source si usas otra ruta."
 }
 
 $outDir = Join-Path 'web/public' 'icons'
@@ -51,4 +51,4 @@ Export-Size -Img $img -Size 512 -OutPath (Join-Path $outDir 'logo-app-512-maskab
 
 $img.Dispose()
 
-Write-Host "Listo. Íconos generados en $outDir"
+Write-Host "Listo. Iconos generados en $outDir"

@@ -110,6 +110,6 @@ class DRFUser:
     @property
     def is_anonymous(self):     return False
     @property
-    def is_staff(self):         return self.rol == "jefe"  # o el criterio que uses
+    def is_staff(self):         return self.rol == "admin"
     @property
-    def is_superuser(self):     return self.rol == "jefe"  # opcional
+    def is_superuser(self):     return self.rol == "admin"

@@ -1,384 +1,130 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
-import { AuthProvider } from "./context/AuthContext";
-import ErrorBoundary from "./components/ErrorBoundary";
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { Navigate, createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import ErrorBoundary from './components/ErrorBoundary';
 
-import "./index.css";
-import App from "./App";
-import Login from "./pages/Login";
-import Forbidden from "./pages/Forbidden.jsx";
-import Tecnico from "./pages/Tecnico";
-import Presupuestados from "./pages/Presupuestados.jsx";
-import PendientesPresupuesto from "./pages/PendientesPresupuesto.jsx";
-import AdminListos from "./pages/AdminListos";
-import GeneralPorCliente from "./pages/GeneralPorCliente";
-import Usuarios from "./pages/Usuarios";
-import NuevoIngreso from "./pages/NuevoIngreso";
-import CatalogoClientes from "./pages/CatalogoClientes";
-import CatalogoMarcas from "./pages/CatalogoMarcas";
-import CatalogoProveedores from "./pages/CatalogoProveedores";
-import TiposEquipo from "./pages/TiposEquipo.jsx";
-import Accesorios from "./pages/Accesorios.jsx";
-import Repuestos from "./pages/Repuestos.jsx";
-import ProtectedRoute from "./components/ProtectedRoute";
-import PendientesGeneral from "./pages/PendientesGeneral.jsx";
-import Aprobados from "./pages/Aprobados.jsx";
-import Reparados from "./pages/Reparados.jsx";
-import HistoricoIngresos from "./pages/HistoricoIngresos.jsx";
-import ServiceSheet from "./pages/ServiceSheet";
-import PendientesPorTecnico from "./pages/PendientesPorTecnico.jsx";
-import DerivarIngreso from "./pages/DerivarIngreso.jsx";
-import StockAlquiler from "./pages/StockAlquiler.jsx";
-import BusquedaNSCard from "./components/BusquedaNSCard.jsx";
-import BusquedaAccRefCard from "./components/BusquedaAccRefCard.jsx";
-import QrScanCard from "./components/QrScanCard.jsx";
-import BuscarNS from "./pages/BuscarNS.jsx";
-import BuscarAccesorio from "./pages/BuscarAccesorio.jsx";
-import ForgotPassword from "./pages/ForgotPassword";
-import ResetPassword from "./pages/ResetPassword";
-import Depositos from "./pages/Depositos.jsx";
-import Derivados from "./pages/Derivados.jsx";
-import Metricas from "./pages/Metricas.jsx";
-import MetricasClientes from "./pages/MetricasClientes.jsx";
-import MetricasFinanzas from "./pages/MetricasFinanzas.jsx";
-import Garantias from "./pages/Garantias.jsx";
-import Equipos from "./pages/Equipos.jsx";
-import { PERMISSION_CODES } from "./lib/permissions";
+import './index.css';
+import App from './App';
+import Login from './pages/Login';
+import Forbidden from './pages/Forbidden.jsx';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import ProtectedRoute from './components/ProtectedRoute';
+import Pos from './pages/Pos.jsx';
+import Productos from './pages/Productos.jsx';
+import Compras from './pages/Compras.jsx';
+import Ventas from './pages/Ventas.jsx';
+import Garantias from './pages/Garantias.jsx';
+import Reportes from './pages/Reportes.jsx';
+import Online from './pages/Online.jsx';
+import ConfigGeneral from './pages/ConfigGeneral.jsx';
+import ConfigPaginas from './pages/ConfigPaginas.jsx';
+import { PERMISSION_CODES } from './lib/permissions';
+
+function resolveInitialRoute() {
+  const saved = window.localStorage.getItem('las_chulas_default_route') || '/pos';
+  const allowed = new Set(['/pos', '/productos', '/compras', '/ventas', '/garantias', '/online', '/config']);
+  return allowed.has(saved) ? saved : '/pos';
+}
 
 function NotFound() {
   return <div className="p-8 text-center text-gray-600">Página no encontrada</div>;
 }
 
 const router = createBrowserRouter([
-  { path: "/login", element: <Login /> },
-  { path: "/recuperar", element: <ForgotPassword /> },
-  { path: "/403", element: <Forbidden /> },
-  { path: "/restablecer", element: <ResetPassword /> },
+  { path: '/login', element: <Login /> },
+  { path: '/recuperar', element: <ForgotPassword /> },
+  { path: '/403', element: <Forbidden /> },
+  { path: '/restablecer', element: <ResetPassword /> },
   {
-    path: "/",
+    path: '/',
     element: <App />,
     children: [
+      { index: true, element: <Navigate to={resolveInitialRoute()} replace /> },
       {
-        index: true,
+        path: 'pos',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_HOME_SEARCH}>
-            <div className="p-6">
-              <h1 className="text-2xl font-bold">Bienvenido</h1>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <BusquedaNSCard />
-                <BusquedaAccRefCard />
-                <QrScanCard />
-              </div>
-            </div>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_POS}>
+            <Pos />
           </ProtectedRoute>
         ),
       },
       {
-        path: "buscar-ns",
+        path: 'productos',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_HOME_SEARCH}>
-            <BuscarNS />
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_PRODUCTOS}>
+            <Productos />
           </ProtectedRoute>
         ),
       },
       {
-        path: "buscar-accesorio",
+        path: 'compras',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_HOME_SEARCH}>
-            <BuscarAccesorio />
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_COMPRAS}>
+            <Compras />
           </ProtectedRoute>
         ),
       },
       {
-        path: "tecnico",
+        path: 'ventas',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
-            <Tecnico />
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_VENTAS}>
+            <Ventas />
           </ProtectedRoute>
         ),
       },
       {
-        path: "pendientes",
+        path: 'garantias',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
-            <PendientesGeneral />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "pendientes-por-tecnico",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
-            <PendientesPorTecnico />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "pendientes-presupuesto",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_BUDGET_QUEUES}>
-            <PendientesPresupuesto />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "presupuestados",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_BUDGET_QUEUES}>
-            <Presupuestados />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "aprobados",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
-            <Aprobados />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "reparados",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WORK_QUEUES}>
-            <Reparados />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "derivados",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_LOGISTICS}>
-            <Derivados />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "listos",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_LOGISTICS}>
-            <AdminListos />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "alquiler/stock",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_LOGISTICS}>
-            <StockAlquiler />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "depositos",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_LOGISTICS}>
-            <Depositos />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "clientes",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_INGRESOS_HISTORY}>
-            <GeneralPorCliente />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "ingresos/historico",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_INGRESOS_HISTORY}>
-            <HistoricoIngresos />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "ingresos",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_INGRESOS_HISTORY}>
-            <HistoricoIngresos />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "equipos",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_DEVICES_PREVENTIVOS}>
-            <Equipos />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "ingresos/nuevo",
-        element: (
-          <ProtectedRoute
-            permissions={[
-              PERMISSION_CODES.ACTION_INGRESO_CREATE,
-              PERMISSION_CODES.PAGE_NEW_INGRESO,
-            ]}
-          >
-            <NuevoIngreso />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "metricas",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_METRICS}>
-            <Metricas />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "metricas/clientes",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_METRICS}>
-            <MetricasClientes />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "metricas/finanzas",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_METRICS}>
-            <MetricasFinanzas />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "metricas/config",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_METRICS}>
-            <Metricas />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "garantias",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_WARRANTY}>
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_VENTAS}>
             <Garantias />
           </ProtectedRoute>
         ),
       },
       {
-        path: "usuarios",
+        path: 'reportes',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_USERS}>
-            <Usuarios />
+          <ProtectedRoute roles={['admin']}>
+            <Reportes />
           </ProtectedRoute>
         ),
       },
       {
-        path: "catalogo/clientes",
+        path: 'online',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
-            <CatalogoClientes />
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_ONLINE}>
+            <Online />
           </ProtectedRoute>
         ),
       },
       {
-        path: "catalogo/marcas",
+        path: 'config',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
-            <CatalogoMarcas />
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CONFIG}>
+            <ConfigGeneral />
           </ProtectedRoute>
         ),
       },
       {
-        path: "catalogo/tipos-equipo",
+        path: 'config/paginas',
         element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
-            <TiposEquipo />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "catalogo/accesorios",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
-            <Accesorios />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "catalogo/repuestos",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_SPARE_PARTS}>
-            <Repuestos />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "catalogo/proveedores",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CATALOGS}>
-            <CatalogoProveedores />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "ingresos/:id",
-        element: (
-          <ProtectedRoute
-            permissions={[
-              PERMISSION_CODES.PAGE_INGRESOS_HISTORY,
-              PERMISSION_CODES.PAGE_WORK_QUEUES,
-              PERMISSION_CODES.PAGE_BUDGET_QUEUES,
-              PERMISSION_CODES.PAGE_LOGISTICS,
-              PERMISSION_CODES.ACTION_PRESUPUESTO_MANAGE,
-              PERMISSION_CODES.ACTION_INGRESO_EDIT_BASICS,
-              PERMISSION_CODES.ACTION_INGRESO_EDIT_DIAGNOSIS,
-              PERMISSION_CODES.ACTION_INGRESO_EDIT_LOCATION,
-              PERMISSION_CODES.ACTION_INGRESO_EDIT_DELIVERY,
-              PERMISSION_CODES.ACTION_INGRESO_MANAGE_DERIVATIONS,
-              PERMISSION_CODES.ACTION_INGRESO_REPAIR_TRANSITIONS,
-              PERMISSION_CODES.ACTION_INGRESO_BAJA_ALTA,
-            ]}
-          >
-            <ServiceSheet />
-          </ProtectedRoute>
-        ),
-      },
-      {
-        path: "ingresos/:id/derivar",
-        element: (
-          <ProtectedRoute permissions={PERMISSION_CODES.ACTION_INGRESO_MANAGE_DERIVATIONS}>
-            <DerivarIngreso />
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_CONFIG}>
+            <ConfigPaginas />
           </ProtectedRoute>
         ),
       },
     ],
   },
-  { path: "*", element: <NotFound /> },
+  { path: '*', element: <NotFound /> },
 ]);
 
-ReactDOM.createRoot(document.getElementById("root")).render(
+ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
       <AuthProvider>
         <RouterProvider router={router} />
       </AuthProvider>
     </ErrorBoundary>
-  </React.StrictMode>,
+  </React.StrictMode>
 );
-
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  try {
-    navigator.serviceWorker.getRegistrations?.().then((regs) => {
-      regs?.forEach((r) => r.unregister().catch(() => {}));
-    });
-    if (window.caches && caches.keys) {
-      caches.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
-    }
-  } catch (_) {}
-}
-
-if (import.meta.env.PROD && import.meta.env.VITE_SW === "1" && "serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
-  });
-}
-

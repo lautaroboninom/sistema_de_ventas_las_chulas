@@ -7,7 +7,7 @@ from django.db import connection
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
-from .permission_catalog import PERMISSION_CODES_SET, get_catalog, get_role_defaults, normalize_role
+from .permission_catalog import PERMISSION_CODES_SET, get_role_defaults, normalize_role
 from .permission_policy import VIEW_PERMISSION_MATRIX
 
 
@@ -45,8 +45,7 @@ def _fetch_overrides(user_id):
 
 def resolve_effective_permissions(user_id=None, role=None, overrides=None):
     role_key = normalize_role(role)
-    if role_key == "jefe":
-        return {item["code"]: True for item in get_catalog()}
+
 
     effective = get_role_defaults(role_key)
     src = overrides if overrides is not None else _fetch_overrides(user_id)
@@ -57,6 +56,9 @@ def resolve_effective_permissions(user_id=None, role=None, overrides=None):
             effective[code] = True
         elif effect == EFFECT_DENY:
             effective[code] = False
+    # Reportes es una pagina exclusiva de admin y no se puede habilitar via overrides.
+    if role_key != "admin":
+        effective["page.reportes"] = False
     return effective
 
 
@@ -190,3 +192,5 @@ class MappedPermissionGuard(BasePermission):
         if len(codes) == 1:
             return user_has_permission(request, codes[0])
         return user_has_any_permission(request, codes)
+
+

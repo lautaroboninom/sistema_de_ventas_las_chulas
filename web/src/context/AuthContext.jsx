@@ -39,7 +39,7 @@ export function AuthProvider({ children }) {
       try {
         const data = await getAuthSession();
         if (!active) return;
-        // La API de sesion devuelve los campos del usuario en el nivel raiz.
+        // La API de sesión devuelve los campos del usuario en el nivel raíz.
         // Mantener compatibilidad si alguna vez vuelve como { user, features }.
         const u = data?.user ?? data;
         if (u) {

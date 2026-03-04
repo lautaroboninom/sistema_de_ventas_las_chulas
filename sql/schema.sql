@@ -1,1383 +1,747 @@
--- schema/postgres.sql
--- Esquema consolidado para PostgreSQL (12+)
--- Unifica DDL, índices, vistas y triggers necesarios para la app.
--- Objetivo: base “prolija” y mínima sin parches adicionales.
+-- schema.sql
+-- Las Chulas - Esquema retail puro (PostgreSQL 12+)
 
 SET TIME ZONE 'America/Argentina/Buenos_Aires';
 CREATE EXTENSION IF NOT EXISTS citext;
 
--- =============================
--- Tipos enumerados (dominios)
--- =============================
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ticket_state') THEN
-    CREATE TYPE ticket_state AS ENUM (
-      'ingresado','diagnosticado','presupuestado','reparar','controlado_sin_defecto','reparado','entregado','baja','derivado','liberado','alquilado'
-    );
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'motivo_ingreso') THEN
-    CREATE TYPE motivo_ingreso AS ENUM (
-      'reparación','service preventivo','baja alquiler','reparación alquiler','urgente control','devolución demo','otros'
-    );
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'disposicion_type') THEN
-    CREATE TYPE disposicion_type AS ENUM ('normal','para_repuesto');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'quote_estado') THEN
-    CREATE TYPE quote_estado AS ENUM ('pendiente','emitido','aprobado','rechazado','presupuestado','no_aplica');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'quote_item_tipo') THEN
-    CREATE TYPE quote_item_tipo AS ENUM ('repuesto','mano_obra','servicio');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'deriv_estado') THEN
-    CREATE TYPE deriv_estado AS ENUM ('derivado','en_servicio','devuelto','entregado_cliente');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preventivo_scope_type') THEN
-    CREATE TYPE preventivo_scope_type AS ENUM ('device','customer');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preventivo_period_unit') THEN
-    CREATE TYPE preventivo_period_unit AS ENUM ('dias','meses','anios');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preventivo_revision_state') THEN
-    CREATE TYPE preventivo_revision_state AS ENUM ('borrador','cerrada','cancelada');
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'preventivo_item_state') THEN
-    CREATE TYPE preventivo_item_state AS ENUM ('pendiente','ok','retirado','no_controlado');
-  END IF;
-END $$;
-
--- =============================
--- Funciones utilitarias / triggers
--- =============================
 CREATE OR REPLACE FUNCTION set_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at := CURRENT_TIMESTAMP;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION audit_log_no_update()
-RETURNS TRIGGER AS $$
-BEGIN
-  RAISE EXCEPTION 'audit_log is append-only';
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE FUNCTION sync_quote_with_ingreso()
-RETURNS TRIGGER AS $$
-DECLARE
-  v_cur_estado ticket_state;
-  v_new_estado quote_estado;
-BEGIN
-  v_new_estado := NEW.estado;
-  SELECT estado INTO v_cur_estado FROM ingresos WHERE id = NEW.ingreso_id;
-  UPDATE ingresos
-     SET presupuesto_estado = (
-            CASE v_new_estado
-              WHEN 'emitido' THEN 'presupuestado'::quote_estado
-              WHEN 'presupuestado' THEN 'presupuestado'::quote_estado
-              WHEN 'aprobado' THEN 'aprobado'::quote_estado
-              WHEN 'rechazado' THEN 'rechazado'::quote_estado
-              WHEN 'no_aplica' THEN 'no_aplica'::quote_estado
-              ELSE 'pendiente'::quote_estado
-            END
-         ),
-         estado = (
-            CASE
-              WHEN v_new_estado = 'aprobado' AND v_cur_estado IN ('ingresado','diagnosticado','presupuestado') THEN 'reparar'::ticket_state
-              ELSE v_cur_estado
-            END
-         )
-   WHERE id = NEW.ingreso_id;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- =============================
--- Tablas base
--- =============================
-CREATE TABLE IF NOT EXISTS users (
-  id               INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre           TEXT        NOT NULL,
-  email            CITEXT NOT NULL UNIQUE,
-  hash_pw          TEXT,
-  rol              TEXT NOT NULL,
-  activo           BOOLEAN     NOT NULL DEFAULT TRUE,
-  creado_en        TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS user_permission_overrides (
-  id               INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  permission_code  TEXT    NOT NULL,
-  effect           TEXT    NOT NULL,
-  updated_by       INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT uq_user_permission_overrides UNIQUE (user_id, permission_code),
-  CONSTRAINT chk_user_permission_effect CHECK (effect IN ('allow','deny'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_permission_overrides_user_id
-  ON user_permission_overrides(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_permission_overrides_permission_code
-  ON user_permission_overrides(permission_code);
-CREATE OR REPLACE FUNCTION trg_set_updated_at_user_permission_overrides()
 RETURNS TRIGGER AS $$
 BEGIN
   NEW.updated_at := NOW();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS set_updated_at_user_permission_overrides ON user_permission_overrides;
-CREATE TRIGGER set_updated_at_user_permission_overrides
-BEFORE UPDATE ON user_permission_overrides
-FOR EACH ROW EXECUTE FUNCTION trg_set_updated_at_user_permission_overrides();
 
-CREATE TABLE IF NOT EXISTS marcas (
-  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre      TEXT NOT NULL,
-  tecnico_id  INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  CONSTRAINT uq_marcas_nombre UNIQUE (nombre)
-);
-
-CREATE TABLE IF NOT EXISTS models (
-  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  marca_id    INTEGER NOT NULL REFERENCES marcas(id) ON DELETE RESTRICT,
-  nombre      TEXT NOT NULL,
-  tecnico_id  INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  tipo_equipo TEXT NULL,
-  variante    TEXT NULL,
-  CONSTRAINT uq_models_marca_nombre UNIQUE (marca_id, nombre)
-);
-
-CREATE TABLE IF NOT EXISTS locations (
-  id      INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre  TEXT NOT NULL UNIQUE
-);
-
--- Seed mínimo indispensable
-INSERT INTO locations(nombre) VALUES
-  ('Taller'),
-  ('Sarmiento'),
-  ('Estantería de Alquiler'),
-  ('-')
-ON CONFLICT DO NOTHING;
-
-CREATE TABLE IF NOT EXISTS customers (
-  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  cod_empresa   TEXT,
-  razon_social  TEXT NOT NULL,
-  cuit          TEXT,
-  contacto      TEXT,
-  telefono      TEXT,
-  telefono_2    TEXT,
-  email         TEXT
-);
-
--- Seed minimo para flujos de equipos particulares
-INSERT INTO customers(cod_empresa, razon_social)
-SELECT NULL, 'Particular'
-WHERE NOT EXISTS (
-  SELECT 1 FROM customers WHERE LOWER(razon_social) = 'particular'
-);
-
--- TODO agregar etiq_garantia_ok a NuevoIgreso
-CREATE TABLE IF NOT EXISTS devices (
-  id               INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  customer_id      INTEGER  NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
-  marca_id         INTEGER  NULL REFERENCES marcas(id) ON DELETE SET NULL,
-  model_id         INTEGER  NULL REFERENCES models(id) ON DELETE SET NULL,
-  numero_serie     TEXT,
-  numero_interno   TEXT,    -- MG|NM|NV|CE #### (normalizado)
-  tipo_equipo      TEXT,
-  variante         TEXT,
-  garantia_vence   DATE,
-  ubicacion_id     INTEGER NULL REFERENCES locations(id) ON DELETE SET NULL,
-  propietario      TEXT,
-  propietario_nombre   TEXT,
-  propietario_contacto TEXT,
-  propietario_doc      TEXT,
-  n_de_control     TEXT,    -- N° faja garantía (snapshot del último ingreso)
-  alquilado        BOOLEAN NOT NULL DEFAULT FALSE,
-  alquiler_a       TEXT
-);
-
--- Índices funcionales y unicidad (normalizados)
--- Unicidad por número de serie normalizado (UPPER, sin espacios ni guiones)
-CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_ns_norm
-  ON devices ((UPPER(REPLACE(REPLACE(numero_serie, ' ', ''), '-', ''))))
-  WHERE NULLIF(TRIM(numero_serie), '') IS NOT NULL;
-
--- Unicidad por número interno normalizado a 'XX ####' (MG|NM|NV|CE)
-DO $$
-BEGIN
-  BEGIN
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_numint_norm
-      ON devices ((UPPER(REGEXP_REPLACE(numero_interno,
-           '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))))
-      WHERE numero_interno ~* '^(MG|NM|NV|CE)\s*\d{1,4}$';
-  EXCEPTION WHEN OTHERS THEN
-    -- Si hay duplicados en bases legacy, mantener al menos indice no-unico.
-    CREATE INDEX IF NOT EXISTS idx_devices_numint_norm
-      ON devices ((UPPER(REGEXP_REPLACE(numero_interno,
-           '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))))
-      WHERE numero_interno ~* '^(MG|NM|NV|CE)\s*\d{1,4}$';
-  END;
-END $$;
-
-CREATE TABLE IF NOT EXISTS ingresos (
-  id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  device_id            INTEGER NOT NULL REFERENCES devices(id) ON DELETE RESTRICT,
-  estado               ticket_state NOT NULL DEFAULT 'ingresado',
-  motivo               motivo_ingreso NOT NULL,
-  fecha_ingreso        TIMESTAMPTZ NULL,
-  fecha_creacion       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  fecha_servicio       TIMESTAMPTZ NULL,
-  fecha_entrega        TIMESTAMPTZ NULL,
-  ubicacion_id         INTEGER NULL REFERENCES locations(id) ON DELETE SET NULL,
-  disposicion          disposicion_type NOT NULL DEFAULT 'normal',
-  informe_preliminar   TEXT,
-  accesorios           TEXT,
-  equipo_variante      TEXT,
-  remito_ingreso       TEXT,
-  remito_salida        TEXT,
-  factura_numero       TEXT,
-  recibido_por         INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  comentarios          TEXT,
-  garantia_reparacion  BOOLEAN,
-  garantia_fabrica     BOOLEAN,
-  faja_garantia        TEXT,
-  etiq_garantia_ok     BOOLEAN,
-  presupuesto_estado   quote_estado NOT NULL DEFAULT 'pendiente',
-  asignado_a           INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  etiqueta_qr          TEXT NULL,
-  alquilado            BOOLEAN,
-  alquiler_a           TEXT,
-  alquiler_remito      TEXT,
-  alquiler_fecha       DATE,
-  propietario_nombre   TEXT,
-  propietario_contacto TEXT,
-  propietario_doc      TEXT,
-  descripcion_problema  TEXT,
-  trabajos_realizados   TEXT,
-  serial_cambio         TEXT,
-  resolucion           TEXT NULL
-);
-
--- Compat de schema para bases legacy (evita parches manuales fase 1/2)
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS numero_interno TEXT;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS tipo_equipo TEXT;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS variante TEXT;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS garantia_vence DATE;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS ubicacion_id INTEGER NULL REFERENCES locations(id) ON DELETE SET NULL;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS propietario_nombre TEXT;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS propietario_contacto TEXT;
-ALTER TABLE devices ADD COLUMN IF NOT EXISTS propietario_doc TEXT;
-
-ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS etiq_garantia_ok BOOLEAN;
-ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS garantia_fabrica BOOLEAN;
-ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS propietario_nombre TEXT;
-ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS propietario_contacto TEXT;
-ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS propietario_doc TEXT;
-
--- Backfill minimo para bases antiguas
-WITH cand AS (
-  SELECT d.id,
-         UPPER(REGEXP_REPLACE(NULLIF(d.n_de_control,''),
-           '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0'))) AS norm
-    FROM devices d
-   WHERE (d.numero_interno IS NULL OR d.numero_interno = '')
-     AND NULLIF(d.n_de_control,'') IS NOT NULL
-)
-UPDATE devices d
-   SET numero_interno = c.norm
-  FROM cand c
- WHERE d.id = c.id
-   AND c.norm IS NOT NULL
-   AND NOT EXISTS (
-     SELECT 1
-       FROM devices x
-      WHERE x.id <> d.id
-        AND UPPER(REGEXP_REPLACE(x.numero_interno,
-            '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0'))) = c.norm
-   );
-
-UPDATE devices d
-   SET numero_interno = UPPER(REGEXP_REPLACE(d.numero_serie, '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))
- WHERE d.numero_serie ~* '^(MG|NM|NV|CE)\s*\d{1,4}$'
-   AND (d.numero_interno IS NULL OR d.numero_interno = '')
-   AND NOT EXISTS (
-     SELECT 1
-       FROM devices x
-      WHERE x.id <> d.id
-        AND UPPER(REGEXP_REPLACE(x.numero_interno,
-            '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0'))) =
-            UPPER(REGEXP_REPLACE(d.numero_serie, '^(MG|NM|NV|CE)\s*(\d{1,4})$', '\1 ' || LPAD('\2',4,'0')))
-   );
-
-UPDATE devices d
-   SET tipo_equipo = COALESCE(d.tipo_equipo, m.tipo_equipo),
-       variante    = COALESCE(d.variante, m.variante)
-  FROM models m
- WHERE m.id = d.model_id
-   AND (d.tipo_equipo IS NULL OR d.variante IS NULL);
-
-WITH last_ingreso AS (
-  SELECT DISTINCT ON (t.device_id)
-         t.device_id,
-         NULLIF(t.faja_garantia,'') AS faja
-    FROM ingresos t
-   ORDER BY t.device_id, COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
-)
-UPDATE devices d
-   SET n_de_control = COALESCE(last_ingreso.faja, d.n_de_control)
-  FROM last_ingreso
- WHERE d.id = last_ingreso.device_id;
-
-WITH last_i AS (
-  SELECT d.id AS device_id,
-         (
-           SELECT t.propietario_nombre
-             FROM ingresos t
-            WHERE t.device_id = d.id
-            ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
-            LIMIT 1
-         ) AS p_nombre,
-         (
-           SELECT t.propietario_contacto
-             FROM ingresos t
-            WHERE t.device_id = d.id
-            ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
-            LIMIT 1
-         ) AS p_contacto,
-         (
-           SELECT t.propietario_doc
-             FROM ingresos t
-            WHERE t.device_id = d.id
-            ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
-            LIMIT 1
-         ) AS p_doc
-    FROM devices d
-)
-UPDATE devices d
-   SET propietario = COALESCE(NULLIF(last_i.p_nombre,''), d.propietario),
-       propietario_nombre = COALESCE(NULLIF(last_i.p_nombre,''), d.propietario_nombre),
-       propietario_contacto = COALESCE(NULLIF(last_i.p_contacto,''), d.propietario_contacto),
-       propietario_doc = COALESCE(NULLIF(last_i.p_doc,''), d.propietario_doc)
-  FROM last_i
- WHERE d.id = last_i.device_id;
-
-UPDATE devices
-   SET propietario_nombre = COALESCE(propietario_nombre, propietario)
- WHERE propietario_nombre IS NULL
-   AND NULLIF(COALESCE(propietario,''),'') <> '';
-
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = ANY(current_schemas(true))
-      AND table_name='devices'
-      AND column_name='etiq_garantia_ok'
-  ) THEN
-    WITH last_ingreso AS (
-      SELECT d.id AS device_id,
-             (
-               SELECT t.id
-               FROM ingresos t
-               WHERE t.device_id = d.id
-               ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
-               LIMIT 1
-             ) AS ingreso_id
-      FROM devices d
-    )
-    UPDATE ingresos t
-       SET etiq_garantia_ok = d.etiq_garantia_ok
-      FROM devices d
-      JOIN last_ingreso li ON li.device_id = d.id
-     WHERE t.id = li.ingreso_id
-       AND d.etiq_garantia_ok IS NOT NULL
-       AND (t.etiq_garantia_ok IS DISTINCT FROM d.etiq_garantia_ok);
-  END IF;
-
-  IF EXISTS (
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = ANY(current_schemas(true))
-      AND table_name='devices'
-      AND column_name='garantia_bool'
-  ) THEN
-    UPDATE ingresos i
-       SET garantia_fabrica = COALESCE(d.garantia_bool, FALSE)
-      FROM devices d
-     WHERE d.id = i.device_id
-       AND i.garantia_fabrica IS NULL;
-  END IF;
-END $$;
-
-ALTER TABLE devices DROP COLUMN IF EXISTS etiq_garantia_ok;
-ALTER TABLE devices DROP COLUMN IF EXISTS garantia_bool;
-
-DO $$
-DECLARE
-  v_id_dash INTEGER;
-  v_id_desguace INTEGER;
-  v_id_alquilado INTEGER;
-BEGIN
-  INSERT INTO locations(nombre) VALUES ('-')
-    ON CONFLICT (nombre) DO NOTHING;
-
-  SELECT id INTO v_id_dash FROM locations WHERE nombre = '-' LIMIT 1;
-  SELECT id INTO v_id_desguace FROM locations WHERE LOWER(nombre) = LOWER('Desguace') LIMIT 1;
-  SELECT id INTO v_id_alquilado FROM locations WHERE LOWER(nombre) = LOWER('Alquilado') LIMIT 1;
-
-  IF v_id_dash IS NOT NULL THEN
-    IF v_id_desguace IS NOT NULL THEN
-      UPDATE ingresos SET estado='baja', ubicacion_id = v_id_dash WHERE ubicacion_id = v_id_desguace;
-      UPDATE devices SET ubicacion_id = v_id_dash WHERE ubicacion_id = v_id_desguace;
-      DELETE FROM locations WHERE id = v_id_desguace;
-    END IF;
-    IF v_id_alquilado IS NOT NULL THEN
-      UPDATE ingresos SET estado='alquilado', ubicacion_id = v_id_dash WHERE ubicacion_id = v_id_alquilado;
-      UPDATE devices SET ubicacion_id = v_id_dash WHERE ubicacion_id = v_id_alquilado;
-      DELETE FROM locations WHERE id = v_id_alquilado;
-    END IF;
-  END IF;
-END $$;
-
--- Reglas de garantía (excepciones administrables) - Parte 2 editará, Parte 1 solo lectura
-CREATE TABLE IF NOT EXISTS warranty_rules (
-  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  brand_id      INTEGER NULL REFERENCES marcas(id) ON DELETE SET NULL,
-  model_id      INTEGER NULL REFERENCES models(id) ON DELETE SET NULL,
-  serial_prefix TEXT,
-  days          INTEGER NOT NULL,
-  notas         TEXT,
-  activo        BOOLEAN NOT NULL DEFAULT TRUE,
-  created_by    INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_by    INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  updated_at    TIMESTAMPTZ NULL
-);
-CREATE INDEX IF NOT EXISTS idx_wr_brand ON warranty_rules(brand_id);
-CREATE INDEX IF NOT EXISTS idx_wr_model ON warranty_rules(model_id);
-CREATE INDEX IF NOT EXISTS idx_wr_activo ON warranty_rules(activo);
-
--- =============================
--- Sincronización snapshot devices <- último ingreso
--- =============================
-CREATE OR REPLACE FUNCTION sync_device_snapshot()
+CREATE OR REPLACE FUNCTION audit_log_append_only()
 RETURNS TRIGGER AS $$
-DECLARE
-  v_device_id INTEGER;
-  v_last_id INTEGER;
-  v_alquilado BOOLEAN;
-  v_alquiler_a TEXT;
-  v_propietario_nombre TEXT;
-  v_propietario_contacto TEXT;
-  v_propietario_doc TEXT;
-  v_faja TEXT;
-  v_ubic_id INTEGER;
-  v_is_own BOOLEAN;
 BEGIN
-  v_device_id := COALESCE(NEW.device_id, OLD.device_id);
-
-  -- Último ingreso del equipo afectado
-  SELECT t.id, t.alquilado, t.alquiler_a, t.propietario_nombre, t.propietario_contacto, t.propietario_doc, t.faja_garantia, t.ubicacion_id
-    INTO v_last_id, v_alquilado, v_alquiler_a, v_propietario_nombre, v_propietario_contacto, v_propietario_doc, v_faja, v_ubic_id
-    FROM ingresos t
-   WHERE t.device_id = v_device_id
-   ORDER BY COALESCE(t.fecha_ingreso, t.fecha_creacion) DESC, t.id DESC
-   LIMIT 1;
-
-  -- Determinar si es equipo propio por patrón del número de serie
-  SELECT (CASE WHEN d.numero_serie ~* '^(MG|NM|NV)\s*\d{1,4}$' THEN TRUE ELSE FALSE END)
-    INTO v_is_own
-    FROM devices d
-   WHERE d.id = v_device_id;
-
-  -- Actualizar snapshot en devices
-  UPDATE devices d
-     SET alquilado = COALESCE(v_alquilado, FALSE),
-          alquiler_a = v_alquiler_a,
-          ubicacion_id = COALESCE(v_ubic_id, d.ubicacion_id),
-          n_de_control = COALESCE(NULLIF(v_faja, ''), d.n_de_control),
-          propietario = CASE WHEN v_is_own THEN COALESCE(NULLIF(v_propietario_nombre, ''), d.propietario) ELSE d.propietario END,
-          propietario_nombre = COALESCE(NULLIF(v_propietario_nombre, ''), d.propietario_nombre),
-          propietario_contacto = COALESCE(NULLIF(v_propietario_contacto, ''), d.propietario_contacto),
-          propietario_doc = COALESCE(NULLIF(v_propietario_doc, ''), d.propietario_doc)
-   WHERE d.id = v_device_id;
-
-  RETURN NULL;
+  RAISE EXCEPTION 'audit_log is append-only';
 END;
 $$ LANGUAGE plpgsql;
 
--- Triggers sobre ingresos para mantener snapshot del device
-DROP TRIGGER IF EXISTS trg_sync_device_snapshot_ins ON ingresos;
-DROP TRIGGER IF EXISTS trg_sync_device_snapshot_upd ON ingresos;
-DROP TRIGGER IF EXISTS trg_sync_device_snapshot_del ON ingresos;
+CREATE OR REPLACE FUNCTION audit_row_change()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_actor_user_id INTEGER;
+  v_record_pk TEXT;
+BEGIN
+  BEGIN
+    v_actor_user_id := NULLIF(current_setting('app.user_id', true), '')::INTEGER;
+  EXCEPTION WHEN OTHERS THEN
+    v_actor_user_id := NULL;
+  END;
 
-CREATE TRIGGER trg_sync_device_snapshot_ins
-AFTER INSERT ON ingresos
-FOR EACH ROW EXECUTE FUNCTION sync_device_snapshot();
+  IF TG_OP = 'DELETE' THEN
+    v_record_pk := COALESCE((to_jsonb(OLD)->>'id'), '');
+    INSERT INTO audit_log(actor_user_id, table_name, record_pk, action, old_data, new_data)
+    VALUES (v_actor_user_id, TG_TABLE_NAME, v_record_pk, 'delete', to_jsonb(OLD), NULL);
+    RETURN OLD;
+  ELSIF TG_OP = 'UPDATE' THEN
+    v_record_pk := COALESCE((to_jsonb(NEW)->>'id'), COALESCE((to_jsonb(OLD)->>'id'), ''));
+    INSERT INTO audit_log(actor_user_id, table_name, record_pk, action, old_data, new_data)
+    VALUES (v_actor_user_id, TG_TABLE_NAME, v_record_pk, 'update', to_jsonb(OLD), to_jsonb(NEW));
+    RETURN NEW;
+  ELSE
+    v_record_pk := COALESCE((to_jsonb(NEW)->>'id'), '');
+    INSERT INTO audit_log(actor_user_id, table_name, record_pk, action, old_data, new_data)
+    VALUES (v_actor_user_id, TG_TABLE_NAME, v_record_pk, 'insert', NULL, to_jsonb(NEW));
+    RETURN NEW;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_sync_device_snapshot_upd
-AFTER UPDATE OF device_id, fecha_ingreso, fecha_creacion, ubicacion_id, alquiler_a, alquilado, faja_garantia, propietario_nombre, propietario_contacto, propietario_doc ON ingresos
-FOR EACH ROW EXECUTE FUNCTION sync_device_snapshot();
-
-CREATE TRIGGER trg_sync_device_snapshot_del
-AFTER DELETE ON ingresos
-FOR EACH ROW EXECUTE FUNCTION sync_device_snapshot();
-
-CREATE TABLE IF NOT EXISTS quotes (
-  id              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id      INTEGER  NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  estado          quote_estado NOT NULL DEFAULT 'pendiente',
-  moneda          VARCHAR(10) NOT NULL DEFAULT 'ARS',
-  subtotal        NUMERIC(12,2) NOT NULL DEFAULT 0,
-  iva_21          NUMERIC(12,2) GENERATED ALWAYS AS (round((subtotal * 0.21), 2)) STORED,
-  total           NUMERIC(12,2) GENERATED ALWAYS AS (round((subtotal * 1.21), 2)) STORED,
-  autorizado_por  TEXT,
-  forma_pago      TEXT,
-  plazo_entrega_txt TEXT,
-  garantia_txt    TEXT,
-  mant_oferta_txt TEXT,
-  fecha_emitido   TIMESTAMPTZ NULL,
-  fecha_aprobado  TIMESTAMPTZ NULL,
-  pdf_url         TEXT,
-  CONSTRAINT uq_quotes_ingreso UNIQUE (ingreso_id)
-);
-
--- Compat con schemas previos de quotes
-ALTER TABLE quotes ADD COLUMN IF NOT EXISTS plazo_entrega_txt TEXT;
-ALTER TABLE quotes ADD COLUMN IF NOT EXISTS garantia_txt TEXT;
-ALTER TABLE quotes ADD COLUMN IF NOT EXISTS mant_oferta_txt TEXT;
-
-CREATE TABLE IF NOT EXISTS quote_items (
-  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  quote_id    INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
-  tipo        quote_item_tipo NOT NULL,
-  descripcion TEXT NOT NULL,
-  qty         NUMERIC(10,2) NOT NULL DEFAULT 1,
-  precio_u    NUMERIC(12,2) NOT NULL,
-  repuesto_id INTEGER NULL,
-  repuesto_codigo TEXT NULL,
-  costo_u_neto NUMERIC(12,2) NULL
-);
-
--- Compat con schemas previos de quote_items
-ALTER TABLE quote_items ADD COLUMN IF NOT EXISTS repuesto_codigo TEXT;
-ALTER TABLE quote_items ADD COLUMN IF NOT EXISTS costo_u_neto NUMERIC(12,2);
-
-CREATE TABLE IF NOT EXISTS ingreso_events (
-  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ticket_id   INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  ingreso_id  INTEGER GENERATED ALWAYS AS (ticket_id) STORED,
-  de_estado   ticket_state NULL,
-  a_estado    ticket_state NOT NULL,
-  usuario_id  INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  ts          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  comentario  TEXT
-);
-
-CREATE TABLE IF NOT EXISTS ingreso_media (
-  id             INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id     INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  usuario_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  storage_path   TEXT NOT NULL,
-  thumbnail_path TEXT NOT NULL,
-  original_name  TEXT,
-  mime_type      VARCHAR(80) NOT NULL,
-  size_bytes     BIGINT NOT NULL,
-  width          INTEGER NOT NULL,
-  height         INTEGER NOT NULL,
-  comentario     TEXT,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- Solicitudes de asignación de técnico (simple, una fila por solicitud)
-CREATE TABLE IF NOT EXISTS ingreso_tests (
-  id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id           INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  template_key         TEXT NOT NULL,
-  template_version     TEXT NOT NULL,
-  tipo_equipo_snapshot TEXT,
-  payload              JSONB NOT NULL DEFAULT '{}'::jsonb,
-  references_snapshot  JSONB NOT NULL DEFAULT '[]'::jsonb,
-  resultado_global     TEXT NOT NULL DEFAULT 'pendiente',
-  conclusion           TEXT,
-  instrumentos         TEXT,
-  firmado_por          TEXT,
-  fecha_ejecucion      TIMESTAMPTZ NULL,
-  tecnico_id           INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_ingreso_tests_ingreso ON ingreso_tests(ingreso_id);
-CREATE INDEX IF NOT EXISTS ix_ingreso_tests_template_key ON ingreso_tests(template_key);
-CREATE INDEX IF NOT EXISTS ix_ingreso_tests_updated_at ON ingreso_tests(updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS ingreso_assignment_requests (
-  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id  INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  usuario_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  status      TEXT NOT NULL DEFAULT 'pendiente',
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  accepted_at TIMESTAMPTZ NULL,
-  canceled_at TIMESTAMPTZ NULL
-);
-CREATE INDEX IF NOT EXISTS ix_iars_ingreso_created ON ingreso_assignment_requests(ingreso_id, created_at DESC);
-
--- Alertas por presupuestos pendientes (uno por ingreso; guarda ultimo envio)
-CREATE TABLE IF NOT EXISTS ingreso_presupuesto_alerts (
-  id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id   INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  last_sent_at TIMESTAMPTZ NULL,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_ingreso_presupuesto_alerts_ingreso ON ingreso_presupuesto_alerts(ingreso_id);
-CREATE INDEX IF NOT EXISTS ix_ingreso_presupuesto_alerts_last_sent ON ingreso_presupuesto_alerts(last_sent_at);
-
-CREATE TABLE IF NOT EXISTS proveedores_externos (
-  id        INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre    TEXT NOT NULL,
-  contacto  TEXT,
-  telefono  TEXT,
-  email     TEXT,
-  direccion TEXT,
-  notas     TEXT,
-  CONSTRAINT uq_prov_ext_nombre UNIQUE (nombre)
-);
-
-CREATE TABLE IF NOT EXISTS equipos_derivados (
-  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id    INTEGER  NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  proveedor_id  INTEGER  NOT NULL REFERENCES proveedores_externos(id) ON DELETE RESTRICT,
-  remit_deriv   TEXT,
-  fecha_deriv   DATE NOT NULL DEFAULT CURRENT_DATE,
-  fecha_entrega DATE,
-  estado        deriv_estado NOT NULL DEFAULT 'derivado',
-  comentarios   TEXT
-);
-
--- Evitar mas de una derivacion "abierta" por ingreso a la vez
-CREATE UNIQUE INDEX IF NOT EXISTS uq_equipos_derivados_ingreso_abierto
-  ON equipos_derivados(ingreso_id)
-  WHERE estado = 'derivado' AND fecha_entrega IS NULL;
-
-CREATE TABLE IF NOT EXISTS handoffs (
-  id                     INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id             INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  pdf_orden_salida       TEXT,
-  firmado_cliente        BOOLEAN,
-  firmado_empresa        BOOLEAN,
-  fecha                  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  n_factura              TEXT,
-  factura_url            TEXT,
-  orden_taller           TEXT,
-  remito_impreso         BOOLEAN,
-  fecha_impresion_remito DATE,
-  impresion_remito_url   TEXT
+-- =============================
+-- Auth / users / audit
+-- =============================
+CREATE TABLE IF NOT EXISTS users (
+  id               INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  nombre           TEXT NOT NULL,
+  email            CITEXT NOT NULL UNIQUE,
+  hash_pw          TEXT,
+  rol              TEXT NOT NULL DEFAULT 'empleado',
+  activo           BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_users_rol CHECK (rol IN ('admin', 'empleado'))
 );
 
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
-  id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  user_id      INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token_hash   TEXT     NOT NULL,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  expires_at   TIMESTAMPTZ NOT NULL,
-  used_at      TIMESTAMPTZ NULL,
-  ip           TEXT,
-  user_agent   TEXT
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash       TEXT NOT NULL UNIQUE,
+  expires_at       TIMESTAMPTZ NOT NULL,
+  used_at          TIMESTAMPTZ,
+  ip               TEXT,
+  user_agent       TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_permission_overrides (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  permission_code  TEXT NOT NULL,
+  effect           TEXT NOT NULL,
+  updated_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_user_permission_overrides UNIQUE (user_id, permission_code),
+  CONSTRAINT chk_user_permission_effect CHECK (effect IN ('allow', 'deny'))
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (
-  id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ts           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  user_id      INTEGER,
-  role         TEXT,
-  method       TEXT,
-  path         TEXT,
-  ip           TEXT,
-  user_agent   TEXT,
-  status_code  INTEGER,
-  body         JSONB
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  actor_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  table_name       TEXT NOT NULL,
+  record_pk        TEXT,
+  action           TEXT NOT NULL,
+  old_data         JSONB,
+  new_data         JSONB,
+  request_id       TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_audit_action CHECK (action IN ('insert', 'update', 'delete', 'login', 'other'))
 );
 
--- ===============
--- Audit (change log por columna) para PostgreSQL
--- ===============
-CREATE SCHEMA IF NOT EXISTS audit;
+DROP TRIGGER IF EXISTS trg_users_updated_at ON users;
+CREATE TRIGGER trg_users_updated_at
+BEFORE UPDATE ON users
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE TABLE IF NOT EXISTS audit.change_log (
-  id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ts           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  user_id      INTEGER NULL,
-  user_role    TEXT NULL,
-  table_name   TEXT NOT NULL,
-  record_id    INTEGER NOT NULL,
-  column_name  TEXT NOT NULL,
-  old_value    TEXT NULL,
-  new_value    TEXT NULL,
-  ingreso_id   INTEGER NULL
+-- Usuario admin de prueba (solo desarrollo local)
+INSERT INTO users(nombre, email, hash_pw, rol, activo)
+VALUES (
+  'Admin Las Chulas',
+  'admin@laschulas.local',
+  'argon2$argon2id$v=19$m=102400,t=2,p=8$bDlGUkxQNEp1MG9nUXBYZUJ6VXJ4eg$qzISs1g3Q2+BxqgwqSxaht+Al02E6W2cq4TBg7uBUPg',
+  'admin',
+  TRUE
+)
+ON CONFLICT (email) DO UPDATE
+SET nombre = EXCLUDED.nombre,
+    hash_pw = EXCLUDED.hash_pw,
+    rol = 'admin',
+    activo = TRUE;
+
+DROP TRIGGER IF EXISTS trg_user_permission_overrides_updated_at ON user_permission_overrides;
+CREATE TRIGGER trg_user_permission_overrides_updated_at
+BEFORE UPDATE ON user_permission_overrides
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_audit_log_no_update ON audit_log;
+CREATE TRIGGER trg_audit_log_no_update
+BEFORE UPDATE OR DELETE ON audit_log
+FOR EACH ROW EXECUTE FUNCTION audit_log_append_only();
+
+-- =============================
+-- Retail configuration
+-- =============================
+CREATE TABLE IF NOT EXISTS retail_settings (
+  id                            SMALLINT PRIMARY KEY DEFAULT 1,
+  business_name                 TEXT NOT NULL DEFAULT 'Las Chulas',
+  currency_code                 TEXT NOT NULL DEFAULT 'ARS',
+  iva_condition                 TEXT,
+  arca_env                      TEXT NOT NULL DEFAULT 'homologacion',
+  arca_cuit                     TEXT,
+  arca_pto_vta_store            INTEGER,
+  arca_pto_vta_online           INTEGER,
+  arca_cert_path                TEXT,
+  arca_key_path                 TEXT,
+  arca_wsaa_service             TEXT DEFAULT 'wsfe',
+  tiendanube_store_id           BIGINT,
+  tiendanube_client_id          TEXT,
+  tiendanube_client_secret      TEXT,
+  tiendanube_access_token       TEXT,
+  tiendanube_webhook_secret     TEXT,
+  ticket_printer_name           TEXT,
+  label_printer_name            TEXT,
+  auto_invoice_online_paid      BOOLEAN NOT NULL DEFAULT TRUE,
+  return_warranty_size_days     INTEGER NOT NULL DEFAULT 30,
+  return_warranty_breakage_days INTEGER NOT NULL DEFAULT 90,
+  ui_page_settings              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_retail_settings_singleton CHECK (id = 1),
+  CONSTRAINT chk_retail_settings_currency CHECK (currency_code = 'ARS'),
+  CONSTRAINT chk_retail_settings_env CHECK (arca_env IN ('homologacion', 'produccion')),
+  CONSTRAINT chk_retail_settings_return_warranty_size CHECK (return_warranty_size_days > 0),
+  CONSTRAINT chk_retail_settings_return_warranty_breakage CHECK (return_warranty_breakage_days > 0)
 );
 
-CREATE INDEX IF NOT EXISTS ix_audit_change_log_ts ON audit.change_log(ts DESC);
-CREATE INDEX IF NOT EXISTS ix_audit_change_log_ingreso ON audit.change_log(ingreso_id, ts DESC);
-CREATE INDEX IF NOT EXISTS ix_audit_change_log_table ON audit.change_log(table_name, record_id, ts DESC);
+DROP TRIGGER IF EXISTS trg_retail_settings_updated_at ON retail_settings;
+CREATE TRIGGER trg_retail_settings_updated_at
+BEFORE UPDATE ON retail_settings
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Función genérica de auditoría por fila (INSERT/UPDATE/DELETE)
-CREATE OR REPLACE FUNCTION audit.log_row_change()
-RETURNS TRIGGER AS $$
-DECLARE
-  jold jsonb;
-  jnew jsonb;
-  k text;
-  oval text;
-  nval text;
-  rec_id integer;
-  tname text := TG_TABLE_NAME;
-  _user_id text := current_setting('app.user_id', true);
-  _user_role text := current_setting('app.user_role', true);
-  _ingreso_id text := current_setting('app.ingreso_id', true);
-  v_ingreso_id integer;
+INSERT INTO retail_settings(id)
+VALUES (1)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS retail_payment_accounts (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code             TEXT NOT NULL UNIQUE,
+  label            TEXT NOT NULL,
+  payment_method   TEXT,
+  provider         TEXT,
+  active           BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order       INTEGER NOT NULL DEFAULT 100,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_payment_method CHECK (payment_method IS NULL OR payment_method IN ('cash', 'debit', 'transfer', 'credit'))
+);
+
+DROP TRIGGER IF EXISTS trg_retail_payment_accounts_updated_at ON retail_payment_accounts;
+CREATE TRIGGER trg_retail_payment_accounts_updated_at
+BEFORE UPDATE ON retail_payment_accounts
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+INSERT INTO retail_payment_accounts(code, label, payment_method, provider, active, sort_order)
+VALUES
+  ('cash', 'Caja', 'cash', 'cash', TRUE, 10),
+  ('bbva', 'BBVA', 'transfer', 'bbva', TRUE, 20),
+  ('pbs', 'PBS', 'transfer', 'pbs', TRUE, 30),
+  ('payway', 'Payway', 'credit', 'payway', TRUE, 40),
+  ('transfer_1', 'Transferencia Cuenta 1', 'transfer', 'bank', TRUE, 50),
+  ('transfer_2', 'Transferencia Cuenta 2', 'transfer', 'bank', TRUE, 60)
+ON CONFLICT (code) DO UPDATE
+SET label = EXCLUDED.label,
+    payment_method = EXCLUDED.payment_method,
+    provider = EXCLUDED.provider,
+    active = TRUE,
+    sort_order = EXCLUDED.sort_order;
+
+CREATE TABLE IF NOT EXISTS retail_cash_sessions (
+  id                           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  status                       TEXT NOT NULL DEFAULT 'open',
+  opened_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  opened_by                    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  opening_note                 TEXT,
+  opening_amount_cash_ars      NUMERIC(14,2) NOT NULL DEFAULT 0,
+  closed_at                    TIMESTAMPTZ,
+  closed_by                    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  closing_note                 TEXT,
+  closing_expected_total_ars   NUMERIC(14,2),
+  closing_counted_total_ars    NUMERIC(14,2),
+  difference_total_ars         NUMERIC(14,2),
+  created_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_retail_cash_session_status CHECK (status IN ('open', 'closed')),
+  CONSTRAINT chk_opening_amount CHECK (opening_amount_cash_ars >= 0)
+);
+
+DROP TRIGGER IF EXISTS trg_retail_cash_sessions_updated_at ON retail_cash_sessions;
+CREATE TRIGGER trg_retail_cash_sessions_updated_at
+BEFORE UPDATE ON retail_cash_sessions
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_retail_cash_session_single_open
+ON retail_cash_sessions ((status))
+WHERE status = 'open';
+
+CREATE TABLE IF NOT EXISTS retail_cash_session_movements (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  cash_session_id     BIGINT NOT NULL REFERENCES retail_cash_sessions(id) ON DELETE CASCADE,
+  movement_type       TEXT NOT NULL,
+  direction           TEXT NOT NULL,
+  payment_method      TEXT,
+  payment_account_id  BIGINT REFERENCES retail_payment_accounts(id) ON DELETE RESTRICT,
+  amount_ars          NUMERIC(14,2) NOT NULL,
+  reference_type      TEXT,
+  reference_id        BIGINT,
+  notes               TEXT,
+  created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_cash_movement_type CHECK (movement_type IN ('opening', 'sale', 'return', 'expense', 'income', 'manual_adjustment', 'closing')),
+  CONSTRAINT chk_cash_direction CHECK (direction IN ('in', 'out')),
+  CONSTRAINT chk_cash_movement_method CHECK (payment_method IS NULL OR payment_method IN ('cash', 'debit', 'transfer', 'credit')),
+  CONSTRAINT chk_cash_amount CHECK (amount_ars >= 0)
+);
+
+-- =============================
+-- Retail catalog
+-- =============================
+CREATE TABLE IF NOT EXISTS retail_customers (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  full_name        TEXT NOT NULL,
+  doc_type         TEXT,
+  doc_number       TEXT,
+  tax_id           TEXT,
+  email            TEXT,
+  phone            TEXT,
+  address          TEXT,
+  city             TEXT,
+  province         TEXT,
+  notes            TEXT,
+  active           BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS trg_retail_customers_updated_at ON retail_customers;
+CREATE TRIGGER trg_retail_customers_updated_at
+BEFORE UPDATE ON retail_customers
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_suppliers (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name             TEXT NOT NULL UNIQUE,
+  tax_id           TEXT,
+  email            TEXT,
+  phone            TEXT,
+  notes            TEXT,
+  active           BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS trg_retail_suppliers_updated_at ON retail_suppliers;
+CREATE TRIGGER trg_retail_suppliers_updated_at
+BEFORE UPDATE ON retail_suppliers
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_categories (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name             TEXT NOT NULL,
+  parent_id        BIGINT REFERENCES retail_categories(id) ON DELETE SET NULL,
+  active           BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order       INTEGER NOT NULL DEFAULT 100,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS trg_retail_categories_updated_at ON retail_categories;
+CREATE TRIGGER trg_retail_categories_updated_at
+BEFORE UPDATE ON retail_categories
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_retail_categories_name_ci
+ON retail_categories ((LOWER(name)));
+
+CREATE TABLE IF NOT EXISTS retail_products (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name                TEXT NOT NULL,
+  description         TEXT,
+  category_id         BIGINT REFERENCES retail_categories(id) ON DELETE SET NULL,
+  brand               TEXT NOT NULL DEFAULT 'Las Chulas',
+  season              TEXT,
+  active              BOOLEAN NOT NULL DEFAULT TRUE,
+  sku_prefix          TEXT,
+  image_path          TEXT,
+  default_cost_ars    NUMERIC(14,2) NOT NULL DEFAULT 0,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_retail_products_cost CHECK (default_cost_ars >= 0)
+);
+
+ALTER TABLE retail_products
+ADD COLUMN IF NOT EXISTS image_path TEXT;
+
+DROP TRIGGER IF EXISTS trg_retail_products_updated_at ON retail_products;
+CREATE TRIGGER trg_retail_products_updated_at
+BEFORE UPDATE ON retail_products
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_retail_products_name_ci
+ON retail_products ((LOWER(name)));
+
+CREATE TABLE IF NOT EXISTS retail_variant_attributes (
+  id                      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name                    TEXT NOT NULL,
+  code                    TEXT NOT NULL,
+  applies_to_category_id  BIGINT REFERENCES retail_categories(id) ON DELETE SET NULL,
+  active                  BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order              INTEGER NOT NULL DEFAULT 100,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_variant_attributes_name UNIQUE (name),
+  CONSTRAINT uq_retail_variant_attributes_code UNIQUE (code)
+);
+
+DROP TRIGGER IF EXISTS trg_retail_variant_attributes_updated_at ON retail_variant_attributes;
+CREATE TRIGGER trg_retail_variant_attributes_updated_at
+BEFORE UPDATE ON retail_variant_attributes
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_product_variants (
+  id                    BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  product_id            BIGINT NOT NULL REFERENCES retail_products(id) ON DELETE CASCADE,
+  option_signature      TEXT NOT NULL,
+  display_name          TEXT,
+  sku                   TEXT NOT NULL,
+  barcode_internal      TEXT NOT NULL,
+  price_store_ars       NUMERIC(14,2) NOT NULL,
+  price_online_ars      NUMERIC(14,2) NOT NULL,
+  cost_avg_ars          NUMERIC(14,2) NOT NULL DEFAULT 0,
+  stock_on_hand         INTEGER NOT NULL DEFAULT 0,
+  stock_reserved        INTEGER NOT NULL DEFAULT 0,
+  stock_min             INTEGER NOT NULL DEFAULT 0,
+  tiendanube_product_id BIGINT,
+  tiendanube_variant_id BIGINT,
+  active                BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_variant_signature UNIQUE (product_id, option_signature),
+  CONSTRAINT uq_retail_variant_sku UNIQUE (sku),
+  CONSTRAINT uq_retail_variant_barcode UNIQUE (barcode_internal),
+  CONSTRAINT chk_retail_variant_prices CHECK (price_store_ars >= 0 AND price_online_ars >= 0),
+  CONSTRAINT chk_retail_variant_cost CHECK (cost_avg_ars >= 0),
+  CONSTRAINT chk_retail_variant_stock CHECK (stock_reserved >= 0 AND stock_min >= 0)
+);
+
+DROP TRIGGER IF EXISTS trg_retail_product_variants_updated_at ON retail_product_variants;
+CREATE TRIGGER trg_retail_product_variants_updated_at
+BEFORE UPDATE ON retail_product_variants
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_variant_option_values (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  variant_id       BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE CASCADE,
+  attribute_id     BIGINT NOT NULL REFERENCES retail_variant_attributes(id) ON DELETE RESTRICT,
+  option_value     TEXT NOT NULL,
+  sort_order       INTEGER NOT NULL DEFAULT 100,
+  CONSTRAINT uq_variant_attribute UNIQUE (variant_id, attribute_id)
+);
+
+-- =============================
+-- Purchases / stock
+-- =============================
+CREATE TABLE IF NOT EXISTS retail_purchases (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  supplier_id      BIGINT NOT NULL REFERENCES retail_suppliers(id) ON DELETE RESTRICT,
+  invoice_number   TEXT,
+  purchase_date    DATE NOT NULL DEFAULT CURRENT_DATE,
+  currency_code    TEXT NOT NULL DEFAULT 'ARS',
+  fx_rate_ars      NUMERIC(14,4),
+  notes            TEXT,
+  created_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_retail_purchase_currency CHECK (currency_code IN ('ARS', 'USD')),
+  CONSTRAINT chk_retail_purchase_fx CHECK ((currency_code = 'ARS' AND fx_rate_ars IS NULL) OR (currency_code = 'USD' AND fx_rate_ars IS NOT NULL AND fx_rate_ars > 0))
+);
+
+DROP TRIGGER IF EXISTS trg_retail_purchases_updated_at ON retail_purchases;
+CREATE TRIGGER trg_retail_purchases_updated_at
+BEFORE UPDATE ON retail_purchases
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_purchase_items (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  purchase_id         BIGINT NOT NULL REFERENCES retail_purchases(id) ON DELETE CASCADE,
+  variant_id          BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE RESTRICT,
+  quantity            INTEGER NOT NULL,
+  unit_cost_currency  NUMERIC(14,4) NOT NULL,
+  unit_cost_ars       NUMERIC(14,4) NOT NULL,
+  line_total_ars      NUMERIC(14,2) NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_purchase_item_qty CHECK (quantity > 0),
+  CONSTRAINT chk_purchase_item_costs CHECK (unit_cost_currency >= 0 AND unit_cost_ars >= 0 AND line_total_ars >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS retail_stock_movements (
+  id                       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  variant_id               BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE RESTRICT,
+  movement_kind            TEXT NOT NULL,
+  qty_signed               INTEGER NOT NULL,
+  stock_after              INTEGER,
+  cost_unit_snapshot_ars   NUMERIC(14,4),
+  reference_type           TEXT,
+  reference_id             BIGINT,
+  note                     TEXT,
+  created_by               INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_stock_movement_kind CHECK (movement_kind IN ('purchase', 'sale', 'cancel_sale', 'return', 'manual_adjustment', 'online_sale', 'online_cancel')),
+  CONSTRAINT chk_stock_qty_nonzero CHECK (qty_signed <> 0),
+  CONSTRAINT chk_stock_cost_nonnegative CHECK (cost_unit_snapshot_ars IS NULL OR cost_unit_snapshot_ars >= 0)
+);
+
+-- =============================
+-- Sales / returns / invoices
+-- =============================
+CREATE TABLE IF NOT EXISTS retail_sales (
+  id                           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_number                  TEXT NOT NULL,
+  channel                      TEXT NOT NULL,
+  status                       TEXT NOT NULL DEFAULT 'confirmed',
+  payment_method               TEXT NOT NULL,
+  payment_account_id           BIGINT NOT NULL REFERENCES retail_payment_accounts(id) ON DELETE RESTRICT,
+  cash_session_id              BIGINT REFERENCES retail_cash_sessions(id) ON DELETE RESTRICT,
+  customer_id                  BIGINT REFERENCES retail_customers(id) ON DELETE SET NULL,
+  customer_snapshot            JSONB,
+  subtotal_ars                 NUMERIC(14,2) NOT NULL,
+  price_adjustment_pct         NUMERIC(6,2) NOT NULL,
+  price_adjustment_amount_ars  NUMERIC(14,2) NOT NULL,
+  total_ars                    NUMERIC(14,2) NOT NULL,
+  currency_code                TEXT NOT NULL DEFAULT 'ARS',
+  requires_invoice             BOOLEAN NOT NULL DEFAULT FALSE,
+  notes                        TEXT,
+  source_order_id              TEXT,
+  price_override_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  price_override_reason        TEXT,
+  cancelled_at                 TIMESTAMPTZ,
+  cancelled_by                 INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  cancel_reason                TEXT,
+  created_by                   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_sales_number UNIQUE (sale_number),
+  CONSTRAINT uq_retail_sales_source_order UNIQUE (source_order_id),
+  CONSTRAINT chk_retail_sales_channel CHECK (channel IN ('local', 'online')),
+  CONSTRAINT chk_retail_sales_status CHECK (status IN ('confirmed', 'cancelled', 'partial_return', 'returned')),
+  CONSTRAINT chk_retail_sales_payment_method CHECK (payment_method IN ('cash', 'debit', 'transfer', 'credit')),
+  CONSTRAINT chk_retail_sales_currency CHECK (currency_code = 'ARS'),
+  CONSTRAINT chk_retail_sales_amounts CHECK (subtotal_ars >= 0 AND total_ars >= 0),
+  CONSTRAINT chk_retail_sales_override_reason CHECK ((price_override_by IS NULL) OR (price_override_reason IS NOT NULL AND LENGTH(TRIM(price_override_reason)) > 0))
+);
+
+DROP TRIGGER IF EXISTS trg_retail_sales_updated_at ON retail_sales;
+CREATE TRIGGER trg_retail_sales_updated_at
+BEFORE UPDATE ON retail_sales
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_sale_items (
+  id                       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id                  BIGINT NOT NULL REFERENCES retail_sales(id) ON DELETE CASCADE,
+  variant_id               BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE RESTRICT,
+  quantity                 INTEGER NOT NULL,
+  unit_price_list_ars      NUMERIC(14,2) NOT NULL,
+  unit_price_final_ars     NUMERIC(14,2) NOT NULL,
+  unit_cost_snapshot_ars   NUMERIC(14,4) NOT NULL,
+  line_subtotal_ars        NUMERIC(14,2) NOT NULL,
+  line_total_ars           NUMERIC(14,2) NOT NULL,
+  returned_qty             INTEGER NOT NULL DEFAULT 0,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_sale_item_qty CHECK (quantity > 0),
+  CONSTRAINT chk_sale_item_amounts CHECK (
+    unit_price_list_ars >= 0 AND
+    unit_price_final_ars >= 0 AND
+    unit_cost_snapshot_ars >= 0 AND
+    line_subtotal_ars >= 0 AND
+    line_total_ars >= 0
+  ),
+  CONSTRAINT chk_sale_item_returned_qty CHECK (returned_qty >= 0 AND returned_qty <= quantity)
+);
+
+CREATE TABLE IF NOT EXISTS retail_returns (
+  id                     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id                BIGINT NOT NULL REFERENCES retail_sales(id) ON DELETE RESTRICT,
+  status                 TEXT NOT NULL DEFAULT 'confirmed',
+  reason                 TEXT,
+  processed_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  total_refund_ars       NUMERIC(14,2) NOT NULL DEFAULT 0,
+  requires_credit_note   BOOLEAN NOT NULL DEFAULT FALSE,
+  credit_note_status     TEXT NOT NULL DEFAULT 'not_required',
+  warranty_type          TEXT NOT NULL DEFAULT 'none',
+  warranty_override      BOOLEAN NOT NULL DEFAULT FALSE,
+  warranty_snapshot      JSONB,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_return_status CHECK (status IN ('pending', 'confirmed', 'cancelled')),
+  CONSTRAINT chk_return_refund CHECK (total_refund_ars >= 0),
+  CONSTRAINT chk_return_credit_status CHECK (credit_note_status IN ('not_required', 'pending', 'issued', 'manual_review')),
+  CONSTRAINT chk_return_warranty_type CHECK (warranty_type IN ('none', 'size', 'breakage'))
+);
+
+DROP TRIGGER IF EXISTS trg_retail_returns_updated_at ON retail_returns;
+CREATE TRIGGER trg_retail_returns_updated_at
+BEFORE UPDATE ON retail_returns
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_return_items (
+  id                       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  return_id                BIGINT NOT NULL REFERENCES retail_returns(id) ON DELETE CASCADE,
+  sale_item_id             BIGINT NOT NULL REFERENCES retail_sale_items(id) ON DELETE RESTRICT,
+  variant_id               BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE RESTRICT,
+  quantity                 INTEGER NOT NULL,
+  unit_price_refund_ars    NUMERIC(14,2) NOT NULL,
+  unit_cost_snapshot_ars   NUMERIC(14,4) NOT NULL,
+  line_refund_total_ars    NUMERIC(14,2) NOT NULL,
+  created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_return_item_qty CHECK (quantity > 0),
+  CONSTRAINT chk_return_item_amounts CHECK (unit_price_refund_ars >= 0 AND unit_cost_snapshot_ars >= 0 AND line_refund_total_ars >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS retail_invoices (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id             BIGINT NOT NULL REFERENCES retail_sales(id) ON DELETE CASCADE,
+  status              TEXT NOT NULL DEFAULT 'pending',
+  invoice_type        TEXT,
+  invoice_mode        TEXT NOT NULL DEFAULT 'arca',
+  pto_vta             INTEGER,
+  cbte_tipo           INTEGER,
+  cbte_nro            BIGINT,
+  cae                 TEXT,
+  cae_due_date        DATE,
+  currency_code       TEXT NOT NULL DEFAULT 'ARS',
+  amount_total_ars    NUMERIC(14,2) NOT NULL DEFAULT 0,
+  request_payload     JSONB,
+  response_payload    JSONB,
+  error_code          TEXT,
+  error_message       TEXT,
+  attempts            INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at     TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_invoices_sale UNIQUE (sale_id),
+  CONSTRAINT chk_retail_invoices_status CHECK (status IN ('pending', 'authorized', 'rejected', 'retry', 'manual_review', 'not_required')),
+  CONSTRAINT chk_retail_invoices_mode CHECK (invoice_mode IN ('arca', 'internal')),
+  CONSTRAINT chk_retail_invoice_currency CHECK (currency_code = 'ARS'),
+  CONSTRAINT chk_retail_invoice_amount CHECK (amount_total_ars >= 0)
+);
+
+DROP TRIGGER IF EXISTS trg_retail_invoices_updated_at ON retail_invoices;
+CREATE TRIGGER trg_retail_invoices_updated_at
+BEFORE UPDATE ON retail_invoices
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_invoice_credit_notes (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id             BIGINT NOT NULL REFERENCES retail_sales(id) ON DELETE RESTRICT,
+  return_id           BIGINT REFERENCES retail_returns(id) ON DELETE SET NULL,
+  invoice_id          BIGINT REFERENCES retail_invoices(id) ON DELETE SET NULL,
+  status              TEXT NOT NULL DEFAULT 'pending',
+  pto_vta             INTEGER,
+  cbte_tipo           INTEGER,
+  cbte_nro            BIGINT,
+  cae                 TEXT,
+  cae_due_date        DATE,
+  amount_total_ars    NUMERIC(14,2) NOT NULL DEFAULT 0,
+  request_payload     JSONB,
+  response_payload    JSONB,
+  error_code          TEXT,
+  error_message       TEXT,
+  attempts            INTEGER NOT NULL DEFAULT 0,
+  created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_credit_note_status CHECK (status IN ('pending', 'authorized', 'rejected', 'retry', 'manual_review')),
+  CONSTRAINT chk_credit_note_amount CHECK (amount_total_ars >= 0)
+);
+
+DROP TRIGGER IF EXISTS trg_retail_invoice_credit_notes_updated_at ON retail_invoice_credit_notes;
+CREATE TRIGGER trg_retail_invoice_credit_notes_updated_at
+BEFORE UPDATE ON retail_invoice_credit_notes
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- =============================
+-- Integrations
+-- =============================
+CREATE TABLE IF NOT EXISTS retail_webhook_events (
+  id                 BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  provider           TEXT NOT NULL,
+  event_type         TEXT NOT NULL,
+  event_id           TEXT NOT NULL,
+  external_order_id  TEXT,
+  signature          TEXT,
+  payload            JSONB NOT NULL,
+  processed          BOOLEAN NOT NULL DEFAULT FALSE,
+  processed_at       TIMESTAMPTZ,
+  error_message      TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_webhook_provider_event UNIQUE (provider, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS integration_jobs (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  provider         TEXT NOT NULL,
+  job_type         TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'pending',
+  priority         INTEGER NOT NULL DEFAULT 100,
+  payload          JSONB,
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  max_attempts     INTEGER NOT NULL DEFAULT 6,
+  next_retry_at    TIMESTAMPTZ,
+  last_error       TEXT,
+  locked_at        TIMESTAMPTZ,
+  locked_by        TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_integration_jobs_status CHECK (status IN ('pending', 'running', 'done', 'failed', 'dead_letter')),
+  CONSTRAINT chk_integration_attempts CHECK (attempts >= 0 AND max_attempts > 0)
+);
+
+DROP TRIGGER IF EXISTS trg_integration_jobs_updated_at ON integration_jobs;
+CREATE TRIGGER trg_integration_jobs_updated_at
+BEFORE UPDATE ON integration_jobs
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- =============================
+-- Indexes
+-- =============================
+CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_user_permission_overrides_user ON user_permission_overrides(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_table_record ON audit_log(table_name, record_pk);
+
+CREATE INDEX IF NOT EXISTS idx_retail_customers_name_ci ON retail_customers ((LOWER(full_name)));
+CREATE INDEX IF NOT EXISTS idx_retail_customers_doc ON retail_customers(doc_number);
+CREATE INDEX IF NOT EXISTS idx_retail_suppliers_name_ci ON retail_suppliers ((LOWER(name)));
+
+CREATE INDEX IF NOT EXISTS idx_retail_variants_product ON retail_product_variants(product_id);
+CREATE INDEX IF NOT EXISTS idx_retail_variants_sku_ci ON retail_product_variants ((LOWER(sku)));
+CREATE INDEX IF NOT EXISTS idx_retail_variants_barcode_ci ON retail_product_variants ((LOWER(barcode_internal)));
+CREATE INDEX IF NOT EXISTS idx_retail_variants_active_stock ON retail_product_variants(active, stock_on_hand);
+CREATE INDEX IF NOT EXISTS idx_retail_variant_options_attr_value ON retail_variant_option_values(attribute_id, option_value);
+
+CREATE INDEX IF NOT EXISTS idx_retail_purchases_date ON retail_purchases(purchase_date DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_purchases_supplier ON retail_purchases(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_retail_purchase_items_purchase ON retail_purchase_items(purchase_id);
+CREATE INDEX IF NOT EXISTS idx_retail_purchase_items_variant ON retail_purchase_items(variant_id);
+CREATE INDEX IF NOT EXISTS idx_retail_stock_mov_variant_created ON retail_stock_movements(variant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_stock_mov_ref ON retail_stock_movements(reference_type, reference_id);
+
+CREATE INDEX IF NOT EXISTS idx_retail_sales_created ON retail_sales(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_sales_channel_status ON retail_sales(channel, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_sales_payment ON retail_sales(payment_method, payment_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_sales_cash_session ON retail_sales(cash_session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_sale_items_sale ON retail_sale_items(sale_id);
+CREATE INDEX IF NOT EXISTS idx_retail_sale_items_variant ON retail_sale_items(variant_id);
+CREATE INDEX IF NOT EXISTS idx_retail_returns_sale ON retail_returns(sale_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_return_items_return ON retail_return_items(return_id);
+CREATE INDEX IF NOT EXISTS idx_retail_invoices_status ON retail_invoices(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_invoices_cbte ON retail_invoices(pto_vta, cbte_tipo, cbte_nro);
+CREATE INDEX IF NOT EXISTS idx_retail_credit_notes_status ON retail_invoice_credit_notes(status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_retail_cash_sessions_status ON retail_cash_sessions(status, opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_cash_mov_session ON retail_cash_session_movements(cash_session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_cash_mov_payment ON retail_cash_session_movements(payment_method, payment_account_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_retail_webhook_provider_created ON retail_webhook_events(provider, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_webhook_order ON retail_webhook_events(provider, external_order_id);
+CREATE INDEX IF NOT EXISTS idx_integration_jobs_status_retry ON integration_jobs(status, next_retry_at, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_integration_jobs_provider_type ON integration_jobs(provider, job_type, created_at DESC);
+
+-- =============================
+-- Audit triggers on core retail tables
+-- =============================
+DO $$
 BEGIN
-  IF TG_OP = 'UPDATE' THEN
-    jold := to_jsonb(OLD);
-    jnew := to_jsonb(NEW);
-    rec_id := COALESCE((to_jsonb(NEW)->>'id')::int, (to_jsonb(OLD)->>'id')::int);
-  ELSIF TG_OP = 'INSERT' THEN
-    jold := '{}'::jsonb;
-    jnew := to_jsonb(NEW);
-    rec_id := (to_jsonb(NEW)->>'id')::int;
-  ELSE
-    jold := to_jsonb(OLD);
-    jnew := '{}'::jsonb;
-    rec_id := (to_jsonb(OLD)->>'id')::int;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_products') THEN
+    CREATE TRIGGER trg_audit_retail_products AFTER INSERT OR UPDATE OR DELETE ON retail_products
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
-
-  v_ingreso_id := NULL;
-  IF tname = 'ingresos' THEN
-    v_ingreso_id := rec_id;
-  ELSIF tname = 'ingreso_accesorios' THEN
-    IF TG_OP = 'DELETE' THEN
-      v_ingreso_id := (to_jsonb(OLD)->>'ingreso_id')::int;
-    ELSE
-      v_ingreso_id := (to_jsonb(NEW)->>'ingreso_id')::int;
-    END IF;
-  ELSE
-    IF COALESCE(_ingreso_id,'') <> '' THEN
-      v_ingreso_id := NULLIF(_ingreso_id,'')::int;
-    END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_product_variants') THEN
+    CREATE TRIGGER trg_audit_retail_product_variants AFTER INSERT OR UPDATE OR DELETE ON retail_product_variants
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
-
-  FOR k IN
-    SELECT key FROM (
-      SELECT jsonb_object_keys(jold) AS key
-      UNION
-      SELECT jsonb_object_keys(jnew) AS key
-    ) s
-  LOOP
-    -- omitir campos de timestamp de sistema comunes
-    IF k IN ('updated_at','created_at') THEN CONTINUE; END IF;
-    oval := jold->>k;
-    nval := jnew->>k;
-    IF (oval IS DISTINCT FROM nval) THEN
-      INSERT INTO audit.change_log(ts, user_id, user_role, table_name, record_id, column_name, old_value, new_value, ingreso_id)
-      VALUES (
-        now(),
-        NULLIF(_user_id,'')::int,
-        NULLIF(_user_role,''),
-        tname,
-        rec_id,
-        k,
-        oval,
-        nval,
-        v_ingreso_id
-      );
-    END IF;
-  END LOOP;
-
-  IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
-END;
-$$ LANGUAGE plpgsql;
-
--- Accesorios (catálogo y vínculo con ingreso)
-CREATE TABLE IF NOT EXISTS catalogo_accesorios (
-  id      INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre  TEXT NOT NULL,
-  activo  BOOLEAN NOT NULL DEFAULT TRUE,
-  CONSTRAINT uq_catalogo_accesorios_nombre UNIQUE (nombre)
-);
-
--- Repuestos (catalogo para costos y codigos)
-CREATE TABLE IF NOT EXISTS catalogo_repuestos (
-  id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  codigo       TEXT NOT NULL,
-  nombre       TEXT NOT NULL,
-  costo_neto   NUMERIC(12,2) NOT NULL DEFAULT 0,
-  costo_usd    NUMERIC(12,2) NULL,
-  precio_venta NUMERIC(12,2) NULL,
-  multiplicador NUMERIC(10,4) NULL,
-  stock_on_hand NUMERIC(12,2) NOT NULL DEFAULT 0,
-  stock_min   NUMERIC(12,2) NOT NULL DEFAULT 0,
-  activo       BOOLEAN NOT NULL DEFAULT TRUE,
-  source_mtime TIMESTAMPTZ NULL,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT uq_catalogo_repuestos_codigo UNIQUE (codigo)
-);
-
--- Compat con schemas previos de repuestos
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS costo_usd NUMERIC(12,2);
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS precio_venta NUMERIC(12,2);
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS multiplicador NUMERIC(10,4);
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS stock_on_hand NUMERIC(12,2) NOT NULL DEFAULT 0;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS stock_min NUMERIC(12,2) NOT NULL DEFAULT 0;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS tipo_articulo TEXT;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS categoria TEXT;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS unidad_medida TEXT;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS marca_fabricante TEXT;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS nro_parte TEXT;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS ubicacion_deposito TEXT;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS estado TEXT;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS notas TEXT;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS fecha_ultima_compra DATE;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS fecha_ultimo_conteo DATE;
-ALTER TABLE catalogo_repuestos ADD COLUMN IF NOT EXISTS fecha_vencimiento DATE;
-
-CREATE TABLE IF NOT EXISTS repuestos_subrubros (
-  codigo TEXT PRIMARY KEY,
-  nombre TEXT NOT NULL,
-  activo BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-INSERT INTO repuestos_subrubros(codigo, nombre, activo, updated_at) VALUES
-  ('1201','Mascara nasal',TRUE,NOW()),
-  ('1202','Mascara buconasal',TRUE,NOW()),
-  ('1203','Tubuladura',TRUE,NOW()),
-  ('1204','Jarra',TRUE,NOW()),
-  ('1205','Camaras',TRUE,NOW()),
-  ('1206','Canulas',TRUE,NOW()),
-  ('1207','Adaptador',TRUE,NOW()),
-  ('1208','Filtro',TRUE,NOW()),
-  ('1209','Kit',TRUE,NOW()),
-  ('1210','Modulo',TRUE,NOW()),
-  ('1211','Banda toracica',TRUE,NOW()),
-  ('1212','Sensor',TRUE,NOW()),
-  ('1213','Insumos varios',TRUE,NOW()),
-  ('1214','Pie de suero',TRUE,NOW()),
-  ('1215','Resucitador',TRUE,NOW()),
-  ('1216','Conector',TRUE,NOW()),
-  ('1217','Mascara total face',TRUE,NOW()),
-  ('1218','Prolongador',TRUE,NOW()),
-  ('1219','Bolso',TRUE,NOW()),
-  ('1220','Frasco',TRUE,NOW()),
-  ('1221','Circuito',TRUE,NOW()),
-  ('1222','Sonda',TRUE,NOW()),
-  ('1223','Acc. Monitor',TRUE,NOW()),
-  ('1224','Acc. Videolaring.',TRUE,NOW()),
-  ('1225','Lamparas',TRUE,NOW()),
-  ('1401','A-220',TRUE,NOW()),
-  ('1402','A-550',TRUE,NOW()),
-  ('1403','Generico',TRUE,NOW()),
-  ('1404','C-500',TRUE,NOW()),
-  ('1405','A-600',TRUE,NOW()),
-  ('1406','G3',TRUE,NOW()),
-  ('1407','G4',TRUE,NOW()),
-  ('1408','G5',TRUE,NOW()),
-  ('1409','INOGEN',TRUE,NOW()),
-  ('1410','324',TRUE,NOW()),
-  ('1501','Turbina',TRUE,NOW()),
-  ('1502','Placa',TRUE,NOW()),
-  ('1503','Zeolita',TRUE,NOW()),
-  ('1504','Canister',TRUE,NOW()),
-  ('1505','Ventilador',TRUE,NOW()),
-  ('1506','Teclado',TRUE,NOW()),
-  ('1507','Conector',TRUE,NOW()),
-  ('1508','Cable',TRUE,NOW()),
-  ('1509','Baterias',TRUE,NOW()),
-  ('1510','Compresor',TRUE,NOW()),
-  ('1511','Interfaz de usuario',TRUE,NOW()),
-  ('1512','Panel de acceso',TRUE,NOW()),
-  ('1513','Columnas',TRUE,NOW()),
-  ('1514','Compresor',TRUE,NOW()),
-  ('1515','Celda de O2',TRUE,NOW()),
-  ('1516','Acc. Magnamed',TRUE,NOW()),
-  ('1517','Repuesto generico',TRUE,NOW()),
-  ('1518','Labios',TRUE,NOW()),
-  ('1519','Valvulas',TRUE,NOW()),
-  ('1520','Transformador',TRUE,NOW()),
-  ('1521','Capacitor',TRUE,NOW()),
-  ('1522','Flowmeter',TRUE,NOW()),
-  ('1601','Instalaciones de equip.',TRUE,NOW()),
-  ('1602','Aspirador de uso continuo',TRUE,NOW())
-ON CONFLICT (codigo) DO UPDATE SET
-  nombre = EXCLUDED.nombre,
-  activo = TRUE,
-  updated_at = NOW();
-
-CREATE TABLE IF NOT EXISTS repuestos_config (
-  id                    INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  dolar_ars             NUMERIC(12,4) NOT NULL DEFAULT 0,
-  multiplicador_general NUMERIC(10,4) NOT NULL DEFAULT 1,
-  updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_by            INTEGER NULL REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS repuestos_config_history (
-  id                    INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  dolar_ars             NUMERIC(12,4) NOT NULL,
-  multiplicador_general NUMERIC(10,4) NOT NULL,
-  changed_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  changed_by            INTEGER NULL REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS repuestos_movimientos (
-  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  repuesto_id INTEGER NOT NULL REFERENCES catalogo_repuestos(id) ON DELETE CASCADE,
-  tipo       TEXT NOT NULL,
-  qty        NUMERIC(12,2) NOT NULL,
-  stock_prev NUMERIC(12,2) NULL,
-  stock_new  NUMERIC(12,2) NULL,
-  ref_tipo   TEXT NULL,
-  ref_id     INTEGER NULL,
-  nota       TEXT NULL,
-  fecha_compra DATE NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  created_by INTEGER NULL REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS repuestos_cambios (
-  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  repuesto_id INTEGER NULL REFERENCES catalogo_repuestos(id) ON DELETE SET NULL,
-  codigo TEXT NULL,
-  accion TEXT NOT NULL,
-  nombre_prev TEXT NULL,
-  nombre_new TEXT NULL,
-  nota TEXT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  created_by INTEGER NULL REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS repuestos_proveedores (
-  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  repuesto_id INTEGER NOT NULL REFERENCES catalogo_repuestos(id) ON DELETE CASCADE,
-  proveedor_id INTEGER NOT NULL REFERENCES proveedores_externos(id) ON DELETE RESTRICT,
-  sku_proveedor TEXT NULL,
-  lead_time_dias INTEGER NULL,
-  prioridad INTEGER NULL,
-  ultima_compra DATE NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT uq_repuestos_proveedores UNIQUE (repuesto_id, proveedor_id)
-);
-
-CREATE TABLE IF NOT EXISTS repuestos_stock_permisos (
-  id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  tecnico_id INTEGER NOT NULL REFERENCES users(id),
-  enabled_by INTEGER NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  expires_at TIMESTAMPTZ NOT NULL,
-  revoked_at TIMESTAMPTZ NULL,
-  revoked_by INTEGER NULL REFERENCES users(id),
-  nota TEXT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ingreso_accesorios (
-  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id    INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  accesorio_id  INTEGER NOT NULL REFERENCES catalogo_accesorios(id) ON DELETE RESTRICT,
-  referencia    TEXT NULL,
-  descripcion   TEXT NULL
-);
-
--- Accesorios asociados específicamente a alquileres de equipos
-CREATE TABLE IF NOT EXISTS ingreso_alquiler_accesorios (
-  id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ingreso_id    INTEGER NOT NULL REFERENCES ingresos(id) ON DELETE CASCADE,
-  accesorio_id  INTEGER NOT NULL REFERENCES catalogo_accesorios(id) ON DELETE RESTRICT,
-  referencia    TEXT NULL,
-  descripcion   TEXT NULL,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- Catálogo general de tipos de equipo
-CREATE TABLE IF NOT EXISTS catalogo_tipos_equipo (
-  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nombre     VARCHAR(160) NOT NULL UNIQUE,
-  activo     BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- Catálogo por marca/tipo/serie/variante (jerárquico) y mapeo de models
-CREATE TABLE IF NOT EXISTS marca_tipos_equipo (
-  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  marca_id   INTEGER NOT NULL REFERENCES marcas(id) ON DELETE CASCADE,
-  nombre     VARCHAR(160) NOT NULL,
-  activo     BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT uq_marca_tipos_equipo UNIQUE (marca_id, nombre)
-);
-
-CREATE TABLE IF NOT EXISTS marca_series (
-  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  marca_id   INTEGER NOT NULL REFERENCES marcas(id) ON DELETE CASCADE,
-  tipo_id    INTEGER NOT NULL REFERENCES marca_tipos_equipo(id) ON DELETE CASCADE,
-  nombre     VARCHAR(160) NOT NULL,
-  alias      VARCHAR(160) NULL,
-  activo     BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT uq_marca_series UNIQUE (marca_id, tipo_id, nombre)
-);
-
-CREATE TABLE IF NOT EXISTS marca_series_variantes (
-  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  marca_id   INTEGER NOT NULL REFERENCES marcas(id) ON DELETE CASCADE,
-  tipo_id    INTEGER NOT NULL REFERENCES marca_tipos_equipo(id) ON DELETE CASCADE,
-  serie_id   INTEGER NOT NULL REFERENCES marca_series(id) ON DELETE CASCADE,
-  nombre     VARCHAR(160) NOT NULL,
-  activo     BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT uq_marca_series_variantes UNIQUE (marca_id, tipo_id, serie_id, nombre)
-);
-
-CREATE TABLE IF NOT EXISTS model_hierarchy (
-  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  model_id    INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-  marca_id    INTEGER NOT NULL REFERENCES marcas(id) ON DELETE CASCADE,
-  tipo_id     INTEGER NOT NULL REFERENCES marca_tipos_equipo(id) ON DELETE CASCADE,
-  serie_id    INTEGER NOT NULL REFERENCES marca_series(id) ON DELETE CASCADE,
-  variante_id INTEGER NULL REFERENCES marca_series_variantes(id) ON DELETE CASCADE,
-  full_name   VARCHAR(240) NOT NULL,
-  variant_key INTEGER GENERATED ALWAYS AS (COALESCE(variante_id, 0)) STORED,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT uq_model_hierarchy_model UNIQUE (model_id),
-  CONSTRAINT uq_model_hierarchy_combo UNIQUE (marca_id, tipo_id, serie_id, variant_key)
-);
-
-CREATE OR REPLACE VIEW vw_model_hierarchy_detail AS
-SELECT
-    mh.model_id,
-    mh.marca_id,
-    mh.tipo_id,
-    mh.serie_id,
-    mh.variante_id,
-    mh.full_name,
-    mt.nombre AS tipo_nombre,
-    ms.nombre AS serie_nombre,
-    mv.nombre AS variante_nombre
-FROM model_hierarchy mh
-JOIN marca_tipos_equipo mt ON mt.id = mh.tipo_id
-JOIN marca_series ms ON ms.id = mh.serie_id
-LEFT JOIN marca_series_variantes mv ON mv.id = mh.variante_id;
-
--- Feriados (calendario laboral)
-CREATE TABLE IF NOT EXISTS feriados (
-  fecha DATE PRIMARY KEY,
-  nombre TEXT NOT NULL
-);
-
--- Mantenimientos preventivos
-CREATE TABLE IF NOT EXISTS preventivo_planes (
-  id                       INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  scope_type               preventivo_scope_type NOT NULL,
-  device_id                INTEGER NULL REFERENCES devices(id) ON DELETE CASCADE,
-  customer_id              INTEGER NULL REFERENCES customers(id) ON DELETE CASCADE,
-  periodicidad_valor       INTEGER NOT NULL,
-  periodicidad_unidad      preventivo_period_unit NOT NULL,
-  aviso_anticipacion_dias  INTEGER NOT NULL DEFAULT 30,
-  ultima_revision_fecha    DATE NULL,
-  proxima_revision_fecha   DATE NULL,
-  activa                   BOOLEAN NOT NULL DEFAULT TRUE,
-  observaciones            TEXT NULL,
-  created_by               INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  updated_by               INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  created_at               TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at               TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT chk_preventivo_planes_scope
-    CHECK (
-      (scope_type = 'device' AND device_id IS NOT NULL AND customer_id IS NULL)
-      OR
-      (scope_type = 'customer' AND customer_id IS NOT NULL AND device_id IS NULL)
-    ),
-  CONSTRAINT chk_preventivo_planes_periodicidad CHECK (periodicidad_valor > 0),
-  CONSTRAINT chk_preventivo_planes_aviso CHECK (aviso_anticipacion_dias >= 0)
-);
-
-CREATE TABLE IF NOT EXISTS preventivo_revisiones (
-  id                INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  plan_id           INTEGER NOT NULL REFERENCES preventivo_planes(id) ON DELETE CASCADE,
-  estado            preventivo_revision_state NOT NULL DEFAULT 'borrador',
-  fecha_programada  DATE NULL,
-  fecha_realizada   DATE NULL,
-  realizada_por     INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  resumen           TEXT NULL,
-  created_by        INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  updated_by        INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT chk_preventivo_revisiones_cerrada_fecha
-    CHECK (estado <> 'cerrada' OR fecha_realizada IS NOT NULL)
-);
-
-CREATE TABLE IF NOT EXISTS preventivo_revision_items (
-  id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  revision_id          INTEGER NOT NULL REFERENCES preventivo_revisiones(id) ON DELETE CASCADE,
-  orden                INTEGER NOT NULL DEFAULT 1,
-  device_id            INTEGER NULL REFERENCES devices(id) ON DELETE SET NULL,
-  equipo_snapshot      TEXT NULL,
-  serie_snapshot       TEXT NULL,
-  interno_snapshot     TEXT NULL,
-  estado_item          preventivo_item_state NOT NULL DEFAULT 'pendiente',
-  motivo_no_control    TEXT NULL,
-  ubicacion_detalle    TEXT NULL,
-  accesorios_cambiados BOOLEAN NOT NULL DEFAULT FALSE,
-  accesorios_detalle   TEXT NULL,
-  notas                TEXT NULL,
-  arrastrar_proxima    BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT chk_preventivo_items_motivo_no_control
-    CHECK (
-      estado_item <> 'no_controlado'
-      OR NULLIF(TRIM(COALESCE(motivo_no_control, '')), '') IS NOT NULL
-    )
-);
-
--- =============================
--- Índices
--- =============================
-CREATE INDEX IF NOT EXISTS idx_models_marca ON models(marca_id);
-CREATE INDEX IF NOT EXISTS idx_models_tecnico ON models(tecnico_id);
-
-CREATE INDEX IF NOT EXISTS idx_devices_customer ON devices(customer_id);
-CREATE INDEX IF NOT EXISTS idx_devices_marca ON devices(marca_id);
-CREATE INDEX IF NOT EXISTS idx_devices_model ON devices(model_id);
-CREATE INDEX IF NOT EXISTS idx_devices_nro_serie ON devices(numero_serie);
-
-CREATE INDEX IF NOT EXISTS idx_ingresos_device ON ingresos(device_id);
-CREATE INDEX IF NOT EXISTS idx_ingresos_ubicacion ON ingresos(ubicacion_id);
-CREATE INDEX IF NOT EXISTS idx_ingresos_asignado ON ingresos(asignado_a);
-CREATE INDEX IF NOT EXISTS ix_ingresos_asignado_estado ON ingresos(asignado_a, estado);
-
-CREATE INDEX IF NOT EXISTS idx_quotes_ingreso ON quotes(ingreso_id);
-CREATE INDEX IF NOT EXISTS ix_quotes_emitido ON quotes(fecha_emitido);
-CREATE INDEX IF NOT EXISTS ix_quotes_aprobado ON quotes(fecha_aprobado);
-
-CREATE INDEX IF NOT EXISTS idx_items_quote ON quote_items(quote_id);
-CREATE INDEX IF NOT EXISTS idx_quote_items_repuesto_codigo ON quote_items(repuesto_codigo);
-CREATE INDEX IF NOT EXISTS ix_events_ingreso_estado_ts ON ingreso_events(ingreso_id, a_estado, ts);
-
-CREATE INDEX IF NOT EXISTS idx_ingreso_acc_ingreso ON ingreso_accesorios(ingreso_id);
-CREATE INDEX IF NOT EXISTS idx_ingreso_acc_accesorio ON ingreso_accesorios(accesorio_id);
-
-CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_ingreso ON ingreso_alquiler_accesorios(ingreso_id);
-
-CREATE INDEX IF NOT EXISTS idx_catalogo_repuestos_codigo_ci ON catalogo_repuestos ((LOWER(codigo)));
-CREATE INDEX IF NOT EXISTS idx_catalogo_repuestos_nombre_ci ON catalogo_repuestos ((LOWER(nombre)));
-CREATE INDEX IF NOT EXISTS idx_repuestos_subrubros_nombre_ci ON repuestos_subrubros ((LOWER(nombre)));
-CREATE INDEX IF NOT EXISTS idx_repuestos_movimientos_repuesto_id ON repuestos_movimientos(repuesto_id);
-CREATE INDEX IF NOT EXISTS idx_repuestos_movimientos_created_at ON repuestos_movimientos(created_at);
-CREATE INDEX IF NOT EXISTS idx_repuestos_cambios_created_at ON repuestos_cambios(created_at);
-CREATE INDEX IF NOT EXISTS idx_repuestos_cambios_codigo_ci ON repuestos_cambios ((LOWER(codigo)));
-CREATE INDEX IF NOT EXISTS idx_repuestos_proveedores_repuesto_id ON repuestos_proveedores(repuesto_id);
-CREATE INDEX IF NOT EXISTS idx_repuestos_proveedores_proveedor_id ON repuestos_proveedores(proveedor_id);
-CREATE INDEX IF NOT EXISTS idx_repuestos_stock_permisos_tecnico_id ON repuestos_stock_permisos(tecnico_id);
-CREATE INDEX IF NOT EXISTS idx_repuestos_stock_permisos_expires_at ON repuestos_stock_permisos(expires_at);
-CREATE INDEX IF NOT EXISTS idx_ingreso_alq_acc_accesorio ON ingreso_alquiler_accesorios(accesorio_id);
-
-CREATE INDEX IF NOT EXISTS idx_preventivo_planes_device ON preventivo_planes(device_id);
-CREATE INDEX IF NOT EXISTS idx_preventivo_planes_customer ON preventivo_planes(customer_id);
-CREATE INDEX IF NOT EXISTS idx_preventivo_planes_next_active
-  ON preventivo_planes(proxima_revision_fecha)
-  WHERE activa = TRUE;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_preventivo_planes_device_active
-  ON preventivo_planes(device_id)
-  WHERE activa = TRUE AND device_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_preventivo_planes_customer_active
-  ON preventivo_planes(customer_id)
-  WHERE activa = TRUE AND customer_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_preventivo_revisiones_plan_fecha
-  ON preventivo_revisiones(plan_id, fecha_programada DESC);
-CREATE INDEX IF NOT EXISTS idx_preventivo_revisiones_plan_estado
-  ON preventivo_revisiones(plan_id, estado);
-
-CREATE INDEX IF NOT EXISTS idx_preventivo_revision_items_revision_orden
-  ON preventivo_revision_items(revision_id, orden);
-CREATE INDEX IF NOT EXISTS idx_preventivo_revision_items_revision_estado
-  ON preventivo_revision_items(revision_id, estado_item);
-
-CREATE INDEX IF NOT EXISTS idx_mte_marca ON marca_tipos_equipo(marca_id);
-CREATE INDEX IF NOT EXISTS idx_ms_tipo   ON marca_series(tipo_id);
-CREATE INDEX IF NOT EXISTS idx_msv_tipo  ON marca_series_variantes(tipo_id);
-CREATE INDEX IF NOT EXISTS idx_msv_serie ON marca_series_variantes(serie_id);
-CREATE INDEX IF NOT EXISTS idx_mh_tipo   ON model_hierarchy(tipo_id);
-CREATE INDEX IF NOT EXISTS idx_mh_serie  ON model_hierarchy(serie_id);
-CREATE INDEX IF NOT EXISTS idx_mh_var    ON model_hierarchy(variante_id);
-
--- Unicidad case-insensitive (nombres) mediante índices únicos funcionales
-CREATE UNIQUE INDEX IF NOT EXISTS uq_marcas_nombre_ci ON marcas ((LOWER(nombre)));
-CREATE UNIQUE INDEX IF NOT EXISTS uq_models_marca_nombre_ci ON models (marca_id, (LOWER(nombre)));
-CREATE UNIQUE INDEX IF NOT EXISTS uq_catalogo_accesorios_nombre_ci ON catalogo_accesorios ((LOWER(nombre)));
-CREATE UNIQUE INDEX IF NOT EXISTS uq_catalogo_tipos_equipo_nombre_ci ON catalogo_tipos_equipo ((LOWER(nombre)));
-CREATE UNIQUE INDEX IF NOT EXISTS uq_mte_ci ON marca_tipos_equipo (marca_id, (LOWER(nombre)));
-CREATE UNIQUE INDEX IF NOT EXISTS uq_ms_ci ON marca_series (marca_id, tipo_id, (LOWER(nombre)));
-CREATE UNIQUE INDEX IF NOT EXISTS uq_msv_ci ON marca_series_variantes (marca_id, tipo_id, serie_id, (LOWER(nombre)));
-
--- =============================
--- Triggers
--- =============================
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_ingreso_media_set_updated_at') THEN
-    CREATE TRIGGER trg_ingreso_media_set_updated_at
-    BEFORE UPDATE ON ingreso_media
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_stock_movements') THEN
+    CREATE TRIGGER trg_audit_retail_stock_movements AFTER INSERT OR UPDATE OR DELETE ON retail_stock_movements
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_ingreso_presupuesto_alerts_set_updated_at') THEN
-    CREATE TRIGGER trg_ingreso_presupuesto_alerts_set_updated_at
-    BEFORE UPDATE ON ingreso_presupuesto_alerts
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_sales') THEN
+    CREATE TRIGGER trg_audit_retail_sales AFTER INSERT OR UPDATE OR DELETE ON retail_sales
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_cte_updated_at') THEN
-    CREATE TRIGGER trg_cte_updated_at BEFORE UPDATE ON catalogo_tipos_equipo
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_sale_items') THEN
+    CREATE TRIGGER trg_audit_retail_sale_items AFTER INSERT OR UPDATE OR DELETE ON retail_sale_items
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_mte_updated_at') THEN
-    CREATE TRIGGER trg_mte_updated_at BEFORE UPDATE ON marca_tipos_equipo
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_returns') THEN
+    CREATE TRIGGER trg_audit_retail_returns AFTER INSERT OR UPDATE OR DELETE ON retail_returns
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_ms_updated_at') THEN
-    CREATE TRIGGER trg_ms_updated_at BEFORE UPDATE ON marca_series
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_msv_updated_at') THEN
-    CREATE TRIGGER trg_msv_updated_at BEFORE UPDATE ON marca_series_variantes
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_mh_updated_at') THEN
-    CREATE TRIGGER trg_mh_updated_at BEFORE UPDATE ON model_hierarchy
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_preventivo_planes_updated_at') THEN
-    CREATE TRIGGER trg_preventivo_planes_updated_at
-    BEFORE UPDATE ON preventivo_planes
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_preventivo_revisiones_updated_at') THEN
-    CREATE TRIGGER trg_preventivo_revisiones_updated_at
-    BEFORE UPDATE ON preventivo_revisiones
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_preventivo_revision_items_updated_at') THEN
-    CREATE TRIGGER trg_preventivo_revision_items_updated_at
-    BEFORE UPDATE ON preventivo_revision_items
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-  END IF;
-  -- audit_log append-only
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_log_no_update') THEN
-    CREATE TRIGGER trg_audit_log_no_update BEFORE UPDATE ON audit_log
-    FOR EACH ROW EXECUTE FUNCTION audit_log_no_update();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_log_no_delete') THEN
-    CREATE TRIGGER trg_audit_log_no_delete BEFORE DELETE ON audit_log
-    FOR EACH ROW EXECUTE FUNCTION audit_log_no_update();
-  END IF;
-  -- sync de quotes -> ingresos
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_quote_sync_ins') THEN
-    CREATE TRIGGER trg_quote_sync_ins AFTER INSERT ON quotes
-    FOR EACH ROW EXECUTE FUNCTION sync_quote_with_ingreso();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_quote_sync_upd') THEN
-    CREATE TRIGGER trg_quote_sync_upd AFTER UPDATE OF estado, subtotal, fecha_emitido, fecha_aprobado ON quotes
-    FOR EACH ROW EXECUTE FUNCTION sync_quote_with_ingreso();
-  END IF;
-END $$;
-
--- Activar triggers de auditoría por fila (si no existen)
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_ingresos') THEN
-    CREATE TRIGGER trg_audit_ingresos
-    AFTER INSERT OR UPDATE OR DELETE ON ingresos
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_devices') THEN
-    CREATE TRIGGER trg_audit_devices
-    AFTER INSERT OR UPDATE OR DELETE ON devices
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_ingreso_accesorios') THEN
-    CREATE TRIGGER trg_audit_ingreso_accesorios
-    AFTER INSERT OR UPDATE OR DELETE ON ingreso_accesorios
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_ingreso_alquiler_accesorios') THEN
-    CREATE TRIGGER trg_audit_ingreso_alquiler_accesorios
-    AFTER INSERT OR UPDATE OR DELETE ON ingreso_alquiler_accesorios
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_quotes') THEN
-    CREATE TRIGGER trg_audit_quotes
-    AFTER INSERT OR UPDATE OR DELETE ON quotes
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_quote_items') THEN
-    CREATE TRIGGER trg_audit_quote_items
-    AFTER INSERT OR UPDATE OR DELETE ON quote_items
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_marcas') THEN
-    CREATE TRIGGER trg_audit_marcas
-    AFTER INSERT OR UPDATE OR DELETE ON marcas
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_models') THEN
-    CREATE TRIGGER trg_audit_models
-    AFTER INSERT OR UPDATE OR DELETE ON models
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_customers') THEN
-    CREATE TRIGGER trg_audit_customers
-    AFTER INSERT OR UPDATE OR DELETE ON customers
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_users') THEN
-    CREATE TRIGGER trg_audit_users
-    AFTER INSERT OR UPDATE OR DELETE ON users
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_proveedores_externos') THEN
-    CREATE TRIGGER trg_audit_proveedores_externos
-    AFTER INSERT OR UPDATE OR DELETE ON proveedores_externos
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_preventivo_planes') THEN
-    CREATE TRIGGER trg_audit_preventivo_planes
-    AFTER INSERT OR UPDATE OR DELETE ON preventivo_planes
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_preventivo_revisiones') THEN
-    CREATE TRIGGER trg_audit_preventivo_revisiones
-    AFTER INSERT OR UPDATE OR DELETE ON preventivo_revisiones
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_audit_preventivo_revision_items') THEN
-    CREATE TRIGGER trg_audit_preventivo_revision_items
-    AFTER INSERT OR UPDATE OR DELETE ON preventivo_revision_items
-    FOR EACH ROW EXECUTE FUNCTION audit.log_row_change();
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_invoices') THEN
+    CREATE TRIGGER trg_audit_retail_invoices AFTER INSERT OR UPDATE OR DELETE ON retail_invoices
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
 END $$;
 

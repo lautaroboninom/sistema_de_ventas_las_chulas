@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="256" viewBox="0 0 512 256" role="img" aria-label="Las Chulas">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050505" />
+      <stop offset="1" stop-color="#0f0f10" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="256" rx="28" fill="url(#bg)" />
+  <text
+    x="28"
+    y="206"
+    fill="#f5f5f5"
+    font-family="Sora, Arial Black, sans-serif"
+    font-size="66"
+    font-weight="800"
+    letter-spacing="1.6"
+  >
+    LAS CHULAS
+  </text>
+</svg>

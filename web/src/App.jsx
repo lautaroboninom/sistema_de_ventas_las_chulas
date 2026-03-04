@@ -1,27 +1,28 @@
-import { useEffect, useState } from "react";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import Sidebar from "./components/Sidebar.jsx";
-import Footer from "./components/Footer.jsx";
-import useRouteUiState from "./hooks/useRouteUiState";
-import { useAuth } from "./context/AuthContext";
-import { can, canAny, PERMISSION_CODES } from "./lib/permissions";
+import { useEffect, useState } from 'react';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import Sidebar from './components/Sidebar.jsx';
+import Footer from './components/Footer.jsx';
+import { useAuth } from './context/AuthContext';
+import { getRetailConfigPageSettings } from './lib/api';
+
+function mergePageSettings(raw) {
+  return {
+    app_name: raw?.app_name || null,
+    app_tagline: raw?.app_tagline || null,
+    footer_legal_name: raw?.footer_legal_name || null,
+    sidebar_section_title: raw?.sidebar_section_title || null,
+    default_route: raw?.default_route || null,
+    nav_labels: raw?.nav_labels || {},
+    page_titles: raw?.page_titles || {},
+  };
+}
 
 export default function App() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const rol = user?.rol;
-  const appName = import.meta.env.VITE_APP_NAME || "Sistema de Reparaciones";
-
-  const canSeeHistorico = can(user, PERMISSION_CODES.PAGE_INGRESOS_HISTORY);
-  const canSeeEquipos = can(user, PERMISSION_CODES.PAGE_DEVICES_PREVENTIVOS);
-  const canCreateIngreso = canAny(user, [
-    PERMISSION_CODES.ACTION_INGRESO_CREATE,
-    PERMISSION_CODES.PAGE_NEW_INGRESO,
-  ]);
-
-  useRouteUiState();
+  const [pageSettings, setPageSettings] = useState(mergePageSettings(null));
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -29,86 +30,89 @@ export default function App() {
 
   useEffect(() => {
     if (!mobileMenuOpen) return undefined;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = previousOverflow;
+      document.body.style.overflow = previous;
     };
   }, [mobileMenuOpen]);
 
   useEffect(() => {
-    if (!mobileMenuOpen) return undefined;
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") {
-        setMobileMenuOpen(false);
+    if (!user) return;
+    let active = true;
+    (async () => {
+      try {
+        const row = await getRetailConfigPageSettings();
+        if (!active) return;
+        const next = mergePageSettings(row);
+        setPageSettings(next);
+        if (next.default_route) {
+          window.localStorage.setItem('las_chulas_default_route', next.default_route);
+        }
+      } catch {
+        if (active) {
+          setPageSettings(mergePageSettings(null));
+        }
       }
+    })();
+    return () => {
+      active = false;
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [mobileMenuOpen]);
+  }, [user]);
+
+  const appName = pageSettings.app_name || import.meta.env.VITE_APP_NAME || 'Las Chulas';
+
+  useEffect(() => {
+    const keyByPath = {
+      '/pos': 'pos',
+      '/productos': 'productos',
+      '/compras': 'compras',
+      '/ventas': 'ventas',
+      '/garantias': 'garantias',
+      '/reportes': 'reportes',
+      '/online': 'online',
+      '/config': 'config',
+      '/config/paginas': 'config_paginas',
+    };
+    const key = keyByPath[location.pathname];
+    const pageTitle = key ? pageSettings.page_titles?.[key] : null;
+    document.title = pageTitle || appName;
+  }, [location.pathname, pageSettings.page_titles, appName]);
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="border-b bg-white">
-        <div className="max-w-7xl mx-auto px-4 h-12 flex items-center">
+      <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/90 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
           <button
             type="button"
             aria-label="Abrir menú"
-            aria-controls="app-sidebar"
-            aria-expanded={mobileMenuOpen}
             onClick={() => setMobileMenuOpen((open) => !open)}
-            className="mr-3 inline-flex h-8 w-8 items-center justify-center rounded border border-gray-200 text-gray-700 hover:bg-gray-50 md:hidden"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-300 text-neutral-700 hover:bg-neutral-100 md:hidden"
           >
-            <span className="sr-only">Abrir menú</span>
-            <span className="flex flex-col gap-1">
-              <span className="block h-0.5 w-4 bg-current"></span>
-              <span className="block h-0.5 w-4 bg-current"></span>
-              <span className="block h-0.5 w-4 bg-current"></span>
-            </span>
+            <span className="block h-0.5 w-4 bg-current" />
           </button>
 
-          <Link to="/" className="font-semibold">
-            {appName}
+          <Link to="/pos" className="flex items-center gap-2.5">
+            <img
+              src="/branding/las-chulas-mark.svg"
+              alt={appName}
+              className="hidden h-9 w-auto rounded-lg border border-neutral-200 object-contain sm:block"
+            />
+            <span className="text-sm font-semibold uppercase tracking-[0.14em] text-neutral-800">{appName}</span>
           </Link>
 
-          <nav className="hidden md:flex items-center gap-6 ml-6">
-            {canSeeHistorico && (
-              <Link to="/clientes" className="hover:underline">
-                General por cliente
-              </Link>
-            )}
-            {canSeeHistorico && (
-              <Link to="/ingresos/historico" className="hover:underline">
-                Histórico ingresos
-              </Link>
-            )}
-            {canSeeEquipos && (
-              <Link to="/equipos" className="hover:underline">
-                Equipos
-              </Link>
-            )}
-          </nav>
-
-          <div className="ml-auto flex items-center gap-2 md:gap-3">
-            {canCreateIngreso && (
-              <Link
-                to="/ingresos/nuevo"
-                className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs md:text-sm"
-              >
-                Nuevo ingreso
-              </Link>
-            )}
-            {user && (
-              <span className="hidden md:inline text-sm text-gray-500">
-                {user?.nombre} {rol}
+          <div className="ml-auto flex items-center gap-3">
+            {user ? (
+              <span className="hidden rounded-full bg-neutral-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-neutral-600 md:inline">
+                {user.nombre} - {user.rol}
               </span>
-            )}
+            ) : null}
             <button
               onClick={() => {
                 logout();
-                nav("/login");
+                nav('/login');
               }}
-              className="px-2.5 py-1.5 rounded border hover:bg-gray-50 text-xs md:text-sm md:px-3"
+              className="btn-secondary !px-3 !py-1.5 !text-xs"
             >
               Salir
             </button>
@@ -116,17 +120,19 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 flex">
+      <main className="flex flex-1">
         <Sidebar
           mobileOpen={mobileMenuOpen}
           onClose={() => setMobileMenuOpen(false)}
+          labels={pageSettings.nav_labels}
+          sectionTitle={pageSettings.sidebar_section_title}
         />
         <div className="flex-1 p-3 md:p-6">
           <Outlet />
         </div>
       </main>
 
-      <Footer />
+      <Footer legalName={pageSettings.footer_legal_name} />
     </div>
   );
 }

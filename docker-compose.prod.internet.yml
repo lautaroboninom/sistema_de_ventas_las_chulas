@@ -1,7 +1,7 @@
 ﻿version: "3.9"
 
 
-name: sistemadereparaciones
+name: laschulas
 services:
   reverse-proxy:
     image: traefik:v3.0
@@ -36,8 +36,8 @@ services:
 
   postgres:
     image: postgres:16
-    container_name: sistemadereparaciones-postgres
-    env_file: .env.prod.internet
+    container_name: laschulas-postgres
+    env_file: .env.prod
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro
@@ -54,8 +54,8 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.prod
-    container_name: sistemadereparaciones-api
-    env_file: .env.prod.internet
+    container_name: laschulas-api
+    env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=app.settings_internet
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
@@ -94,7 +94,7 @@ services:
       dockerfile: Dockerfile.prod
       args:
         - VITE_API_URL=${VITE_API_URL}
-    container_name: sistemadereparaciones-web
+    container_name: laschulas-web
     environment:
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
     depends_on:
@@ -127,5 +127,6 @@ volumes:
   pg_data:
   staticfiles:
   mediafiles:
+
 
 

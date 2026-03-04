@@ -29,8 +29,6 @@ coverage/
 # --- Local env files
 .env
 /.env.prod
-/.env.prod.internet
-/.env.staging
 
 # --- Generated data / outputs
 etl/out/

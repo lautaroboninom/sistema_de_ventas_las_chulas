@@ -1,18 +1,5 @@
-﻿"""Domain-split views package.
+"""Views export for retail-only cutover."""
 
-Temporary re-exports preserve backwards-compat imports like
-`from api.service.views import FooView` while we split code by domain.
-"""
-
-# Re-export everything public from legacy first, then override with
-# domain-specific implementations moved to dedicated modules.
-from .legacy import *  # noqa: F401,F403
-
-# Explicitly re-export underscored helpers consumed elsewhere in the repo
-# (e.g., motivos_view imports _fix_text_value from .views).
-from .helpers import _fix_text_value  # noqa: F401
-
-# Domain-specific views (override legacy exports where applicable)
 from .auth_views import (
     ping,
     LoginView,
@@ -22,350 +9,114 @@ from .auth_views import (
     ResetPasswordView,
 )
 
-from .metricas_views import (
-    MetricasResumenView,
-    MetricasSeriesView,
-    MetricasFinanzasView,
-    MetricasFinanzasLiberadosView,
-    MetricasCalibracionView,
-    FeriadosView,
-    MetricasConfigView,
-)
-
-from .catalogo_tipos_views import (
-    TiposEquipoView,
-)
-
-from .ingresos_views import (
-    MisPendientesView,
-    PendientesPresupuestoView,
-    PresupuestadosView,
-    PresupuestadosExportView,
-    AprobadosParaRepararView,
-    AprobadosYReparadosView,
-    AprobadosView,
-    LiberadosView,
-    GeneralEquiposView,
-    GeneralPorClienteView,
-    GeneralPorClienteExportView,
-    MarcarControladoSinDefectoView,
-    MarcarParaRepararView,
-    MarcarReparadoView,
-    EntregarIngresoView,
-    DarBajaIngresoView,
-    DarAltaIngresoView,
-    GarantiaReparacionCheckView,
-    GarantiaFabricaCheckView,
-    NuevoIngresoView,
-    IngresoDetalleView,
-    IngresoAsignarTecnicoView,
-    IngresoSolicitarAsignacionView,
-    IngresoHistorialView,
-    PendientesGeneralView,
-    ListosParaRetiroView,
-    CerrarReparacionView,
-)
-
-from .ingreso_tests_views import (
-    IngresoTestView,
-    IngresoTestPdfView,
-)
-
-from .quotes_views import (
-    QuoteDetailView,
-    QuoteItemsView,
-    QuoteItemDetailView,
-    QuoteResumenView,
-    EmitirPresupuestoView,
-    QuotePdfView,
-    AprobarPresupuestoView,
-    AnularPresupuestoView,
-    NoAplicaPresupuestoView,
-    QuitarNoAplicaPresupuestoView,
-)
-
-from .media_views import (
-    IngresoMediaListCreateView,
-    IngresoMediaDetailView,
-    IngresoMediaFileView,
-    IngresoMediaThumbnailView,
-)
-
-from .accesorios_views import (
-    CatalogoAccesoriosView,
-    IngresoAccesoriosView,
-    IngresoAccesorioDetailView,
-    BuscarAccesorioPorReferenciaView,
-    IngresoAlquilerAccesoriosView,
-    IngresoAlquilerAccesorioDetailView,
-)
-
-from .repuestos_views import (
-    RepuestosSubrubrosView,
-    RepuestosSubrubroDetailView,
-    CatalogoRepuestosView,
-    RepuestosView,
-    RepuestoDetailView,
-    RepuestosConfigView,
-    RepuestosCompraMovimientoView,
-    RepuestosMovimientosView,
-    RepuestosCambiosView,
-    RepuestosStockPermisosView,
-    RepuestosStockPermisoDetailView,
-)
-
-from .catalogo_hierarquia_views import (
-    CatalogoTiposView,
-    CatalogoModelosDeTipoView,
-    CatalogoVariantesView,
-    CatalogoMarcasPorTipoView,
-    CatalogoTiposCreateView,
-    CatalogoTipoDetailView,
-    CatalogoModelosCreateView,
-    CatalogoModeloDetailView,
-    CatalogoVariantesCreateView,
-    CatalogoVarianteDetailView,
-    ModeloTipoEquipoView,
-)
-
-from .marcas_modelos_views import (
-    CatalogoMarcasView,
-    CatalogoModelosView,
-    CatalogoVariantesPorMarcaView,
-    CatalogoUbicacionesView,
-    ModeloVarianteView,
-    ModelosPorMarcaView,
-    MarcaDeleteView,
-    MarcaDeleteCascadeView,
-    ModeloDeleteView,
-    ModeloTecnicoView,
-    MarcaTecnicoView,
-    MarcaAplicarTecnicoAModelosView,
-    ModelMergeView,
-    MarcaMergeView,
-)
-
 from .usuarios_views import (
     UsuariosView,
     UsuarioActivoView,
     UsuarioResetPassView,
     UsuarioRolePermView,
     UsuarioDeleteView,
-    CatalogoRolesView,
     CatalogoPermisosView,
     UsuarioPermisosView,
     UsuarioPermisosResetView,
-    CatalogoTecnicosView,
 )
 
-from .derivaciones_views import (
-    DerivarIngresoView,
-    DerivacionesPorIngresoView,
-    DevolverDerivacionView,
-    EquiposDerivadosView,
+from .retail_views import (
+    RetailProductosView,
+    RetailProductoDetailView,
+    RetailProductoImagenView,
+    RetailAtributosView,
+    RetailVariantesView,
+    RetailVarianteDetailView,
+    RetailVarianteEscanearView,
+    RetailComprasView,
+    RetailCompraDetailView,
+    RetailCajaAperturaView,
+    RetailCajaCierreView,
+    RetailCajaActualView,
+    RetailCajaDetailView,
+    RetailCajaCuentasView,
+    RetailVentasView,
+    RetailVentaDetailView,
+    RetailGarantiaTicketView,
+    RetailGarantiasActivasView,
+    RetailVentasCotizarView,
+    RetailVentasConfirmarView,
+    RetailVentaAnularView,
+    RetailVentaDevolverView,
+    RetailFacturacionEmitirView,
+    RetailFacturacionDetailView,
+    RetailFacturacionNotaCreditoView,
+    RetailConfigSettingsView,
+    RetailConfigPageSettingsView,
+    RetailConfigPaymentAccountsView,
+    RetailOnlineSyncCatalogoView,
+    RetailOnlineSyncStockView,
+    RetailOnlineWebhookOrdenPagadaView,
+    RetailOnlineWebhookOrdenCanceladaView,
+    RetailReporteMasVendidosView,
+    RetailReporteTallesColoresView,
+    RetailReporteBajoStockView,
+    RetailReporteRentabilidadView,
+    RetailReporteVentasPorMedioView,
+    RetailReporteCierreCajaView,
+    RetailReporteDevolucionesView,
 )
-
-from .devices_views import (
-    DeviceDirectCreateView,
-    DeviceIdentificadoresView,
-    DevicesListView,
-    DevicesMergeView,
-)
-
-from .preventivos_views import (
-    DevicePreventivoPlanView,
-    DevicePreventivoRevisionCreateView,
-    PreventivoAgendaView,
-    PreventivoClientesListView,
-    CustomerPreventivoPlanView,
-    CustomerPreventivoRevisionesView,
-    PreventivoRevisionDetailView,
-    PreventivoRevisionItemsView,
-    PreventivoRevisionItemDetailView,
-    PreventivoRevisionCerrarView,
-)
-
-from .proveedores_views import (
-    ProveedoresExternosView,
-)
-
-from .clientes_views import (
-    CustomersListView,
-    ClientesView,
-    ClienteDeleteView,
-    ClienteMergeView,
-)
-
-from .reportes_views import (
-    RemitoSalidaPdfView,
-    RemitoDerivacionPdfView,
-)
-
-from .scan_views import (
-    ScanLookupView,
-)
-
-# Motivos catálogo (propio de views/)
-from .motivos_view import CatalogoMotivosView
-from .warranty_views import WarrantyRulesView, WarrantyRuleDetailView
 
 __all__ = [
-    # auth
-    "ping",
-    "LoginView",
-    "LogoutView",
-    "SessionView",
-    "ForgotPasswordView",
-    "ResetPasswordView",
-    # metricas
-    "MetricasResumenView",
-    "MetricasSeriesView",
-    "MetricasFinanzasView",
-    "MetricasFinanzasLiberadosView",
-    "MetricasCalibracionView",
-    "FeriadosView",
-    "MetricasConfigView",
-    # catalogo (tipos)
-    "TiposEquipoView",
-    # ingresos
-    "MisPendientesView",
-    "PendientesPresupuestoView",
-    "PresupuestadosView",
-    "PresupuestadosExportView",
-    "AprobadosParaRepararView",
-    "AprobadosYReparadosView",
-    "AprobadosView",
-    "LiberadosView",
-    "GeneralEquiposView",
-    "GeneralPorClienteView",
-    "GeneralPorClienteExportView",
-    "MarcarControladoSinDefectoView",
-    "MarcarParaRepararView",
-    "MarcarReparadoView",
-    "EntregarIngresoView",
-    "DarBajaIngresoView",
-    "DarAltaIngresoView",
-    "GarantiaReparacionCheckView",
-    "GarantiaFabricaCheckView",
-    "NuevoIngresoView",
-    "IngresoDetalleView",
-    "IngresoAsignarTecnicoView",
-    "IngresoSolicitarAsignacionView",
-    "IngresoHistorialView",
-    "IngresoTestView",
-    "IngresoTestPdfView",
-    "PendientesGeneralView",
-    "ListosParaRetiroView",
-    "CerrarReparacionView",
-    # quotes
-    "QuoteDetailView",
-    "QuoteItemsView",
-    "QuoteItemDetailView",
-    "QuoteResumenView",
-    "EmitirPresupuestoView",
-    "QuotePdfView",
-    "AprobarPresupuestoView",
-    "AnularPresupuestoView",
-    "NoAplicaPresupuestoView",
-    "QuitarNoAplicaPresupuestoView",
-    # media
-    "IngresoMediaListCreateView",
-    "IngresoMediaDetailView",
-    "IngresoMediaFileView",
-    "IngresoMediaThumbnailView",
-    # accesorios
-    "CatalogoAccesoriosView",
-    "RepuestosSubrubrosView",
-    "RepuestosSubrubroDetailView",
-    "CatalogoRepuestosView",
-    "RepuestosView",
-    "RepuestoDetailView",
-    "RepuestosConfigView",
-    "RepuestosCompraMovimientoView",
-    "RepuestosMovimientosView",
-    "RepuestosCambiosView",
-    "RepuestosStockPermisosView",
-    "RepuestosStockPermisoDetailView",
-    "IngresoAccesoriosView",
-    "IngresoAccesorioDetailView",
-    "BuscarAccesorioPorReferenciaView",
-    "IngresoAlquilerAccesoriosView",
-    "IngresoAlquilerAccesorioDetailView",
-    # catalogo jerarquía
-    "CatalogoTiposView",
-    "CatalogoModelosDeTipoView",
-    "CatalogoVariantesView",
-    "CatalogoMarcasPorTipoView",
-    "CatalogoTiposCreateView",
-    "CatalogoTipoDetailView",
-    "CatalogoModelosCreateView",
-    "CatalogoModeloDetailView",
-    "CatalogoVariantesCreateView",
-    "CatalogoVarianteDetailView",
-    "ModeloTipoEquipoView",
-    # marcas y modelos
-    "CatalogoMarcasView",
-    "CatalogoModelosView",
-    "CatalogoVariantesPorMarcaView",
-    "CatalogoUbicacionesView",
-    "ModeloVarianteView",
-    "ModelosPorMarcaView",
-    "MarcaDeleteView",
-    "MarcaDeleteCascadeView",
-    "ModeloDeleteView",
-    "ModeloTecnicoView",
-    "MarcaTecnicoView",
-    "MarcaAplicarTecnicoAModelosView",
-    "ModelMergeView",
-    "MarcaMergeView",
-    "CatalogoMotivosView",
-    # usuarios
-    "UsuariosView",
-    "UsuarioActivoView",
-    "UsuarioResetPassView",
-    "UsuarioRolePermView",
-    "UsuarioDeleteView",
-    "CatalogoRolesView",
-    "CatalogoPermisosView",
-    "UsuarioPermisosView",
-    "UsuarioPermisosResetView",
-    "CatalogoTecnicosView",
-    # derivaciones
-    "DerivarIngresoView",
-    "DerivacionesPorIngresoView",
-    "DevolverDerivacionView",
-    "EquiposDerivadosView",
-    # devices
-    "DeviceDirectCreateView",
-    "DeviceIdentificadoresView",
-    "DevicesListView",
-    "DevicesMergeView",
-    # preventivos
-    "DevicePreventivoPlanView",
-    "DevicePreventivoRevisionCreateView",
-    "PreventivoAgendaView",
-    "PreventivoClientesListView",
-    "CustomerPreventivoPlanView",
-    "CustomerPreventivoRevisionesView",
-    "PreventivoRevisionDetailView",
-    "PreventivoRevisionItemsView",
-    "PreventivoRevisionItemDetailView",
-    "PreventivoRevisionCerrarView",
-    # proveedores
-    "ProveedoresExternosView",
-    # clientes
-    "CustomersListView",
-    "ClientesView",
-    "ClienteDeleteView",
-    "ClienteMergeView",
-    # reportes
-    "RemitoSalidaPdfView",
-    "RemitoDerivacionPdfView",
-    # scan lookup
-    "ScanLookupView",
-    # motivos (catálogo ENUM ingreso.motivo)
-    "CatalogoMotivosView",
-    # warranty rules
-    "WarrantyRulesView",
-    "WarrantyRuleDetailView",
+    'ping',
+    'LoginView',
+    'LogoutView',
+    'SessionView',
+    'ForgotPasswordView',
+    'ResetPasswordView',
+    'UsuariosView',
+    'UsuarioActivoView',
+    'UsuarioResetPassView',
+    'UsuarioRolePermView',
+    'UsuarioDeleteView',
+    'CatalogoPermisosView',
+    'UsuarioPermisosView',
+    'UsuarioPermisosResetView',
+    'RetailProductosView',
+    'RetailProductoDetailView',
+    'RetailProductoImagenView',
+    'RetailAtributosView',
+    'RetailVariantesView',
+    'RetailVarianteDetailView',
+    'RetailVarianteEscanearView',
+    'RetailComprasView',
+    'RetailCompraDetailView',
+    'RetailCajaAperturaView',
+    'RetailCajaCierreView',
+    'RetailCajaActualView',
+    'RetailCajaDetailView',
+    'RetailCajaCuentasView',
+    'RetailVentasView',
+    'RetailVentaDetailView',
+    'RetailGarantiaTicketView',
+    'RetailGarantiasActivasView',
+    'RetailVentasCotizarView',
+    'RetailVentasConfirmarView',
+    'RetailVentaAnularView',
+    'RetailVentaDevolverView',
+    'RetailFacturacionEmitirView',
+    'RetailFacturacionDetailView',
+    'RetailFacturacionNotaCreditoView',
+    'RetailConfigSettingsView',
+    'RetailConfigPageSettingsView',
+    'RetailConfigPaymentAccountsView',
+    'RetailOnlineSyncCatalogoView',
+    'RetailOnlineSyncStockView',
+    'RetailOnlineWebhookOrdenPagadaView',
+    'RetailOnlineWebhookOrdenCanceladaView',
+    'RetailReporteMasVendidosView',
+    'RetailReporteTallesColoresView',
+    'RetailReporteBajoStockView',
+    'RetailReporteRentabilidadView',
+    'RetailReporteVentasPorMedioView',
+    'RetailReporteCierreCajaView',
+    'RetailReporteDevolucionesView',
 ]
+
+
+

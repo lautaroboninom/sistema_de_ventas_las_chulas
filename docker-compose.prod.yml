@@ -1,9 +1,9 @@
-name: sistemadereparaciones
+﻿name: laschulas
 
 services:
   postgres:
     image: postgres:16
-    container_name: sistemadereparaciones-postgres
+    container_name: laschulas-postgres
     env_file: .env.prod
     ports:
       - "5432:5432"
@@ -21,7 +21,7 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.prod
-    container_name: sistemadereparaciones-api
+    container_name: laschulas-api
     env_file: .env.prod
     environment:
       - DJANGO_SETTINGS_MODULE=app.settings_prod
@@ -57,7 +57,7 @@ services:
         - VITE_API_URL=${VITE_API_URL:-}
         - VITE_SOURCEMAP=${VITE_SOURCEMAP:-1}
         - VITE_SW=${VITE_SW:-0}
-    container_name: sistemadereparaciones-web
+    container_name: laschulas-web
     command: ["nginx", "-g", "daemon off;"]
     environment:
       - TZ=${TZ:-America/Argentina/Buenos_Aires}
@@ -81,6 +81,7 @@ volumes:
   pg_data:
   staticfiles:
   mediafiles:
+
 
 
 

@@ -2,13 +2,57 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Global font-size: reduce ~1px across the app */
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap');
+
 @layer base {
-  html { font-size: 15px; }
+  :root {
+    --brand-ink: #0b0b0d;
+    --brand-accent: #ef6f61;
+    --brand-muted: #6a6e76;
+    --brand-paper: #fcfbf7;
+  }
+
+  html {
+    font-size: 15px;
+  }
+
+  body {
+    font-family: 'Barlow', 'Segoe UI', sans-serif;
+    color: var(--brand-ink);
+    background:
+      radial-gradient(1200px 520px at 0% -10%, #ffe8dd 0%, rgba(255, 232, 221, 0) 60%),
+      radial-gradient(900px 380px at 100% 0%, #f6ece7 0%, rgba(246, 236, 231, 0) 58%),
+      var(--brand-paper);
+  }
+
+  #root {
+    min-height: 100vh;
+  }
 }
 
-.btn { @apply px-3 py-2 rounded-md shadow text-white bg-blue-600 hover:bg-blue-700 active:scale-[.99]; }
-.btn-secondary { @apply px-3 py-2 rounded-md shadow text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[.99]; }
-.input { @apply border rounded px-3 py-2 w-full; }
-.card { @apply bg-white rounded-xl shadow p-4; }
-.h1 { @apply text-2xl font-semibold; }
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-black bg-black px-4 py-2.5 font-semibold tracking-wide text-white transition hover:bg-neutral-800 active:scale-[.99];
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-neutral-300 bg-white px-4 py-2.5 font-semibold tracking-wide text-neutral-700 transition hover:bg-neutral-100 active:scale-[.99];
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-neutral-300 bg-white px-3 py-2.5 text-sm shadow-sm transition focus:border-[#ef6f61] focus:outline-none focus:ring-2 focus:ring-[#ef6f61]/40;
+  }
+
+  .card {
+    @apply rounded-2xl border border-neutral-200 bg-white/95 p-4 shadow-[0_10px_30px_rgba(9,10,12,0.06)] backdrop-blur md:p-5;
+  }
+
+  .h1 {
+    font-family: 'Sora', 'Segoe UI', sans-serif;
+    @apply text-2xl font-bold tracking-tight;
+  }
+
+  .label {
+    @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-neutral-500;
+  }
+}

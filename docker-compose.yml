@@ -1,4 +1,4 @@
-﻿name: sistemadereparaciones-dev
+﻿name: laschulas-dev
 
 services:
   postgres:
@@ -58,6 +58,7 @@ services:
         condition: service_started
 volumes:
   pg_data:
+
 
 
 

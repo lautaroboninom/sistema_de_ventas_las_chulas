@@ -1,13 +1,11 @@
 # api/urls.py
 
-from django.urls import path, include
-from service.views import ping, LoginView
+from django.urls import include, path
+from service.views import ping
 
 
 urlpatterns = [
-    path("api/ping/", ping),
-    path("api/health/", ping),
-    path("api/auth/login/", LoginView.as_view(), name="login"),
-    path("api/", include("service.urls")),
-
+    path('api/ping/', ping),
+    path('api/health/', ping),
+    path('api/', include('service.urls')),
 ]

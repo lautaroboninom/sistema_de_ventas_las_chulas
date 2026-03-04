@@ -1,23 +1,23 @@
-import { useState } from "react";
-import { postAuthForgot } from "../lib/api";
-import Footer from "../components/Footer.jsx";
+import { useState } from 'react';
+import { postAuthForgot } from '../lib/api';
+import Footer from '../components/Footer.jsx';
 
 export default function ForgotPassword() {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState('');
   const [sending, setSending] = useState(false);
 
-  async function submit(e){
+  async function submit(e) {
     e.preventDefault();
-    setErr("");
+    setErr('');
     if (sending) return;
     setSending(true);
-    try{
+    try {
       await postAuthForgot(email);
       setSent(true);
-    }catch(e){
-      setErr(e?.message || "Error");
+    } catch (error) {
+      setErr(error?.message || 'Error al enviar');
     } finally {
       setSending(false);
     }
@@ -25,21 +25,43 @@ export default function ForgotPassword() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <main className="flex-1">
-        <div className="max-w-sm mx-auto mt-16 border rounded p-4 bg-white">
-          <h1 className="text-xl font-semibold mb-3">Recuperar contraseña</h1>
+      <main className="mx-auto flex w-full max-w-md flex-1 items-center px-4 py-10">
+        <div className="card w-full">
+          <img
+            src="/branding/las-chulas-mark.svg"
+            alt="Las Chulas"
+            className="mb-5 h-12 w-full rounded-lg border border-neutral-200 object-contain"
+          />
+
+          <h1 className="h1 mb-3">Recuperar contraseña</h1>
+
           {sent ? (
-            <div className="text-sm text-gray-700">
-              Si el correo existe, te enviamos un enlace para restablecer la contraseña.
-              Revisá tu bandeja de entrada y el spam.
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+              Si el correo existe, enviamos un enlace para restablecer la contraseña.
             </div>
           ) : (
             <form onSubmit={submit} className="space-y-3">
-              {err && <div className="bg-red-100 text-red-700 p-2 rounded">{err}</div>}
-              <input className="border rounded p-2 w-full" placeholder="tu@empresa.com"
-                     value={email} onChange={e=>setEmail(e.target.value)} />
-              <button type="submit" disabled={sending || !email.trim()} className={`w-full p-2 rounded text-white ${sending ? "bg-blue-400 cursor-not-allowed" : "bg-blue-600"}`}>
-                {sending ? "Enviando..." : "Enviar enlace"}
+              {err ? (
+                <div className="rounded-lg border border-red-300 bg-red-50 p-2 text-sm text-red-700">
+                  {err}
+                </div>
+              ) : null}
+
+              <div>
+                <label className="label" htmlFor="email">Email</label>
+                <input
+                  id="email"
+                  className="input"
+                  placeholder="tu@empresa.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                  required
+                />
+              </div>
+
+              <button type="submit" disabled={sending || !email.trim()} className="btn w-full">
+                {sending ? 'Enviando...' : 'Enviar enlace'}
               </button>
             </form>
           )}
@@ -49,4 +71,3 @@ export default function ForgotPassword() {
     </div>
   );
 }
-

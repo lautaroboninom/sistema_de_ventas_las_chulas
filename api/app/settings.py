@@ -9,32 +9,31 @@ def _csv(name: str, default: str = ""):
     raw = os.getenv(name, default)
     return [x.strip() for x in raw.split(",") if x.strip()]
 
-
 def _bool_env(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
 
-# --- Núcleo / seguridad ---
+# --- NÃºcleo / seguridad ---
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "change-me")
 DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
 
 ALLOWED_HOSTS = _csv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 
-# Orígenes del navegador (con esquema http/https)
+# OrÃ­genes del navegador (con esquema http/https)
 CORS_ALLOWED_ORIGINS = _csv("ALLOWED_ORIGINS", "")
 CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
-# Auditoría
+# AuditorÃ­a
 AUDIT_LOG_ENABLED = os.getenv("AUDIT_LOG_ENABLED", "0").lower() in ("1","true")
 AUDIT_LOG_MAX_BODY = int(os.getenv("AUDIT_LOG_MAX_BODY", "4096"))
 AUDIT_LOG_EXCLUDE_PREFIXES = _csv("AUDIT_LOG_EXCLUDE_PREFIXES", "")
 
-# Branding / URLs públicas
+# Branding / URLs pÃºblicas
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 PUBLIC_WEB_URL = os.getenv("PUBLIC_WEB_URL", FRONTEND_ORIGIN)
 LOGO_PATH = os.getenv("LOGO_PATH", "/app/staticfiles/branding/logo-app.png")  # usado por PDF
 
 # Nombre de la empresa (para emails/PDFs)
-COMPANY_NAME = os.getenv("COMPANY_NAME", "Sistema de Reparaciones")
+COMPANY_NAME = os.getenv("COMPANY_NAME", "Las Chulas")
 COMPANY_CODE = (os.getenv("COMPANY_CODE") or "DEFAULT").strip().upper() or "DEFAULT"
 
 # Company header for PDFs (static across companies)
@@ -42,15 +41,14 @@ COMPANY_HEADER_L1 = os.getenv("COMPANY_HEADER_L1", "")
 COMPANY_HEADER_L2 = os.getenv("COMPANY_HEADER_L2", COMPANY_NAME)
 COMPANY_HEADER_L3 = os.getenv("COMPANY_HEADER_L3", "")
 
-# Datos de contacto para pie de página del presupuesto (pueden cambiar vía entorno)
+# Datos de contacto para pie de pÃ¡gina del presupuesto (pueden cambiar vÃ­a entorno)
 COMPANY_FOOTER_EMAIL = os.getenv("COMPANY_FOOTER_EMAIL", "")
 COMPANY_FOOTER_CUIT = os.getenv("COMPANY_FOOTER_CUIT", "")
 COMPANY_FOOTER_WEB = os.getenv("COMPANY_FOOTER_WEB", "")
 COMPANY_FOOTER_WHATSAPP = os.getenv("COMPANY_FOOTER_WHATSAPP", "")
 
-
 # Directorio opcional donde guardar copias de PDFs de presupuestos
-# Si existe, se escriben allí además de devolverse al cliente
+# Si existe, se escriben allÃ­ ademÃ¡s de devolverse al cliente
 QUOTES_SAVE_DIR = os.getenv(
     "QUOTES_SAVE_DIR",
     ""
@@ -70,26 +68,33 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@example.com")
 EMAIL_LEGAL_FOOTER = os.getenv(
     "EMAIL_LEGAL_FOOTER",
     (
-        "La información de este correo es confidencial y concierne únicamente a la persona a la que está dirigida. "
-        "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los términos que autoriza el art. 318 del CCyCN. "
-        "Si este mensaje no está dirigido a usted, por favor tenga presente que no tiene autorización para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que está dirigido, como así tampoco valerse del mismo. "
+        "La informaciÃ³n de este correo es confidencial y concierne Ãºnicamente a la persona a la que estÃ¡ dirigida. "
+        "Se niega el consentimiento para que pueda ser empleada como prueba por el destinatario en los tÃ©rminos que autoriza el art. 318 del CCyCN. "
+        "Si este mensaje no estÃ¡ dirigido a usted, por favor tenga presente que no tiene autorizaciÃ³n para leer el resto de este correo, copiarlo o derivarlo a cualquier otra persona que no sea aquella a la que estÃ¡ dirigido, como asÃ­ tampoco valerse del mismo. "
         "Si recibe este correo por error, por favor, avise al remitente, luego de lo cual rogamos a usted destruya el mensaje original. "
-        "No se puede responsabilizar al remitente de ninguna forma por/o en relación con alguna consecuencia y/o daño que resulte del apropiado y completo envío y recepción del contenido de este correo."
+        "No se puede responsabilizar al remitente de ninguna forma por/o en relaciÃ³n con alguna consecuencia y/o daÃ±o que resulte del apropiado y completo envÃ­o y recepciÃ³n del contenido de este correo."
     ),
 )
 
-# Notificaciones: solicitudes de asignación de técnico
-ASSIGNMENT_REQUEST_RECIPIENTS = _csv("ASSIGNMENT_REQUEST_RECIPIENTS", "")
-# Notificaciones: bajas de equipos (otros sistemas)
-BAJA_NOTIFY_RECIPIENTS = _csv("BAJA_NOTIFY_RECIPIENTS", "")
-# Notificaciones: presupuestos pendientes (solo rol jefe)
-PRESUPUESTO_ALERT_ENABLED = os.getenv("PRESUPUESTO_ALERT_ENABLED", "1").lower() in ("1", "true", "yes")
-PRESUPUESTO_ALERT_FIRST_DAYS = int(os.getenv("PRESUPUESTO_ALERT_FIRST_DAYS", "7"))
-PRESUPUESTO_ALERT_REPEAT_DAYS = int(os.getenv("PRESUPUESTO_ALERT_REPEAT_DAYS", "3"))
-PRESUPUESTO_ALERT_LOCATION = os.getenv("PRESUPUESTO_ALERT_LOCATION", "taller")
-# Notificaciones: mantenimientos preventivos (solo rol jefe)
-PREVENTIVO_ALERT_ENABLED = os.getenv("PREVENTIVO_ALERT_ENABLED", "1").lower() in ("1", "true", "yes")
-PREVENTIVO_DEFAULT_LEAD_DAYS = int(os.getenv("PREVENTIVO_DEFAULT_LEAD_DAYS", "30"))
+# Retail - Facturacion ARCA / AFIP WSFEv1
+ARCA_WS_ENV = os.getenv("ARCA_WS_ENV", "homolog")  # homolog | prod
+ARCA_WSFE_MOCK = os.getenv("ARCA_WSFE_MOCK", "1")  # usar mock en MVP hasta configurar certificados
+ARCA_DEFAULT_PTO_VTA = int(os.getenv("ARCA_DEFAULT_PTO_VTA", "1"))
+ARCA_DEFAULT_TIPO_CBTE = int(os.getenv("ARCA_DEFAULT_TIPO_CBTE", "6"))
+ARCA_CUIT = os.getenv("ARCA_CUIT", "")
+ARCA_CERT_PATH = os.getenv("ARCA_CERT_PATH", "")
+ARCA_KEY_PATH = os.getenv("ARCA_KEY_PATH", "")
+ARCA_WSAA_SERVICE = os.getenv("ARCA_WSAA_SERVICE", "wsfe")
+
+# Retail - Tienda Nube
+TIENDANUBE_CLIENT_ID = os.getenv("TIENDANUBE_CLIENT_ID", "")
+TIENDANUBE_CLIENT_SECRET = os.getenv("TIENDANUBE_CLIENT_SECRET", "")
+TIENDANUBE_STORE_ID = os.getenv("TIENDANUBE_STORE_ID", "")
+TIENDANUBE_ACCESS_TOKEN = os.getenv("TIENDANUBE_ACCESS_TOKEN", "")
+TIENDANUBE_WEBHOOK_SECRET = os.getenv("TIENDANUBE_WEBHOOK_SECRET", "")
+TIENDANUBE_API_BASE = os.getenv("TIENDANUBE_API_BASE", "https://api.tiendanube.com/v1")
+TIENDANUBE_USER_AGENT = os.getenv("TIENDANUBE_USER_AGENT", "LasChulasRetail (admin@localhost)")
+TIENDANUBE_TIMEOUT_SECS = int(os.getenv("TIENDANUBE_TIMEOUT_SECS", "15"))
 
 # Zona horaria
 TIME_ZONE = os.getenv("TZ", "America/Argentina/Buenos_Aires")
@@ -112,7 +117,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "service.middleware.AuditUserMiddleware",         # set app.user_id/app.user_role por request
     "service.middleware.RLSMiddleware",               # RLS por-request
-    "service.middleware.ActivityLogMiddleware",       # auditoría (con exclusiones por prefijo)
+    "service.middleware.ActivityLogMiddleware",       # auditorÃ­a (con exclusiones por prefijo)
 ]
 
 ROOT_URLCONF = "app.urls"
@@ -135,13 +140,13 @@ TEMPLATES = [
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("POSTGRES_DB", os.getenv("PGDATABASE", "servicio_tecnico")),
+        "NAME": os.getenv("POSTGRES_DB", os.getenv("PGDATABASE", "las_chulas_retail")),
         "USER": os.getenv("POSTGRES_USER", os.getenv("PGUSER", "postgres")),
         "PASSWORD": os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "")),
         "HOST": os.getenv("POSTGRES_HOST", os.getenv("PGHOST", "postgres")),
         "PORT": os.getenv("POSTGRES_PORT", os.getenv("PGPORT", "5432")),
         "ATOMIC_REQUESTS": True,
-        # Reutilización de conexiones
+        # ReutilizaciÃ³n de conexiones
         "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
     }
 }
@@ -152,7 +157,6 @@ CACHES = {
         "LOCATION": os.getenv("DJANGO_CACHE_LOCATION", "default"),
     }
 }
-
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -176,13 +180,15 @@ PERMISSIONS_V2_ENABLED = os.getenv("PERMISSIONS_V2_ENABLED", "1").strip().lower(
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + ["authorization"]
 CORS_ALLOW_METHODS = list(default_methods)
-# Solo útil en dev/LAN; no afecta prod si no se usa
+# Solo Ãºtil en dev/LAN; no afecta prod si no se usa
 CORS_ALLOW_PRIVATE_NETWORK = True
 
 # Static
 STATIC_URL = "/static/"
+MEDIA_URL = os.getenv("MEDIA_URL", "/media/")
+MEDIA_ROOT = os.getenv("MEDIA_ROOT", str(BASE_DIR / "media"))
 
-# Password hashing: priorizar Argon2 (tenés argon2-cffi en requirements)
+# Password hashing: priorizar Argon2 (tenÃ©s argon2-cffi en requirements)
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.Argon2PasswordHasher",
     "django.contrib.auth.hashers.PBKDF2PasswordHasher",
@@ -199,60 +205,28 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
 SECURE_HSTS_PRELOAD = not DEBUG
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# Media para fotos de ingresos
-INGRESO_MEDIA_MAX_SIZE_MB = int(os.getenv('INGRESO_MEDIA_MAX_SIZE_MB', '10'))
-INGRESO_MEDIA_MAX_FILES = int(os.getenv('INGRESO_MEDIA_MAX_FILES', '50'))
-INGRESO_MEDIA_THUMB_MAX = int(os.getenv('INGRESO_MEDIA_THUMB_MAX', '512'))
-INGRESO_MEDIA_ALLOWED_MIME = [
-    m.strip()
-    for m in os.getenv(
-        'INGRESO_MEDIA_ALLOWED_MIME',
-        # permitir imágenes + PDF + MP4 por defecto
-        'image/jpeg,image/png,application/pdf,video/mp4'
-    ).split(',') if m.strip()
-]
-
-# Catalogo de repuestos (costos)
-REPUESTOS_COSTOS_ROOT = os.getenv(
-    "REPUESTOS_COSTOS_ROOT",
-    "/repuestos"
-)
-
-REPUESTOS_COSTOS_FILE = os.getenv(
-    "REPUESTOS_COSTOS_FILE",
-    os.path.join(REPUESTOS_COSTOS_ROOT, "repuestos_unificados.xlsx")
-)
-
-# Catalogo de repuestos (listado unificado: codigo/descripcion/proveedor)
-REPUESTOS_UNIFICADOS_FILE = os.getenv(
-    "REPUESTOS_UNIFICADOS_FILE",
-    os.path.join(REPUESTOS_COSTOS_ROOT, "repuestos_unificados.xlsx")
-)
-
-INGRESO_MEDIA_STORAGE_PREFIX = os.getenv('INGRESO_MEDIA_STORAGE_PREFIX', 'ingresos')
-
-
-# --- Seguridad / Autenticación (vistas) ---
+# --- Seguridad / AutenticaciÃ³n (vistas) ---
 # TTL de tokens de restablecimiento (minutos)
 TOKEN_TTL_MIN = int(os.getenv("TOKEN_TTL_MIN", "30"))
 
-# Cooldown para envío de correos repetidos (minutos)
+# Cooldown para envÃ­o de correos repetidos (minutos)
 EMAIL_COOLDOWN_MIN = int(os.getenv("EMAIL_COOLDOWN_MIN", "1"))
 
-# Intentos máximos de login y bloqueo temporal
+# Intentos mÃ¡ximos de login y bloqueo temporal
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
 LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
 
-# Requisito mínimo local de longitud de contraseña (además de validators si aplica)
+# Requisito mÃ­nimo local de longitud de contraseÃ±a (ademÃ¡s de validators si aplica)
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))
 
-# Cookies de autenticación (para JWT en cookie)
-# Por default el login devuelve token en el body y TAMBIÉN lo setea en cookie
+# Cookies de autenticaciÃ³n (para JWT en cookie)
+# Por default el login devuelve token en el body y TAMBIÃ‰N lo setea en cookie
 # Si el front consume por cross-origin, usar: AUTH_COOKIE_SAMESITE=None y AUTH_COOKIE_SECURE=True (requiere HTTPS)
 AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "auth_token")
 AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "Lax")  # Lax | Strict | None
-# Si no se define, se toma según DEBUG
+# Si no se define, se toma segÃºn DEBUG
 _cookie_secure_env = os.getenv("AUTH_COOKIE_SECURE", "")
 AUTH_COOKIE_SECURE = (not DEBUG) if _cookie_secure_env == "" else (_cookie_secure_env.lower() in ("1","true","yes"))
 AUTH_COOKIE_DOMAIN = os.getenv("AUTH_COOKIE_DOMAIN", "") or None
+
