@@ -3,6 +3,7 @@
 Este flujo instala RetailHub en modo cliente unico usando scripts (no `.exe`/`.dll`).
 
 Archivos:
+- `instalar_cliente.bat` (bootstrap 1-click: clona/actualiza repo y dispara instalador)
 - `deploy/install_cliente.ps1` (instalador principal)
 - `deploy/install_cliente.cmd` (launcher con doble click/elevacion)
 - `deploy/retailhub_service.ps1` (control start/stop/status/restart)
@@ -15,7 +16,19 @@ Archivos:
 - Credenciales de Tienda Nube y ARCA (si aplica en esta etapa).
 
 ## 2) Instalacion rapida
-Desde la raiz del repo:
+Opcion recomendada (bootstrap):
+
+```powershell
+.\instalar_cliente.bat
+```
+
+Este `.bat`:
+1. Eleva permisos.
+2. Instala Git si falta (winget).
+3. Clona/actualiza repo en `C:\RetailHub\sistema_de_ventas_las_chulas`.
+4. Ejecuta `deploy/install_cliente.ps1`.
+
+Opcion manual:
 
 ```powershell
 .\deploy\install_cliente.cmd install
@@ -25,6 +38,22 @@ O directo con PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\deploy\install_cliente.ps1
+```
+
+## 2.1 Ayuda del bootstrap
+
+```powershell
+.\instalar_cliente.bat --help
+.\instalar_cliente.bat --dry-run
+```
+
+`--dry-run` no instala ni clona; solo valida flujo base.
+
+## 2.2 Instalacion rapida (sin bootstrap)
+Desde la raiz del repo:
+
+```powershell
+.\deploy\install_cliente.cmd install
 ```
 
 ## 3) Parametros del instalador
