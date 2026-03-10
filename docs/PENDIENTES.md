@@ -26,7 +26,7 @@
 - `client_id` y `client_secret`.
 - `store_id`.
 - `access_token` con scopes de productos, variantes, stock, órdenes y webhooks.
-- Secret de firma webhook (`x-linkedstore-hmac-sha256`).
+- Secret de firma webhook (header `x-linkedstore-hmac-sha256`, usa el `client_secret` de la app).
 - Confirmación de mapeo SKU definitivo por variante (sin duplicados históricos).
 
 ## Decisiones asumidas por defecto

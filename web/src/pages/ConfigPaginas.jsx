@@ -8,8 +8,9 @@ function errMsg(error) {
 const NAV_KEYS = [
   ['pos', 'POS'],
   ['productos', 'Productos'],
-  ['compras', 'Compras'],
+  ['compras', 'Compras / Proveedores'],
   ['ventas', 'Ventas'],
+  ['promociones', 'Promociones'],
   ['garantias', 'Cambios y devoluciones'],
   ['reportes', 'Reportes'],
   ['online', 'Online'],
@@ -20,8 +21,9 @@ const NAV_KEYS = [
 const PAGE_TITLE_KEYS = [
   ['pos', 'Título POS'],
   ['productos', 'Título productos'],
-  ['compras', 'Título compras'],
+  ['compras', 'Título compras / proveedores'],
   ['ventas', 'Título ventas'],
+  ['promociones', 'Título promociones'],
   ['garantias', 'Título cambios y devoluciones'],
   ['reportes', 'Título reportes'],
   ['online', 'Título online'],
@@ -29,7 +31,7 @@ const PAGE_TITLE_KEYS = [
   ['config_paginas', 'Título config páginas'],
 ];
 
-const DEFAULT_ROUTES = ['/pos', '/productos', '/compras', '/ventas', '/garantias', '/online', '/config'];
+const DEFAULT_ROUTES = ['/pos', '/productos', '/compras', '/ventas', '/promociones', '/garantias', '/online', '/config'];
 
 function ensureSettingsShape(value) {
   const row = value || {};

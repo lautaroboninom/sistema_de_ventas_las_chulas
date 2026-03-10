@@ -1,11 +1,15 @@
 import datetime as dt
 import hashlib
+import logging
 import secrets
 
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
+from django.core.cache import cache
 from django.core.mail import send_mail
+from django.http import JsonResponse
 from django.utils import timezone
+from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import AuthenticationFailed
@@ -29,10 +33,36 @@ from .helpers import (
     _reset_login_failure,
 )
 
+logger = logging.getLogger("security.auth")
 
-@api_view(["GET"])  # público
+
+def _ip_rate_limit_key(prefix: str, ip: str) -> str:
+    return f"security-rate:{prefix}:{ip or 'unknown'}"
+
+
+def _consume_ip_rate_limit(prefix: str, ip: str, limit: int) -> bool:
+    window = int(getattr(settings, "AUTH_RATE_WINDOW_SECONDS", 60) or 60)
+    max_hits = max(1, int(limit or 1))
+    key = _ip_rate_limit_key(prefix, ip)
+    try:
+        hits = cache.get(key, 0) or 0
+        hits += 1
+        cache.set(key, hits, window)
+        return hits <= max_hits
+    except Exception:
+        return True
+
+
+@api_view(["GET"])  # publico
 @permission_classes([AllowAny])
 def ping(request):
+    return Response({"ok": True, "server_utc": timezone.now().isoformat()})
+
+
+@ensure_csrf_cookie
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def csrf(request):
     return Response({"ok": True})
 
 
@@ -48,36 +78,42 @@ class LoginView(APIView):
     def post(self, request):
         email = (request.data.get("email") or "").strip().lower()
         password = (request.data.get("password") or "")
+        ip = get_client_ip(request.META) or ""
 
         if not email or not password:
-            raise AuthenticationFailed("Email y contraseña requeridos.")
+            raise AuthenticationFailed("Email y contrasena requeridos.")
 
-        ip = get_client_ip(request.META) or ""
+        if not _consume_ip_rate_limit("login", ip, getattr(settings, "LOGIN_RATE_LIMIT_MAX", 20)):
+            logger.warning("login_rate_limited ip=%s email=%s", ip, email)
+            raise AuthenticationFailed("Demasiadas solicitudes. Proba mas tarde.")
+
         key = _login_rate_key(email, ip)
         if _is_login_locked(key):
-            raise AuthenticationFailed("Demasiados intentos. Probá más tarde.")
+            logger.warning("login_lockout_active ip=%s email=%s", ip, email)
+            raise AuthenticationFailed("Demasiados intentos. Proba mas tarde.")
 
         try:
             user = User.objects.get(email=email, activo=True)
         except User.DoesNotExist:
             _register_login_failure(key)
-            raise AuthenticationFailed("Usuario o contraseña inválidos.")
+            logger.warning("login_failed_invalid_user ip=%s email=%s", ip, email)
+            raise AuthenticationFailed("Usuario o contrasena invalidos.")
 
         if not getattr(user, "hash_pw", ""):
             raise AuthenticationFailed(
-                "El usuario aún no tiene contraseña. Usá \"Olvidé mi contraseña\" para inicializarla."
+                "El usuario aun no tiene contrasena. Usa \"Olvide mi contrasena\" para inicializarla."
             )
 
         if not verify_hash(password, user.hash_pw):
             _register_login_failure(key)
-            raise AuthenticationFailed("Usuario o contraseña inválidos.")
+            logger.warning("login_failed_invalid_password ip=%s email=%s", ip, email)
+            raise AuthenticationFailed("Usuario o contrasena invalidos.")
 
         _reset_login_failure(key)
         token = issue_token(user)
         permissions_map = resolve_effective_permissions(user_id=user.id, role=user.rol)
         resp = Response(
             {
-                "token": token,
                 "user": {
                     "id": user.id,
                     "nombre": user.nombre,
@@ -85,7 +121,6 @@ class LoginView(APIView):
                     "email": getattr(user, "email", ""),
                     "permissions": permissions_map,
                 },
-                # Mantener la misma forma que /auth/session/
                 "features": {},
             }
         )
@@ -105,8 +140,8 @@ class LoginView(APIView):
                 domain=cookie_domain,
             )
         except Exception:
-            # No romper login por problemas seteando cookie (el token igual se devuelve en el body)
-            pass
+            logger.exception("login_cookie_set_failed ip=%s email=%s", ip, email)
+        logger.info("login_success user_id=%s ip=%s", user.id, ip)
         return resp
 
 
@@ -120,6 +155,9 @@ class ForgotPasswordView(APIView):
         ip = get_client_ip(request.META) or ""
 
         ok_response = Response({"ok": True})
+        if not _consume_ip_rate_limit("forgot", ip, getattr(settings, "FORGOT_RATE_LIMIT_MAX", 10)):
+            logger.warning("forgot_rate_limited ip=%s email=%s", ip, email)
+            return ok_response
         if not email:
             return ok_response
 
@@ -159,17 +197,17 @@ class ForgotPasswordView(APIView):
 
         origin = getattr(settings, "FRONTEND_ORIGIN", "http://localhost:5173")
         url = f"{origin}/restablecer?t={token}"
-        subj = "Recuperación de contraseña"
+        subj = "Recuperacion de contrasena"
         txt = (
             f"Hola {user['nombre']},\n\n"
-            f"Usá este enlace para restablecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
-            "Si no fuiste vos, ignorá este correo."
+            f"Usa este enlace para restablecer tu contrasena (valido {TOKEN_TTL_MIN} minutos):\n{url}\n\n"
+            "Si no fuiste vos, ignora este correo."
         )
         html = (
             f"<p>Hola {user['nombre']},</p>"
-            f"<p>Usá este enlace para restablecer tu contraseña (válido {TOKEN_TTL_MIN} minutos):</p>"
+            f"<p>Usa este enlace para restablecer tu contrasena (valido {TOKEN_TTL_MIN} minutos):</p>"
             f"<p><a href=\"{url}\">{url}</a></p>"
-            "<p>Si no fuiste vos, ignorá este correo.</p>"
+            "<p>Si no fuiste vos, ignora este correo.</p>"
         )
         try:
             send_mail(
@@ -206,7 +244,7 @@ class ResetPasswordView(APIView):
             one=True,
         )
         if not row:
-            return Response({"detail": "Token inválido o vencido"}, status=400)
+            return Response({"detail": "Token invalido o vencido"}, status=400)
 
         hashed = make_password(password)
         _set_audit_user(request)
@@ -256,3 +294,9 @@ class LogoutView(APIView):
         except Exception:
             pass
         return resp
+
+
+def csrf_failure(request, reason=""):
+    ip = get_client_ip(getattr(request, "META", {}) or {})
+    logger.warning("csrf_rejected path=%s ip=%s reason=%s", getattr(request, "path", ""), ip, reason)
+    return JsonResponse({"detail": "CSRF token invalido o ausente"}, status=403)

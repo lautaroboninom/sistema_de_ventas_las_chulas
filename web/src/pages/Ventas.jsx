@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  getRetailVarianteByScan,
   getRetailVentaDetail,
   getRetailVentas,
   postRetailFacturaEmitir,
   postRetailNotaCredito,
   postRetailVentaAnular,
+  postRetailVentaCambiar,
   postRetailVentaDevolver,
 } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
@@ -37,6 +39,7 @@ export default function VentasPage() {
   const { user } = useAuth();
   const canCancel = can(user, PERMISSION_CODES.ACTION_VENTAS_ANULAR);
   const canReturn = can(user, PERMISSION_CODES.ACTION_VENTAS_DEVOLVER);
+  const canExchange = can(user, PERMISSION_CODES.ACTION_VENTAS_CAMBIAR);
   const canOverrideWarranty = can(user, PERMISSION_CODES.ACTION_VENTAS_DEVOLVER_OVERRIDE_GARANTIA);
   const canEmitInvoice = can(user, PERMISSION_CODES.ACTION_FACTURACION_EMITIR);
   const canEmitCreditNote = can(user, PERMISSION_CODES.ACTION_FACTURACION_NOTA_CREDITO);
@@ -53,6 +56,8 @@ export default function VentasPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [selectedSale, setSelectedSale] = useState(null);
   const [returnQty, setReturnQty] = useState({});
+  const [exchangeQty, setExchangeQty] = useState({});
+  const [exchangeCode, setExchangeCode] = useState({});
   const [reason, setReason] = useState('');
   const [warrantyType, setWarrantyType] = useState('size');
   const [overrideOutOfWarranty, setOverrideOutOfWarranty] = useState(false);
@@ -69,17 +74,56 @@ export default function VentasPage() {
 
   const pendingItems = useMemo(() => {
     const items = Array.isArray(selectedSale?.items) ? selectedSale.items : [];
+    const exchangedByItem = {};
+    (selectedSale?.exchanges || []).forEach((exchange) => {
+      (exchange?.items || []).forEach((item) => {
+        const sid = Number(item?.sale_item_id || 0);
+        if (!sid) return;
+        exchangedByItem[sid] = Number(exchangedByItem[sid] || 0) + Number(item?.quantity || 0);
+      });
+    });
     return items
       .map((item) => ({
         ...item,
-        available_qty: Math.max(0, Number(item.quantity || 0) - Number(item.returned_qty || 0)),
+        available_qty: Math.max(
+          0,
+          Number(item.quantity || 0) - Number(item.returned_qty || 0) - Number(exchangedByItem[Number(item.id)] || 0),
+        ),
       }))
       .filter((item) => item.available_qty > 0);
   }, [selectedSale]);
+  const pendingByItemId = useMemo(() => {
+    const map = {};
+    pendingItems.forEach((item) => {
+      map[Number(item.id)] = Number(item.available_qty || 0);
+    });
+    return map;
+  }, [pendingItems]);
 
   const selectedWarranty = selectedSale?.warranty || null;
   const selectedWarrantyLine = warrantyType === 'breakage' ? selectedWarranty?.breakage : selectedWarranty?.size;
   const warrantyInWindow = !!selectedWarrantyLine?.active;
+  const xForYItemIds = useMemo(() => {
+    const ids = new Set();
+    (selectedSale?.promotions || []).forEach((promo) => {
+      if (String(promo?.promo_type || '').toLowerCase() !== 'x_for_y') return;
+      (promo?.items || []).forEach((item) => {
+        const saleItemId = Number(item?.sale_item_id || 0);
+        if (saleItemId > 0) {
+          ids.add(saleItemId);
+        }
+      });
+    });
+    return ids;
+  }, [selectedSale]);
+  const hasPendingXForYItems = useMemo(
+    () => pendingItems.some((item) => xForYItemIds.has(Number(item.id))),
+    [pendingItems, xForYItemIds],
+  );
+  const hasReturnableNonXForYItems = useMemo(
+    () => pendingItems.some((item) => !xForYItemIds.has(Number(item.id))),
+    [pendingItems, xForYItemIds],
+  );
 
   async function loadList(nextOffset = 0) {
     setLoadingList(true);
@@ -124,10 +168,16 @@ export default function VentasPage() {
       setSelectedId(Number(ventaId));
       setSelectedSale(row);
       const defaults = {};
+      const exchangeDefaults = {};
+      const exchangeCodes = {};
       (row?.items || []).forEach((item) => {
         defaults[item.id] = '';
+        exchangeDefaults[item.id] = '';
+        exchangeCodes[item.id] = '';
       });
       setReturnQty(defaults);
+      setExchangeQty(exchangeDefaults);
+      setExchangeCode(exchangeCodes);
       const preferredType = row?.warranty?.size?.active ? 'size' : row?.warranty?.breakage?.active ? 'breakage' : 'size';
       setWarrantyType(preferredType);
       setOverrideOutOfWarranty(false);
@@ -167,6 +217,9 @@ export default function VentasPage() {
     pendingItems.forEach((item) => {
       const raw = String(returnQty[item.id] || '').trim();
       if (!raw) return;
+      if (xForYItemIds.has(Number(item.id))) {
+        throw new Error(`El item ${item.id} tiene promo 2x1/3x2 y no admite devolucion monetaria`);
+      }
       const qty = Number(raw);
       if (!Number.isFinite(qty) || qty <= 0) {
         throw new Error(`Cantidad invalida para item ${item.id}`);
@@ -176,6 +229,32 @@ export default function VentasPage() {
       }
       out.push({ sale_item_id: item.id, quantity: Math.floor(qty) });
     });
+    return out;
+  }
+
+  async function buildExchangeItems() {
+    const out = [];
+    for (const item of pendingItems) {
+      const rawQty = String(exchangeQty[item.id] || '').trim();
+      if (!rawQty) continue;
+      const qty = Number(rawQty);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw new Error(`Cantidad invalida para cambio en item ${item.id}`);
+      }
+      if (qty > item.available_qty) {
+        throw new Error(`El cambio excede lo disponible en item ${item.id}`);
+      }
+      const code = String(exchangeCode[item.id] || '').trim();
+      if (!code) {
+        throw new Error(`Debes cargar SKU/barcode de reemplazo para item ${item.id}`);
+      }
+      const replacement = await getRetailVarianteByScan(code);
+      out.push({
+        sale_item_id: item.id,
+        quantity: Math.floor(qty),
+        replacement_variant_id: Number(replacement?.id),
+      });
+    }
     return out;
   }
 
@@ -259,6 +338,26 @@ export default function VentasPage() {
     );
   }
 
+  async function exchangeSaleItems() {
+    if (!selectedId) return;
+    await runAction(
+      async () => {
+        assertWarrantyRules();
+        const items = await buildExchangeItems();
+        if (!items.length) {
+          throw new Error('Carga al menos un item para cambio 1:1');
+        }
+        const resp = await postRetailVentaCambiar(selectedId, {
+          reason: reason || 'Cambio 1:1 desde pantalla de ventas',
+          ...buildWarrantyPayload(),
+          items,
+        });
+        setCreditNotesResult(resp);
+      },
+      'Cambio 1:1 registrado',
+    );
+  }
+
   async function issueCreditNote() {
     if (!selectedId) return;
     await runAction(
@@ -274,8 +373,13 @@ export default function VentasPage() {
     canReturn &&
     selectedSale &&
     selectedSale.status !== 'cancelled' &&
+    hasReturnableNonXForYItems;
+  const canExchangeNow =
+    canExchange &&
+    selectedSale &&
+    selectedSale.status !== 'cancelled' &&
     pendingItems.length > 0;
-  const needsOverride = canReturnNow && !warrantyInWindow;
+  const needsOverride = (canReturnNow || canExchangeNow) && !warrantyInWindow;
   const overrideReady = !needsOverride || (overrideOutOfWarranty && canOverrideWarranty && String(overrideReason || '').trim());
   const returnBlocked = acting || loadingDetail || !overrideReady;
 
@@ -428,6 +532,26 @@ export default function VentasPage() {
               </div>
             </div>
 
+            <div className="text-sm">
+              <div>
+                Descuento promociones: <strong>{money(selectedSale.promotion_discount_total_ars)}</strong>
+              </div>
+              {(selectedSale.promotions || []).length ? (
+                <div className="mt-1 text-xs text-gray-600 space-y-1">
+                  {(selectedSale.promotions || []).map((promo) => (
+                    <div key={promo.id}>
+                      {promo.promotion_name || promo.promo_type}: <strong>{money(promo.discount_amount_ars)}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {hasPendingXForYItems ? (
+                <div className="mt-1 text-amber-700">
+                  Las lineas con promo 2x1/3x2 no admiten devolucion monetaria. Solo cambio 1:1.
+                </div>
+              ) : null}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
               <div>
                 Cambio de talle: <strong>{selectedWarranty?.size?.active ? 'Vigente' : 'Vencida'}</strong>
@@ -495,11 +619,14 @@ export default function VentasPage() {
                     <th className="py-2 pr-3">Devueltas</th>
                     <th className="py-2 pr-3">Disponibles</th>
                     {canReturn ? <th className="py-2 pr-3">Devolver</th> : null}
+                    {canExchange ? <th className="py-2 pr-3">Cambiar</th> : null}
+                    {canExchange ? <th className="py-2 pr-3">Reemplazo (SKU/barcode)</th> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {(selectedSale.items || []).map((item) => {
-                    const available = Math.max(0, Number(item.quantity || 0) - Number(item.returned_qty || 0));
+                    const available = Math.max(0, Number(pendingByItemId[Number(item.id)] || 0));
+                    const blockedByXForY = xForYItemIds.has(Number(item.id));
                     return (
                       <tr key={item.id} className="border-b last:border-b-0">
                         <td className="py-2 pr-3">
@@ -519,6 +646,31 @@ export default function VentasPage() {
                               max={available}
                               value={returnQty[item.id] || ''}
                               onChange={(e) => setReturnQty((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                              disabled={available <= 0 || acting || blockedByXForY}
+                            />
+                            {blockedByXForY ? <div className="text-[11px] text-amber-700 mt-1">Solo cambio 1:1</div> : null}
+                          </td>
+                        ) : null}
+                        {canExchange ? (
+                          <td className="py-2 pr-3">
+                            <input
+                              className="input w-24"
+                              type="number"
+                              min="0"
+                              max={available}
+                              value={exchangeQty[item.id] || ''}
+                              onChange={(e) => setExchangeQty((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                              disabled={available <= 0 || acting}
+                            />
+                          </td>
+                        ) : null}
+                        {canExchange ? (
+                          <td className="py-2 pr-3">
+                            <input
+                              className="input w-52"
+                              value={exchangeCode[item.id] || ''}
+                              onChange={(e) => setExchangeCode((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                              placeholder="SKU o barcode interno"
                               disabled={available <= 0 || acting}
                             />
                           </td>
@@ -534,7 +686,7 @@ export default function VentasPage() {
               className="input"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="Motivo operativo (anulacion/devolucion)"
+              placeholder="Motivo operativo (anulacion/devolucion/cambio)"
             />
 
             <div className="flex flex-wrap gap-2">
@@ -571,7 +723,7 @@ export default function VentasPage() {
                 </button>
               ) : null}
 
-              {canReturnNow ? (
+              {canReturnNow && !hasPendingXForYItems ? (
                 <button
                   type="button"
                   className="px-3 py-2 rounded border"
@@ -579,6 +731,17 @@ export default function VentasPage() {
                   disabled={returnBlocked}
                 >
                   Devolucion total
+                </button>
+              ) : null}
+
+              {canExchangeNow ? (
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded border"
+                  onClick={exchangeSaleItems}
+                  disabled={returnBlocked}
+                >
+                  Cambio 1:1
                 </button>
               ) : null}
 
@@ -593,13 +756,27 @@ export default function VentasPage() {
                 </button>
               ) : null}
             </div>
+
+            {(selectedSale.exchanges || []).length ? (
+              <div className="rounded border p-2 text-sm">
+                <h3 className="font-semibold mb-1">Cambios 1:1 registrados</h3>
+                <div className="space-y-1 text-xs text-gray-700">
+                  {(selectedSale.exchanges || []).map((ex) => (
+                    <div key={ex.id}>
+                      #{ex.id} {String(ex.created_at || '').slice(0, 16).replace('T', ' ')} - {ex.reason || 'Sin motivo'} (
+                      {(ex.items || []).length} item/s)
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </>
         )}
       </div>
 
       {creditNotesResult ? (
         <div className="card">
-          <h2 className="text-lg font-semibold mb-2">Resultado devolucion / nota de credito</h2>
+          <h2 className="text-lg font-semibold mb-2">Resultado devolucion / cambio / nota de credito</h2>
           <pre className="text-xs bg-gray-50 border rounded p-2 overflow-auto max-h-72">
             {JSON.stringify(creditNotesResult, null, 2)}
           </pre>

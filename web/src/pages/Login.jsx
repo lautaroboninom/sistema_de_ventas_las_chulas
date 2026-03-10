@@ -55,7 +55,7 @@ export default function Login() {
     } catch (error) {
       const msg = error?.message || 'Credenciales inválidas';
       if (!backendOk) {
-        setErr('Backend no disponible en /api. Verificá que la API esté levantada en http://localhost:18100.');
+        setErr('Backend no disponible en /api. Verificá que la API esté levantada y accesible en esta URL.');
       } else {
         setErr(msg);
       }

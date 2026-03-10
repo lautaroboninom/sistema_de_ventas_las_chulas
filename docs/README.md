@@ -5,6 +5,8 @@
 - API pública activa solo para auth, usuarios/permisos y retail.
 - Frontend activo solo con pantallas retail.
 - Base de datos definida en `sql/schema.sql` (arranque desde cero).
+- Deploy con 2 modos: `dev` (`docker-compose.yml`) y `prod` (`docker-compose.prod.yml`).
+- Producción requiere además `tailscale serve/funnel` para publicar `https://<host>.ts.net`.
 
 ## Rutas frontend
 - `/pos`
@@ -37,3 +39,9 @@
 
 ## Pendientes funcionales/externos
 Ver `docs/PENDIENTES.md`.
+Para enlace y migración de Tienda Nube: `docs/CHECKLIST_TIENDANUBE_PASO_A_PASO.md`.
+Para instalacion automatizada en PC cliente (Windows): `docs/INSTALACION_CLIENTE_WINDOWS.md`.
+
+## Seguridad operativa
+- Rotacion de secretos y checklist post-cambio: `docs/SEGURIDAD_ROTACION_SECRETOS.md`.
+- `.env.prod.example` es la plantilla versionada; `.env.prod` local valida secretos fuertes en `settings_prod`.

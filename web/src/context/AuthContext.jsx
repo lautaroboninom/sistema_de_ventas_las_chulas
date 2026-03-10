@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { getAuthSession, postAuthLogout, postLogin, setToken } from "../lib/api";
+import { getAuthCsrf, getAuthSession, postAuthLogout, postLogin } from "../lib/api";
 import { registerFeatures } from "@/lib/features";
 import { normalizePermissionsMap } from "@/lib/permissions";
 
@@ -37,6 +37,7 @@ export function AuthProvider({ children }) {
     let active = true;
     (async () => {
       try {
+        await getAuthCsrf();
         const data = await getAuthSession();
         if (!active) return;
         // La API de sesión devuelve los campos del usuario en el nivel raíz.
@@ -60,16 +61,18 @@ export function AuthProvider({ children }) {
   }, []);
 
   async function login(email, password) {
-    const data = await postLogin(email, password); // { token, user }
-    const cleanUser = sanitizeUser(data.user);
-    registerFeatures(data.features);
-    setToken(data.token);
-    setUser(cleanUser);
+    const data = await postLogin(email, password);
+    const cleanUser = sanitizeUser(data?.user);
+    if (data?.features) registerFeatures(data.features);
+    if (cleanUser) {
+      setUser(cleanUser);
+    } else {
+      await refreshSession();
+    }
     setLoading(false);
   }
 
   async function logout() {
-    setToken(null);
     try {
       await postAuthLogout();
     } catch (err) {

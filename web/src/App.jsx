@@ -68,6 +68,7 @@ export default function App() {
       '/productos': 'productos',
       '/compras': 'compras',
       '/ventas': 'ventas',
+      '/promociones': 'promociones',
       '/garantias': 'garantias',
       '/reportes': 'reportes',
       '/online': 'online',

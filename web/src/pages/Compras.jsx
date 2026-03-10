@@ -1,6 +1,8 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import {
   getRetailAtributos,
+  getRetailComprasConfig,
+  getRetailComprasProveedores,
   getRetailProductos,
   getRetailVariantes,
   postRetailCompra,
@@ -18,6 +20,7 @@ const EMPTY_ITEM = {
   variant_name: '',
   quantity: '1',
   unit_cost_currency: '',
+  unit_price_final_ars: '',
 };
 
 const EMPTY_CREATE_PRODUCT = {
@@ -93,11 +96,16 @@ function payloadItems(items) {
     if (!Number.isFinite(unitCost) || unitCost < 0) {
       throw new Error(`Costo unitario invalido en la fila ${idx + 1}`);
     }
+    const finalPrice = Number(it.unit_price_final_ars);
+    if (!Number.isFinite(finalPrice) || finalPrice < 0) {
+      throw new Error(`Precio final invalido en la fila ${idx + 1}`);
+    }
 
     return {
       variant_id: variantId,
       quantity,
       unit_cost_currency: unitCost,
+      unit_price_final_ars: finalPrice,
     };
   });
 }
@@ -107,6 +115,7 @@ export default function ComprasPage() {
   const [purchaseDate, setPurchaseDate] = useState('');
   const [currencyCode, setCurrencyCode] = useState('ARS');
   const [fxRate, setFxRate] = useState('');
+  const [defaultMarkupPct, setDefaultMarkupPct] = useState(100);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
 
@@ -115,6 +124,10 @@ export default function ComprasPage() {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
   const [result, setResult] = useState(null);
+  const [suppliersRows, setSuppliersRows] = useState([]);
+  const [suppliersLoading, setSuppliersLoading] = useState(false);
+  const [suppliersErr, setSuppliersErr] = useState('');
+  const [suppliersQuery, setSuppliersQuery] = useState('');
 
   const [lookupIndex, setLookupIndex] = useState(null);
   const [lookupRows, setLookupRows] = useState([]);
@@ -132,12 +145,60 @@ export default function ComprasPage() {
   const [createErr, setCreateErr] = useState('');
   const [createMsg, setCreateMsg] = useState('');
 
+  const moneyFmt = useMemo(
+    () =>
+      new Intl.NumberFormat('es-AR', {
+        style: 'currency',
+        currency: 'ARS',
+        maximumFractionDigits: 2,
+      }),
+    [],
+  );
+
   const activeLookupQuery = useMemo(() => {
     if (lookupIndex == null) return '';
     return String(items[lookupIndex]?.variant_query || '').trim();
   }, [items, lookupIndex]);
 
   const createBusy = createLoadingData || createProductSaving || createVariantSaving;
+
+  async function fetchSuppliers(queryText = '') {
+    setSuppliersLoading(true);
+    setSuppliersErr('');
+    try {
+      const rows = await getRetailComprasProveedores({
+        q: queryText || undefined,
+        limit: 200,
+      });
+      setSuppliersRows(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      setSuppliersErr(errMsg(error));
+      setSuppliersRows([]);
+    } finally {
+      setSuppliersLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await getRetailComprasConfig();
+        if (cancelled) return;
+        const pct = Number(cfg?.purchase_default_markup_pct);
+        setDefaultMarkupPct(Number.isFinite(pct) && pct >= 0 ? pct : 100);
+      } catch {
+        if (!cancelled) setDefaultMarkupPct(100);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    fetchSuppliers('');
+  }, []);
 
   useEffect(() => {
     if (lookupIndex == null) {
@@ -225,6 +286,44 @@ export default function ComprasPage() {
     if (createTargetIndex != null && idx < createTargetIndex) {
       setCreateTargetIndex((current) => (current == null ? current : current - 1));
     }
+  }
+
+  function toNum(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function fmtMoney(value) {
+    return moneyFmt.format(toNum(value));
+  }
+
+  function fmtDate(value) {
+    if (!value) return '-';
+    try {
+      return new Date(`${value}T00:00:00`).toLocaleDateString('es-AR');
+    } catch {
+      return value;
+    }
+  }
+
+  function itemUnitCostArs(item) {
+    const base = toNum(item?.unit_cost_currency);
+    if (currencyCode === 'USD') {
+      return base * toNum(fxRate);
+    }
+    return base;
+  }
+
+  function itemSuggestedPrice(item) {
+    const unitCostArs = itemUnitCostArs(item);
+    return unitCostArs * (1 + (toNum(defaultMarkupPct) / 100));
+  }
+
+  function itemMarginPct(item) {
+    const unitCostArs = itemUnitCostArs(item);
+    if (unitCostArs <= 0) return null;
+    const finalPrice = toNum(item?.unit_price_final_ars);
+    return ((finalPrice - unitCostArs) / unitCostArs) * 100;
   }
 
   function onVariantQueryChange(idx, value) {
@@ -403,6 +502,7 @@ export default function ComprasPage() {
       setItems([{ ...EMPTY_ITEM }]);
       setLookupIndex(null);
       setLookupRows([]);
+      fetchSuppliers(suppliersQuery);
     } catch (error) {
       setErr(errMsg(error));
     } finally {
@@ -418,7 +518,7 @@ export default function ComprasPage() {
   return (
     <div className="space-y-4">
       <div className="card">
-        <h1 className="h1">Compras</h1>
+        <h1 className="h1">Compras / Proveedores</h1>
         <p className="text-sm text-gray-600">
           Ingreso de mercaderia con trazabilidad de costos y actualizacion de costo promedio por variante.
         </p>
@@ -458,10 +558,15 @@ export default function ComprasPage() {
         </div>
 
         <div className="space-y-2">
+          <p className="text-xs text-gray-500">
+            Margen general activo: <strong>{defaultMarkupPct}%</strong> (precio sugerido).
+          </p>
           <h2 className="text-lg font-semibold">Items</h2>
-          {items.map((it, idx) => (
-            <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start">
-              <div className="md:col-span-2">
+          {items.map((it, idx) => {
+            const marginPct = itemMarginPct(it);
+            return (
+            <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start rounded border border-gray-200 p-2">
+              <div className="md:col-span-1">
                 <label className="block text-xs text-gray-500 mb-1">Variante ID</label>
                 <input
                   className="input bg-gray-100 text-gray-500 cursor-not-allowed"
@@ -471,7 +576,7 @@ export default function ComprasPage() {
                 />
               </div>
 
-              <div className="md:col-span-5 relative">
+              <div className="md:col-span-3 relative">
                 <label className="block text-xs text-gray-500 mb-1">Nombre variante</label>
                 <input
                   className="input"
@@ -533,7 +638,7 @@ export default function ComprasPage() {
                 ) : null}
               </div>
 
-              <div className="md:col-span-2">
+              <div className="md:col-span-1">
                 <label className="block text-xs text-gray-500 mb-1">Cantidad</label>
                 <input
                   className="input"
@@ -546,7 +651,7 @@ export default function ComprasPage() {
                 />
               </div>
 
-              <div className="md:col-span-2">
+              <div className="md:col-span-1">
                 <label className="block text-xs text-gray-500 mb-1">Costo unitario</label>
                 <input
                   className="input"
@@ -560,6 +665,40 @@ export default function ComprasPage() {
                 />
               </div>
 
+              <div className="md:col-span-1">
+                <label className="block text-xs text-gray-500 mb-1">Costo ARS</label>
+                <input className="input bg-gray-100 text-gray-500" value={fmtMoney(itemUnitCostArs(it))} readOnly disabled />
+              </div>
+
+              <div className="md:col-span-1">
+                <label className="block text-xs text-gray-500 mb-1">Precio sugerido</label>
+                <input className="input bg-gray-100 text-gray-500" value={fmtMoney(itemSuggestedPrice(it))} readOnly disabled />
+              </div>
+
+              <div className="md:col-span-1">
+                <label className="block text-xs text-gray-500 mb-1">Precio final</label>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="ARS"
+                  value={it.unit_price_final_ars}
+                  onChange={(e) => updateItem(idx, { unit_price_final_ars: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="md:col-span-1">
+                <label className="block text-xs text-gray-500 mb-1">Margen real</label>
+                <input
+                  className={`input bg-gray-100 ${marginPct != null && marginPct < 0 ? 'text-red-700 font-semibold' : 'text-gray-500'}`}
+                  value={marginPct == null ? '-' : `${marginPct.toFixed(2)}%`}
+                  readOnly
+                  disabled
+                />
+              </div>
+
               <button
                 type="button"
                 className="md:col-span-1 mt-6 px-3 py-2 rounded border"
@@ -569,7 +708,8 @@ export default function ComprasPage() {
                 Quitar
               </button>
             </div>
-          ))}
+            );
+          })}
 
           <button type="button" className="px-3 py-2 rounded border" onClick={addItem}>
             Agregar item
@@ -589,6 +729,85 @@ export default function ComprasPage() {
           </p>
         </div>
       ) : null}
+
+      <div className="card space-y-3">
+        <div className="flex flex-wrap gap-2 items-end justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Lista de proveedores</h2>
+            <p className="text-xs text-gray-500">Selecciona uno para autocompletar el campo Proveedor del formulario.</p>
+          </div>
+          <div className="flex flex-wrap gap-2 items-end">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Buscar proveedor</label>
+              <input
+                className="input"
+                placeholder="Nombre proveedor"
+                value={suppliersQuery}
+                onChange={(e) => setSuppliersQuery(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              className="px-3 py-2 rounded border"
+              onClick={() => fetchSuppliers(suppliersQuery)}
+              disabled={suppliersLoading}
+            >
+              {suppliersLoading ? 'Buscando...' : 'Buscar'}
+            </button>
+            <button
+              type="button"
+              className="px-3 py-2 rounded border"
+              onClick={() => {
+                setSuppliersQuery('');
+                fetchSuppliers('');
+              }}
+              disabled={suppliersLoading}
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
+
+        {suppliersErr ? <p className="text-sm text-red-700">{suppliersErr}</p> : null}
+        {suppliersLoading ? <p className="text-sm text-gray-500">Cargando proveedores...</p> : null}
+
+        {!suppliersLoading && !suppliersErr ? (
+          suppliersRows.length ? (
+            <div className="overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="text-left border-b">
+                    <th className="py-2 pr-3">Proveedor</th>
+                    <th className="py-2 pr-3">Compras</th>
+                    <th className="py-2 pr-3">Ultima compra</th>
+                    <th className="py-2 pr-3">Accion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {suppliersRows.map((row) => (
+                    <tr key={row.id} className="border-b last:border-b-0">
+                      <td className="py-2 pr-3">{row.name || '-'}</td>
+                      <td className="py-2 pr-3">{Number(row.purchases_count || 0)}</td>
+                      <td className="py-2 pr-3">{fmtDate(row.last_purchase_date)}</td>
+                      <td className="py-2 pr-3">
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded border text-xs font-semibold hover:bg-gray-50"
+                          onClick={() => setSupplierName(String(row.name || ''))}
+                        >
+                          Usar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">No hay proveedores para mostrar.</p>
+          )
+        ) : null}
+      </div>
 
       {createOpen ? (
         <div className="fixed inset-0 z-50 bg-black/40 p-3 md:p-6" onClick={closeCreateModal}>

@@ -15,6 +15,7 @@ import Pos from './pages/Pos.jsx';
 import Productos from './pages/Productos.jsx';
 import Compras from './pages/Compras.jsx';
 import Ventas from './pages/Ventas.jsx';
+import Promociones from './pages/Promociones.jsx';
 import Garantias from './pages/Garantias.jsx';
 import Reportes from './pages/Reportes.jsx';
 import Online from './pages/Online.jsx';
@@ -24,12 +25,19 @@ import { PERMISSION_CODES } from './lib/permissions';
 
 function resolveInitialRoute() {
   const saved = window.localStorage.getItem('las_chulas_default_route') || '/pos';
-  const allowed = new Set(['/pos', '/productos', '/compras', '/ventas', '/garantias', '/online', '/config']);
+  const allowed = new Set(['/pos', '/productos', '/compras', '/ventas', '/promociones', '/garantias', '/online', '/config']);
   return allowed.has(saved) ? saved : '/pos';
 }
 
 function NotFound() {
   return <div className="p-8 text-center text-gray-600">Página no encontrada</div>;
+}
+
+if (import.meta.env.VITE_SW !== '1' && 'serviceWorker' in navigator) {
+  navigator.serviceWorker
+    .getRegistrations()
+    .then((regs) => regs.forEach((reg) => reg.unregister()))
+    .catch(() => {});
 }
 
 const router = createBrowserRouter([
@@ -71,6 +79,14 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute permissions={PERMISSION_CODES.PAGE_VENTAS}>
             <Ventas />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'promociones',
+        element: (
+          <ProtectedRoute permissions={PERMISSION_CODES.PAGE_PROMOCIONES}>
+            <Promociones />
           </ProtectedRoute>
         ),
       },

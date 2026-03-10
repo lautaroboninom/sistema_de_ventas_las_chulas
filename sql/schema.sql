@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS retail_settings (
   ticket_printer_name           TEXT,
   label_printer_name            TEXT,
   auto_invoice_online_paid      BOOLEAN NOT NULL DEFAULT TRUE,
+  purchase_default_markup_pct   NUMERIC(6,2) NOT NULL DEFAULT 100.00,
   return_warranty_size_days     INTEGER NOT NULL DEFAULT 30,
   return_warranty_breakage_days INTEGER NOT NULL DEFAULT 90,
   ui_page_settings              JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -162,6 +163,7 @@ CREATE TABLE IF NOT EXISTS retail_settings (
   CONSTRAINT chk_retail_settings_singleton CHECK (id = 1),
   CONSTRAINT chk_retail_settings_currency CHECK (currency_code = 'ARS'),
   CONSTRAINT chk_retail_settings_env CHECK (arca_env IN ('homologacion', 'produccion')),
+  CONSTRAINT chk_retail_settings_purchase_markup CHECK (purchase_default_markup_pct >= 0),
   CONSTRAINT chk_retail_settings_return_warranty_size CHECK (return_warranty_size_days > 0),
   CONSTRAINT chk_retail_settings_return_warranty_breakage CHECK (return_warranty_breakage_days > 0)
 );
@@ -174,6 +176,32 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 INSERT INTO retail_settings(id)
 VALUES (1)
 ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE retail_settings
+ADD COLUMN IF NOT EXISTS purchase_default_markup_pct NUMERIC(6,2);
+
+UPDATE retail_settings
+SET purchase_default_markup_pct = 100.00
+WHERE purchase_default_markup_pct IS NULL OR purchase_default_markup_pct < 0;
+
+ALTER TABLE retail_settings
+ALTER COLUMN purchase_default_markup_pct SET DEFAULT 100.00;
+
+ALTER TABLE retail_settings
+ALTER COLUMN purchase_default_markup_pct SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_retail_settings_purchase_markup'
+  ) THEN
+    ALTER TABLE retail_settings
+      ADD CONSTRAINT chk_retail_settings_purchase_markup
+      CHECK (purchase_default_markup_pct >= 0);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS retail_payment_accounts (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -401,6 +429,76 @@ CREATE TABLE IF NOT EXISTS retail_variant_option_values (
 );
 
 -- =============================
+-- Promotions
+-- =============================
+CREATE TABLE IF NOT EXISTS retail_promotions (
+  id                        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name                      TEXT NOT NULL,
+  promo_type                TEXT NOT NULL,
+  active                    BOOLEAN NOT NULL DEFAULT TRUE,
+  channel_scope             TEXT NOT NULL DEFAULT 'both',
+  activation_mode           TEXT NOT NULL DEFAULT 'automatic',
+  coupon_code               TEXT,
+  priority                  INTEGER NOT NULL DEFAULT 100,
+  combinable                BOOLEAN NOT NULL DEFAULT TRUE,
+  bogo_mode                 TEXT,
+  buy_qty                   INTEGER,
+  pay_qty                   INTEGER,
+  discount_pct              NUMERIC(6,2),
+  applies_to_all_products   BOOLEAN NOT NULL DEFAULT TRUE,
+  valid_from                TIMESTAMPTZ,
+  valid_until               TIMESTAMPTZ,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_retail_promo_type CHECK (promo_type IN ('percent_off', 'x_for_y')),
+  CONSTRAINT chk_retail_promo_channel CHECK (channel_scope IN ('local', 'online', 'both')),
+  CONSTRAINT chk_retail_promo_activation CHECK (activation_mode IN ('automatic', 'coupon', 'both')),
+  CONSTRAINT chk_retail_promo_bogo_mode CHECK (bogo_mode IS NULL OR bogo_mode IN ('sku', 'mix')),
+  CONSTRAINT chk_retail_promo_coupon_mode CHECK (
+    activation_mode = 'automatic' OR
+    (coupon_code IS NOT NULL AND LENGTH(TRIM(coupon_code)) > 0)
+  ),
+  CONSTRAINT chk_retail_promo_window CHECK (valid_until IS NULL OR valid_from IS NULL OR valid_until >= valid_from),
+  CONSTRAINT chk_retail_promo_percent CHECK (
+    (promo_type <> 'percent_off') OR
+    (discount_pct IS NOT NULL AND discount_pct > 0 AND discount_pct <= 100)
+  ),
+  CONSTRAINT chk_retail_promo_x_for_y CHECK (
+    (promo_type <> 'x_for_y') OR
+    (
+      bogo_mode IS NOT NULL AND
+      buy_qty IS NOT NULL AND buy_qty > 0 AND
+      pay_qty IS NOT NULL AND pay_qty >= 0 AND pay_qty < buy_qty
+    )
+  )
+);
+
+DROP TRIGGER IF EXISTS trg_retail_promotions_updated_at ON retail_promotions;
+CREATE TRIGGER trg_retail_promotions_updated_at
+BEFORE UPDATE ON retail_promotions
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_retail_promotions_coupon_ci
+ON retail_promotions ((LOWER(coupon_code)))
+WHERE coupon_code IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS retail_promotion_products (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  promotion_id     BIGINT NOT NULL REFERENCES retail_promotions(id) ON DELETE CASCADE,
+  product_id       BIGINT NOT NULL REFERENCES retail_products(id) ON DELETE RESTRICT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_promotion_product UNIQUE (promotion_id, product_id)
+);
+
+CREATE TABLE IF NOT EXISTS retail_promotion_variants (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  promotion_id     BIGINT NOT NULL REFERENCES retail_promotions(id) ON DELETE CASCADE,
+  variant_id       BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE RESTRICT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_promotion_variant UNIQUE (promotion_id, variant_id)
+);
+
+-- =============================
 -- Purchases / stock
 -- =============================
 CREATE TABLE IF NOT EXISTS retail_purchases (
@@ -430,11 +528,87 @@ CREATE TABLE IF NOT EXISTS retail_purchase_items (
   quantity            INTEGER NOT NULL,
   unit_cost_currency  NUMERIC(14,4) NOT NULL,
   unit_cost_ars       NUMERIC(14,4) NOT NULL,
+  suggested_markup_pct NUMERIC(6,2) NOT NULL DEFAULT 100.00,
+  unit_price_suggested_ars NUMERIC(14,2) NOT NULL DEFAULT 0,
+  unit_price_final_ars NUMERIC(14,2),
+  real_margin_pct     NUMERIC(8,2),
   line_total_ars      NUMERIC(14,2) NOT NULL,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT chk_purchase_item_qty CHECK (quantity > 0),
-  CONSTRAINT chk_purchase_item_costs CHECK (unit_cost_currency >= 0 AND unit_cost_ars >= 0 AND line_total_ars >= 0)
+  CONSTRAINT chk_purchase_item_costs CHECK (unit_cost_currency >= 0 AND unit_cost_ars >= 0 AND line_total_ars >= 0),
+  CONSTRAINT chk_purchase_item_suggested_markup CHECK (suggested_markup_pct >= 0),
+  CONSTRAINT chk_purchase_item_suggested_price CHECK (unit_price_suggested_ars >= 0),
+  CONSTRAINT chk_purchase_item_final_price CHECK (unit_price_final_ars IS NULL OR unit_price_final_ars >= 0)
 );
+
+ALTER TABLE retail_purchase_items
+ADD COLUMN IF NOT EXISTS suggested_markup_pct NUMERIC(6,2);
+ALTER TABLE retail_purchase_items
+ADD COLUMN IF NOT EXISTS unit_price_suggested_ars NUMERIC(14,2);
+ALTER TABLE retail_purchase_items
+ADD COLUMN IF NOT EXISTS unit_price_final_ars NUMERIC(14,2);
+ALTER TABLE retail_purchase_items
+ADD COLUMN IF NOT EXISTS real_margin_pct NUMERIC(8,2);
+
+UPDATE retail_purchase_items
+SET suggested_markup_pct = 100.00
+WHERE suggested_markup_pct IS NULL OR suggested_markup_pct < 0;
+
+UPDATE retail_purchase_items
+SET unit_price_suggested_ars = ROUND((unit_cost_ars * (1 + suggested_markup_pct / 100.0))::numeric, 2)
+WHERE unit_price_suggested_ars IS NULL OR unit_price_suggested_ars < 0;
+
+ALTER TABLE retail_purchase_items
+ALTER COLUMN suggested_markup_pct SET DEFAULT 100.00;
+ALTER TABLE retail_purchase_items
+ALTER COLUMN unit_price_suggested_ars SET DEFAULT 0;
+
+ALTER TABLE retail_purchase_items
+ALTER COLUMN suggested_markup_pct SET NOT NULL;
+ALTER TABLE retail_purchase_items
+ALTER COLUMN unit_price_suggested_ars SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_purchase_item_suggested_markup'
+  ) THEN
+    ALTER TABLE retail_purchase_items
+      ADD CONSTRAINT chk_purchase_item_suggested_markup
+      CHECK (suggested_markup_pct >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_purchase_item_suggested_price'
+  ) THEN
+    ALTER TABLE retail_purchase_items
+      ADD CONSTRAINT chk_purchase_item_suggested_price
+      CHECK (unit_price_suggested_ars >= 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_purchase_item_final_price'
+  ) THEN
+    ALTER TABLE retail_purchase_items
+      ADD CONSTRAINT chk_purchase_item_final_price
+      CHECK (unit_price_final_ars IS NULL OR unit_price_final_ars >= 0);
+  END IF;
+END $$;
+
+UPDATE retail_purchase_items
+SET unit_price_final_ars = unit_price_suggested_ars
+WHERE unit_price_final_ars IS NULL
+  AND unit_price_suggested_ars IS NOT NULL;
+
+UPDATE retail_purchase_items
+SET real_margin_pct = ROUND((((unit_price_final_ars - unit_cost_ars) / unit_cost_ars) * 100.0)::numeric, 2)
+WHERE unit_price_final_ars IS NOT NULL
+  AND unit_cost_ars > 0
+  AND real_margin_pct IS NULL;
 
 CREATE TABLE IF NOT EXISTS retail_stock_movements (
   id                       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -467,9 +641,11 @@ CREATE TABLE IF NOT EXISTS retail_sales (
   customer_id                  BIGINT REFERENCES retail_customers(id) ON DELETE SET NULL,
   customer_snapshot            JSONB,
   subtotal_ars                 NUMERIC(14,2) NOT NULL,
+  promotion_discount_total_ars NUMERIC(14,2) NOT NULL DEFAULT 0,
   price_adjustment_pct         NUMERIC(6,2) NOT NULL,
   price_adjustment_amount_ars  NUMERIC(14,2) NOT NULL,
   total_ars                    NUMERIC(14,2) NOT NULL,
+  pricing_source               TEXT NOT NULL DEFAULT 'local_engine',
   currency_code                TEXT NOT NULL DEFAULT 'ARS',
   requires_invoice             BOOLEAN NOT NULL DEFAULT FALSE,
   notes                        TEXT,
@@ -487,10 +663,16 @@ CREATE TABLE IF NOT EXISTS retail_sales (
   CONSTRAINT chk_retail_sales_channel CHECK (channel IN ('local', 'online')),
   CONSTRAINT chk_retail_sales_status CHECK (status IN ('confirmed', 'cancelled', 'partial_return', 'returned')),
   CONSTRAINT chk_retail_sales_payment_method CHECK (payment_method IN ('cash', 'debit', 'transfer', 'credit')),
+  CONSTRAINT chk_retail_sales_pricing_source CHECK (pricing_source IN ('local_engine', 'tiendanube')),
   CONSTRAINT chk_retail_sales_currency CHECK (currency_code = 'ARS'),
-  CONSTRAINT chk_retail_sales_amounts CHECK (subtotal_ars >= 0 AND total_ars >= 0),
+  CONSTRAINT chk_retail_sales_amounts CHECK (subtotal_ars >= 0 AND promotion_discount_total_ars >= 0 AND total_ars >= 0),
   CONSTRAINT chk_retail_sales_override_reason CHECK ((price_override_by IS NULL) OR (price_override_reason IS NOT NULL AND LENGTH(TRIM(price_override_reason)) > 0))
 );
+
+ALTER TABLE retail_sales
+ADD COLUMN IF NOT EXISTS promotion_discount_total_ars NUMERIC(14,2) NOT NULL DEFAULT 0;
+ALTER TABLE retail_sales
+ADD COLUMN IF NOT EXISTS pricing_source TEXT NOT NULL DEFAULT 'local_engine';
 
 DROP TRIGGER IF EXISTS trg_retail_sales_updated_at ON retail_sales;
 CREATE TRIGGER trg_retail_sales_updated_at
@@ -504,6 +686,7 @@ CREATE TABLE IF NOT EXISTS retail_sale_items (
   quantity                 INTEGER NOT NULL,
   unit_price_list_ars      NUMERIC(14,2) NOT NULL,
   unit_price_final_ars     NUMERIC(14,2) NOT NULL,
+  promotion_discount_ars   NUMERIC(14,2) NOT NULL DEFAULT 0,
   unit_cost_snapshot_ars   NUMERIC(14,4) NOT NULL,
   line_subtotal_ars        NUMERIC(14,2) NOT NULL,
   line_total_ars           NUMERIC(14,2) NOT NULL,
@@ -513,11 +696,59 @@ CREATE TABLE IF NOT EXISTS retail_sale_items (
   CONSTRAINT chk_sale_item_amounts CHECK (
     unit_price_list_ars >= 0 AND
     unit_price_final_ars >= 0 AND
+    promotion_discount_ars >= 0 AND
     unit_cost_snapshot_ars >= 0 AND
     line_subtotal_ars >= 0 AND
     line_total_ars >= 0
   ),
   CONSTRAINT chk_sale_item_returned_qty CHECK (returned_qty >= 0 AND returned_qty <= quantity)
+);
+
+ALTER TABLE retail_sale_items
+ADD COLUMN IF NOT EXISTS promotion_discount_ars NUMERIC(14,2) NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS retail_sale_payments (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id             BIGINT NOT NULL REFERENCES retail_sales(id) ON DELETE CASCADE,
+  payment_method      TEXT NOT NULL,
+  payment_account_id  BIGINT NOT NULL REFERENCES retail_payment_accounts(id) ON DELETE RESTRICT,
+  amount_ars          NUMERIC(14,2) NOT NULL,
+  metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_sale_payment_method CHECK (payment_method IN ('cash', 'debit', 'transfer', 'credit')),
+  CONSTRAINT chk_sale_payment_amount CHECK (amount_ars > 0)
+);
+
+CREATE TABLE IF NOT EXISTS retail_sale_promotion_applications (
+  id                   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id              BIGINT NOT NULL REFERENCES retail_sales(id) ON DELETE CASCADE,
+  promotion_id         BIGINT REFERENCES retail_promotions(id) ON DELETE SET NULL,
+  source               TEXT NOT NULL,
+  promotion_name       TEXT NOT NULL,
+  promo_type           TEXT NOT NULL,
+  priority             INTEGER NOT NULL DEFAULT 100,
+  coupon_code          TEXT,
+  discount_amount_ars  NUMERIC(14,2) NOT NULL DEFAULT 0,
+  metadata             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_sale_promo_source CHECK (source IN ('local_engine', 'tiendanube')),
+  CONSTRAINT chk_sale_promo_type CHECK (promo_type IN ('percent_off', 'x_for_y', 'external')),
+  CONSTRAINT chk_sale_promo_discount CHECK (discount_amount_ars >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS retail_sale_item_promotion_applications (
+  id                              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_item_id                    BIGINT NOT NULL REFERENCES retail_sale_items(id) ON DELETE CASCADE,
+  sale_promotion_application_id   BIGINT REFERENCES retail_sale_promotion_applications(id) ON DELETE CASCADE,
+  promotion_id                    BIGINT REFERENCES retail_promotions(id) ON DELETE SET NULL,
+  source                          TEXT NOT NULL,
+  applied_qty                     INTEGER NOT NULL DEFAULT 0,
+  discount_amount_ars             NUMERIC(14,2) NOT NULL DEFAULT 0,
+  metadata                        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_sale_item_promo_source CHECK (source IN ('local_engine', 'tiendanube')),
+  CONSTRAINT chk_sale_item_promo_qty CHECK (applied_qty >= 0),
+  CONSTRAINT chk_sale_item_promo_discount CHECK (discount_amount_ars >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS retail_returns (
@@ -557,6 +788,40 @@ CREATE TABLE IF NOT EXISTS retail_return_items (
   created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT chk_return_item_qty CHECK (quantity > 0),
   CONSTRAINT chk_return_item_amounts CHECK (unit_price_refund_ars >= 0 AND unit_cost_snapshot_ars >= 0 AND line_refund_total_ars >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS retail_exchanges (
+  id                     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sale_id                BIGINT NOT NULL REFERENCES retail_sales(id) ON DELETE RESTRICT,
+  status                 TEXT NOT NULL DEFAULT 'confirmed',
+  reason                 TEXT,
+  processed_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  warranty_type          TEXT NOT NULL DEFAULT 'none',
+  warranty_override      BOOLEAN NOT NULL DEFAULT FALSE,
+  warranty_snapshot      JSONB,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_exchange_status CHECK (status IN ('confirmed', 'cancelled')),
+  CONSTRAINT chk_exchange_warranty_type CHECK (warranty_type IN ('none', 'size', 'breakage'))
+);
+
+DROP TRIGGER IF EXISTS trg_retail_exchanges_updated_at ON retail_exchanges;
+CREATE TRIGGER trg_retail_exchanges_updated_at
+BEFORE UPDATE ON retail_exchanges
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_exchange_items (
+  id                     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  exchange_id            BIGINT NOT NULL REFERENCES retail_exchanges(id) ON DELETE CASCADE,
+  sale_item_id           BIGINT NOT NULL REFERENCES retail_sale_items(id) ON DELETE RESTRICT,
+  variant_from_id        BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE RESTRICT,
+  variant_to_id          BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE RESTRICT,
+  quantity               INTEGER NOT NULL,
+  unit_price_from_ars    NUMERIC(14,2) NOT NULL,
+  unit_price_to_ars      NUMERIC(14,2) NOT NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_exchange_item_qty CHECK (quantity > 0),
+  CONSTRAINT chk_exchange_item_prices CHECK (unit_price_from_ars >= 0 AND unit_price_to_ars >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS retail_invoices (
@@ -621,6 +886,36 @@ CREATE TRIGGER trg_retail_invoice_credit_notes_updated_at
 BEFORE UPDATE ON retail_invoice_credit_notes
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+CREATE TABLE IF NOT EXISTS retail_pos_drafts (
+  id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  draft_number        TEXT NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'open',
+  channel             TEXT NOT NULL DEFAULT 'local',
+  name                TEXT,
+  customer_snapshot   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  payload             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  quote_snapshot      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  item_count          INTEGER NOT NULL DEFAULT 0,
+  total_ars           NUMERIC(14,2) NOT NULL DEFAULT 0,
+  last_activity_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  confirmed_sale_id   BIGINT REFERENCES retail_sales(id) ON DELETE SET NULL,
+  confirmed_at        TIMESTAMPTZ,
+  created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_pos_draft_number UNIQUE (draft_number),
+  CONSTRAINT chk_retail_pos_draft_status CHECK (status IN ('open', 'confirmed', 'cancelled')),
+  CONSTRAINT chk_retail_pos_draft_channel CHECK (channel IN ('local', 'online')),
+  CONSTRAINT chk_retail_pos_draft_item_count CHECK (item_count >= 0),
+  CONSTRAINT chk_retail_pos_draft_total CHECK (total_ars >= 0)
+);
+
+DROP TRIGGER IF EXISTS trg_retail_pos_drafts_updated_at ON retail_pos_drafts;
+CREATE TRIGGER trg_retail_pos_drafts_updated_at
+BEFORE UPDATE ON retail_pos_drafts
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 -- =============================
 -- Integrations
 -- =============================
@@ -681,6 +976,11 @@ CREATE INDEX IF NOT EXISTS idx_retail_variants_sku_ci ON retail_product_variants
 CREATE INDEX IF NOT EXISTS idx_retail_variants_barcode_ci ON retail_product_variants ((LOWER(barcode_internal)));
 CREATE INDEX IF NOT EXISTS idx_retail_variants_active_stock ON retail_product_variants(active, stock_on_hand);
 CREATE INDEX IF NOT EXISTS idx_retail_variant_options_attr_value ON retail_variant_option_values(attribute_id, option_value);
+CREATE INDEX IF NOT EXISTS idx_retail_promotions_active_window ON retail_promotions(active, channel_scope, priority, valid_from, valid_until);
+CREATE INDEX IF NOT EXISTS idx_retail_promotion_products_promotion ON retail_promotion_products(promotion_id);
+CREATE INDEX IF NOT EXISTS idx_retail_promotion_products_product ON retail_promotion_products(product_id);
+CREATE INDEX IF NOT EXISTS idx_retail_promotion_variants_promotion ON retail_promotion_variants(promotion_id);
+CREATE INDEX IF NOT EXISTS idx_retail_promotion_variants_variant ON retail_promotion_variants(variant_id);
 
 CREATE INDEX IF NOT EXISTS idx_retail_purchases_date ON retail_purchases(purchase_date DESC);
 CREATE INDEX IF NOT EXISTS idx_retail_purchases_supplier ON retail_purchases(supplier_id);
@@ -695,11 +995,23 @@ CREATE INDEX IF NOT EXISTS idx_retail_sales_payment ON retail_sales(payment_meth
 CREATE INDEX IF NOT EXISTS idx_retail_sales_cash_session ON retail_sales(cash_session_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_retail_sale_items_sale ON retail_sale_items(sale_id);
 CREATE INDEX IF NOT EXISTS idx_retail_sale_items_variant ON retail_sale_items(variant_id);
+CREATE INDEX IF NOT EXISTS idx_retail_sale_payments_sale ON retail_sale_payments(sale_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_sale_payments_method ON retail_sale_payments(payment_method, payment_account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_sale_promo_sale ON retail_sale_promotion_applications(sale_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_sale_promo_promotion ON retail_sale_promotion_applications(promotion_id);
+CREATE INDEX IF NOT EXISTS idx_retail_sale_item_promo_sale_item ON retail_sale_item_promotion_applications(sale_item_id);
+CREATE INDEX IF NOT EXISTS idx_retail_sale_item_promo_promotion ON retail_sale_item_promotion_applications(promotion_id);
 CREATE INDEX IF NOT EXISTS idx_retail_returns_sale ON retail_returns(sale_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_retail_return_items_return ON retail_return_items(return_id);
+CREATE INDEX IF NOT EXISTS idx_retail_exchanges_sale ON retail_exchanges(sale_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_exchange_items_exchange ON retail_exchange_items(exchange_id);
+CREATE INDEX IF NOT EXISTS idx_retail_exchange_items_sale_item ON retail_exchange_items(sale_item_id);
 CREATE INDEX IF NOT EXISTS idx_retail_invoices_status ON retail_invoices(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_retail_invoices_cbte ON retail_invoices(pto_vta, cbte_tipo, cbte_nro);
 CREATE INDEX IF NOT EXISTS idx_retail_credit_notes_status ON retail_invoice_credit_notes(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_pos_drafts_status ON retail_pos_drafts(status, last_activity_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_pos_drafts_customer ON retail_pos_drafts((LOWER(COALESCE(customer_snapshot->>'name',''))));
+CREATE INDEX IF NOT EXISTS idx_retail_pos_drafts_confirmed_sale ON retail_pos_drafts(confirmed_sale_id);
 
 CREATE INDEX IF NOT EXISTS idx_retail_cash_sessions_status ON retail_cash_sessions(status, opened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_retail_cash_mov_session ON retail_cash_session_movements(cash_session_id, created_at DESC);
@@ -735,12 +1047,20 @@ BEGIN
     CREATE TRIGGER trg_audit_retail_sale_items AFTER INSERT OR UPDATE OR DELETE ON retail_sale_items
     FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_sale_payments') THEN
+    CREATE TRIGGER trg_audit_retail_sale_payments AFTER INSERT OR UPDATE OR DELETE ON retail_sale_payments
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_returns') THEN
     CREATE TRIGGER trg_audit_retail_returns AFTER INSERT OR UPDATE OR DELETE ON retail_returns
     FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_invoices') THEN
     CREATE TRIGGER trg_audit_retail_invoices AFTER INSERT OR UPDATE OR DELETE ON retail_invoices
+    FOR EACH ROW EXECUTE FUNCTION audit_row_change();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_retail_pos_drafts') THEN
+    CREATE TRIGGER trg_audit_retail_pos_drafts AFTER INSERT OR UPDATE OR DELETE ON retail_pos_drafts
     FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
 END $$;

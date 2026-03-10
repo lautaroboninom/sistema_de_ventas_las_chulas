@@ -1,7 +1,11 @@
-﻿from .settings import *  # noqa
+from pathlib import Path
 import os
 
-# Ajustes para despliegue por dominio (LAN / sin Traefik)
+from django.core.exceptions import ImproperlyConfigured
+
+from .settings import *  # noqa
+
+# Ajustes para prod (Tailscale/Funnel)
 DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
 
 _default_host = os.getenv("PUBLIC_HOST", "").strip()
@@ -22,7 +26,71 @@ SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SECURE = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "0").strip().lower() in ("1", "true", "yes", "on")
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https") if TRUST_PROXY_HEADERS else None
+
+if EMAIL_INSECURE_SKIP_VERIFY:
+    raise ImproperlyConfigured("EMAIL_INSECURE_SKIP_VERIFY=1 no esta permitido en produccion")
+
+
+def _validate_secret_value(label: str, value: str, min_length: int) -> None:
+    raw = (value or "").strip()
+    low = raw.lower()
+    weak_values = {
+        "",
+        "change-me",
+        "changeme",
+        "default",
+        "replace_with_strong_secret",
+        "replace-with-strong-secret",
+        "replace_with_strong_db_password",
+        "replace-with-strong-db-password",
+        "laschulas25",
+        "laschulas25_secret_key",
+    }
+    if (
+        low in weak_values
+        or "replace" in low
+        or "changeme" in low
+        or len(raw) < min_length
+    ):
+        raise ImproperlyConfigured(
+            f"{label} invalido o debil para produccion (minimo {min_length} caracteres y sin placeholders)"
+        )
+
+
+_validate_secret_value("DJANGO_SECRET_KEY", SECRET_KEY, 40)
+_validate_secret_value("JWT_SECRET", os.getenv("JWT_SECRET", ""), 40)
+_validate_secret_value("POSTGRES_PASSWORD", os.getenv("POSTGRES_PASSWORD", ""), 20)
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/1").strip()
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_URL,
+    }
+}
+
+
+def _validate_secret_path(label: str, value: str) -> None:
+    raw = (value or "").strip()
+    if not raw:
+        return
+    path = Path(raw).expanduser().resolve()
+    base = BASE_DIR.resolve()
+    try:
+        path.relative_to(base)
+        raise ImproperlyConfigured(f"{label} no puede estar dentro del repo ({base})")
+    except ValueError:
+        pass
+    if path.exists():
+        mode = path.stat().st_mode & 0o777
+        if mode & 0o077:
+            raise ImproperlyConfigured(f"{label} debe tener permisos restrictivos (600 recomendado)")
+
+
+_validate_secret_path("ARCA_CERT_PATH", ARCA_CERT_PATH)
+_validate_secret_path("ARCA_KEY_PATH", ARCA_KEY_PATH)
 
 STATIC_ROOT = os.getenv("STATIC_ROOT", "/app/staticfiles")
 MEDIA_ROOT = os.getenv("MEDIA_ROOT", "/app/media")

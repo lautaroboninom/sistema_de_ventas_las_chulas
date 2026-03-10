@@ -21,6 +21,8 @@ VIEW_PERMISSION_MATRIX = {
     'RetailVarianteEscanearView': {'GET': 'page.pos'},
 
     # Compras / caja
+    'RetailComprasConfigView': {'GET': 'page.compras'},
+    'RetailComprasProveedoresView': {'GET': 'page.compras'},
     'RetailComprasView': {'POST': 'page.compras'},
     'RetailCompraDetailView': {'GET': 'page.compras'},
     'RetailCajaAperturaView': {'POST': 'page.pos'},
@@ -30,12 +32,15 @@ VIEW_PERMISSION_MATRIX = {
     'RetailCajaDetailView': {'GET': 'page.pos'},
     'RetailVentasView': {'GET': 'page.ventas'},
     'RetailVentaDetailView': {'GET': 'page.ventas'},
+    'RetailPromocionesView': {'GET': 'page.promociones', 'POST': 'action.promociones.editar'},
+    'RetailPromocionDetailView': {'GET': 'page.promociones', 'PATCH': 'action.promociones.editar', 'PUT': 'action.promociones.editar'},
 
     # Ventas / devoluciones / facturacion
     'RetailVentasCotizarView': {'POST': 'page.pos'},
     'RetailVentasConfirmarView': {'POST': 'page.pos'},
     'RetailVentaAnularView': {'POST': 'action.ventas.anular'},
     'RetailVentaDevolverView': {'POST': 'action.ventas.devolver'},
+    'RetailVentaCambiarView': {'POST': 'action.ventas.cambiar'},
     'RetailGarantiaTicketView': {'GET': 'page.ventas'},
     'RetailGarantiasActivasView': {'GET': 'page.ventas'},
     'RetailFacturacionEmitirView': {'POST': 'action.facturacion.emitir'},
@@ -50,6 +55,9 @@ VIEW_PERMISSION_MATRIX = {
     'RetailOnlineSyncStockView': {'POST': 'action.online.sync'},
 
     # Reportes
+    'RetailReporteResumenComercialView': {'GET': 'page.reportes'},
+    'RetailReporteAnalisisProductosView': {'GET': 'action.reportes.ver_costos'},
+    'RetailReporteAnalisisProveedoresView': {'GET': 'action.reportes.ver_costos'},
     'RetailReporteMasVendidosView': {'GET': 'page.reportes'},
     'RetailReporteTallesColoresView': {'GET': 'page.reportes'},
     'RetailReporteBajoStockView': {'GET': 'page.reportes'},

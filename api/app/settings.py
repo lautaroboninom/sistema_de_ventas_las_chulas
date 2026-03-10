@@ -25,7 +25,14 @@ CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 # AuditorÃ­a
 AUDIT_LOG_ENABLED = os.getenv("AUDIT_LOG_ENABLED", "0").lower() in ("1","true")
 AUDIT_LOG_MAX_BODY = int(os.getenv("AUDIT_LOG_MAX_BODY", "4096"))
-AUDIT_LOG_EXCLUDE_PREFIXES = _csv("AUDIT_LOG_EXCLUDE_PREFIXES", "")
+AUDIT_LOG_EXCLUDE_PREFIXES = _csv(
+    "AUDIT_LOG_EXCLUDE_PREFIXES",
+    "/api/auth/,/api/retail/online/webhooks/",
+)
+AUDIT_LOG_REDACT_KEYS = _csv(
+    "AUDIT_LOG_REDACT_KEYS",
+    "password,token,authorization,client_secret,access_token,tiendanube_access_token,tiendanube_client_secret,tiendanube_webhook_secret,arca_key,arca_key_path,arca_cert,arca_cert_path",
+)
 
 # Branding / URLs pÃºblicas
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
@@ -92,7 +99,7 @@ TIENDANUBE_CLIENT_SECRET = os.getenv("TIENDANUBE_CLIENT_SECRET", "")
 TIENDANUBE_STORE_ID = os.getenv("TIENDANUBE_STORE_ID", "")
 TIENDANUBE_ACCESS_TOKEN = os.getenv("TIENDANUBE_ACCESS_TOKEN", "")
 TIENDANUBE_WEBHOOK_SECRET = os.getenv("TIENDANUBE_WEBHOOK_SECRET", "")
-TIENDANUBE_API_BASE = os.getenv("TIENDANUBE_API_BASE", "https://api.tiendanube.com/v1")
+TIENDANUBE_API_BASE = os.getenv("TIENDANUBE_API_BASE", "https://api.tiendanube.com/2025-03")
 TIENDANUBE_USER_AGENT = os.getenv("TIENDANUBE_USER_AGENT", "LasChulasRetail (admin@localhost)")
 TIENDANUBE_TIMEOUT_SECS = int(os.getenv("TIENDANUBE_TIMEOUT_SECS", "15"))
 
@@ -115,6 +122,8 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "service.middleware.AuditUserMiddleware",         # set app.user_id/app.user_role por request
     "service.middleware.RLSMiddleware",               # RLS por-request
     "service.middleware.ActivityLogMiddleware",       # auditorÃ­a (con exclusiones por prefijo)
@@ -178,7 +187,7 @@ PERMISSIONS_V2_ENABLED = os.getenv("PERMISSIONS_V2_ENABLED", "1").strip().lower(
 
 # CORS
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_HEADERS = list(default_headers) + ["authorization"]
+CORS_ALLOW_HEADERS = list(default_headers) + ["authorization", "x-csrftoken"]
 CORS_ALLOW_METHODS = list(default_methods)
 # Solo Ãºtil en dev/LAN; no afecta prod si no se usa
 CORS_ALLOW_PRIVATE_NETWORK = True
@@ -203,7 +212,10 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
 SECURE_HSTS_PRELOAD = not DEBUG
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+TRUST_PROXY_HEADERS = _bool_env("TRUST_PROXY_HEADERS", "0")
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https") if TRUST_PROXY_HEADERS else None
+X_FRAME_OPTIONS = "DENY"
+CSRF_FAILURE_VIEW = "service.views.auth_views.csrf_failure"
 
 # --- Seguridad / AutenticaciÃ³n (vistas) ---
 # TTL de tokens de restablecimiento (minutos)
@@ -216,6 +228,9 @@ EMAIL_COOLDOWN_MIN = int(os.getenv("EMAIL_COOLDOWN_MIN", "1"))
 LOGIN_MAX_ATTEMPTS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
 LOGIN_LOCKOUT_SECONDS = max(1, LOGIN_LOCKOUT_MINUTES) * 60
+LOGIN_RATE_LIMIT_MAX = int(os.getenv("LOGIN_RATE_LIMIT_MAX", "20"))
+FORGOT_RATE_LIMIT_MAX = int(os.getenv("FORGOT_RATE_LIMIT_MAX", "10"))
+AUTH_RATE_WINDOW_SECONDS = int(os.getenv("AUTH_RATE_WINDOW_SECONDS", "60"))
 
 # Requisito mÃ­nimo local de longitud de contraseÃ±a (ademÃ¡s de validators si aplica)
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "8"))

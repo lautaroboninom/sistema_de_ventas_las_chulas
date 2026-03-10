@@ -6,18 +6,53 @@ const BASE =
   import.meta.env.VITE_API_URL?.replace(/\/+$/, '') ||
   (isDevVite ? `${window.location.protocol}//${window.location.hostname}:${devApiPort}` : '');
 
-let token = null;
-export const setToken = (t) => {
-  token = t;
-};
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE']);
+let csrfBootstrapPromise = null;
+export const setToken = () => {};
+
+function readCookie(name) {
+  const cookie = document.cookie || '';
+  const prefix = `${name}=`;
+  const parts = cookie.split(';');
+  for (const part of parts) {
+    const item = part.trim();
+    if (item.startsWith(prefix)) {
+      return decodeURIComponent(item.slice(prefix.length));
+    }
+  }
+  return '';
+}
+
+async function ensureCsrfCookie() {
+  if (readCookie('csrftoken')) return;
+  if (!csrfBootstrapPromise) {
+    csrfBootstrapPromise = fetch(`${BASE}/api/auth/csrf/`, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+    }).finally(() => {
+      csrfBootstrapPromise = null;
+    });
+  }
+  await csrfBootstrapPromise;
+}
 
 async function http(path, { method = 'GET', body, headers } = {}) {
+  const normalizedMethod = String(method || 'GET').toUpperCase();
+  if (!SAFE_METHODS.has(normalizedMethod)) {
+    await ensureCsrfCookie();
+  }
   const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
   const requestHeaders = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(headers || {}),
   };
+  if (!SAFE_METHODS.has(normalizedMethod)) {
+    const csrfToken = readCookie('csrftoken');
+    if (csrfToken) {
+      requestHeaders['X-CSRFToken'] = csrfToken;
+    }
+  }
   if (isFormData && requestHeaders['Content-Type']) {
     delete requestHeaders['Content-Type'];
   }
@@ -28,7 +63,7 @@ async function http(path, { method = 'GET', body, headers } = {}) {
   }
 
   const res = await fetch(`${BASE}${path}`, {
-    method,
+    method: normalizedMethod,
     credentials: 'include',
     headers: requestHeaders,
     body: requestBody,
@@ -58,6 +93,7 @@ export const api = {
 export default api;
 
 // Auth
+export const getAuthCsrf = () => api.get('/api/auth/csrf/');
 export const postLogin = (email, password) => api.post('/api/auth/login/', { email, password });
 export const postAuthForgot = (email) => api.post('/api/auth/forgot/', { email });
 export const postAuthReset = (tokenValue, password) => api.post('/api/auth/reset/', { token: tokenValue, password });
@@ -93,6 +129,7 @@ export const getRetailVariantes = (params = {}) => {
   const qs = new URLSearchParams();
   if (params.q) qs.set('q', params.q);
   if (params.active !== undefined) qs.set('active', String(params.active));
+  if (params.limit) qs.set('limit', String(params.limit));
   return api.get(`/api/retail/variantes/${qs.toString() ? `?${qs}` : ''}`);
 };
 export const postRetailVariante = (payload) => api.post('/api/retail/variantes/', payload);
@@ -100,6 +137,13 @@ export const patchRetailVariante = (id, payload) => api.patch(`/api/retail/varia
 export const getRetailVarianteByScan = (codigo) => api.get(`/api/retail/variantes/escanear/${encodeURIComponent(codigo)}/`);
 
 // Compras
+export const getRetailComprasConfig = () => api.get('/api/retail/compras/config/');
+export const getRetailComprasProveedores = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.limit) qs.set('limit', String(params.limit));
+  return api.get(`/api/retail/compras/proveedores/${qs.toString() ? `?${qs}` : ''}`);
+};
 export const postRetailCompra = (payload) => api.post('/api/retail/compras/', payload);
 export const getRetailCompra = (id) => api.get(`/api/retail/compras/${id}/`);
 
@@ -124,10 +168,33 @@ export const getRetailVentas = (params = {}) => {
   return api.get(`/api/retail/ventas/${qs.toString() ? `?${qs}` : ''}`);
 };
 export const getRetailVentaDetail = (id) => api.get(`/api/retail/ventas/${id}/`);
+export const getRetailPromociones = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set('q', params.q);
+  if (params.active !== undefined) qs.set('active', String(params.active));
+  return api.get(`/api/retail/promociones/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const getRetailPromocionDetail = (id) => api.get(`/api/retail/promociones/${id}/`);
+export const postRetailPromocion = (payload) => api.post('/api/retail/promociones/', payload || {});
+export const patchRetailPromocion = (id, payload) => api.patch(`/api/retail/promociones/${id}/`, payload || {});
+export const putRetailPromocion = (id, payload) => api.put(`/api/retail/promociones/${id}/`, payload || {});
 export const postRetailVentaCotizar = (payload) => api.post('/api/retail/ventas/cotizar/', payload);
 export const postRetailVentaConfirmar = (payload) => api.post('/api/retail/ventas/confirmar/', payload);
 export const postRetailVentaAnular = (id, payload) => api.post(`/api/retail/ventas/${id}/anular/`, payload || {});
 export const postRetailVentaDevolver = (id, payload) => api.post(`/api/retail/ventas/${id}/devolver/`, payload || {});
+export const postRetailVentaCambiar = (id, payload) => api.post(`/api/retail/ventas/${id}/cambiar/`, payload || {});
+export const getRetailPosDrafts = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set('status', params.status);
+  if (params.q) qs.set('q', params.q);
+  if (params.limit) qs.set('limit', String(params.limit));
+  return api.get(`/api/retail/pos/drafts/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const getRetailPosDraftDetail = (id) => api.get(`/api/retail/pos/drafts/${id}/`);
+export const postRetailPosDraft = (payload) => api.post('/api/retail/pos/drafts/', payload || {});
+export const patchRetailPosDraft = (id, payload) => api.patch(`/api/retail/pos/drafts/${id}/`, payload || {});
+export const postRetailPosDraftConfirm = (id, payload) =>
+  api.post(`/api/retail/pos/drafts/${id}/confirm/`, payload || {});
 export const getRetailGarantiaTicket = (codigo) =>
   api.get(`/api/retail/garantias/ticket/${encodeURIComponent(codigo)}/`);
 export const getRetailGarantiasActivas = (params = {}) => {
@@ -157,6 +224,24 @@ export const postRetailOnlineSyncCatalogo = (payload) => api.post('/api/retail/o
 export const postRetailOnlineSyncStock = (payload) => api.post('/api/retail/online/sync/stock/', payload || {});
 
 // Reportes
+export const getRetailReporteResumenComercial = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.desde) qs.set('desde', params.desde);
+  if (params.hasta) qs.set('hasta', params.hasta);
+  return api.get(`/api/retail/reportes/resumen-comercial/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const getRetailReporteAnalisisProductos = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.desde) qs.set('desde', params.desde);
+  if (params.hasta) qs.set('hasta', params.hasta);
+  return api.get(`/api/retail/reportes/analisis-productos/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const getRetailReporteAnalisisProveedores = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.desde) qs.set('desde', params.desde);
+  if (params.hasta) qs.set('hasta', params.hasta);
+  return api.get(`/api/retail/reportes/analisis-proveedores/${qs.toString() ? `?${qs}` : ''}`);
+};
 export const getRetailReporteMasVendidos = (params = {}) => {
   const qs = new URLSearchParams();
   if (params.desde) qs.set('desde', params.desde);

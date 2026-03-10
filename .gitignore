@@ -29,6 +29,7 @@ coverage/
 # --- Local env files
 .env
 /.env.prod
+/.env.prod.rotated.*
 
 # --- Generated data / outputs
 etl/out/

@@ -224,6 +224,10 @@ export default function ConfigGeneral() {
           settings.return_warranty_breakage_days === '' || settings.return_warranty_breakage_days == null
             ? undefined
             : Number(settings.return_warranty_breakage_days),
+        purchase_default_markup_pct:
+          settings.purchase_default_markup_pct === '' || settings.purchase_default_markup_pct == null
+            ? undefined
+            : Number(settings.purchase_default_markup_pct),
       });
       setMsg('Configuracion guardada');
       await loadAll();
@@ -405,133 +409,184 @@ export default function ConfigGeneral() {
           </Link>
         </div>
 
-        <form className="card space-y-3" onSubmit={saveSettings}>
-          <h2 className="text-lg font-semibold">Parametros del negocio e integraciones</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <input
-              className="input"
-              placeholder="Nombre comercial"
-              value={settings?.business_name || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, business_name: e.target.value }))}
-            />
-            <input
-              className="input"
-              placeholder="Condicion IVA"
-              value={settings?.iva_condition || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, iva_condition: e.target.value }))}
-            />
-            <select
-              className="input"
-              value={settings?.arca_env || 'homologacion'}
-              onChange={(e) => setSettings((v) => ({ ...v, arca_env: e.target.value }))}
-            >
-              <option value="homologacion">ARCA homologacion</option>
-              <option value="produccion">ARCA produccion</option>
-            </select>
-
-            <input
-              className="input"
-              placeholder="ARCA CUIT"
-              value={settings?.arca_cuit || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, arca_cuit: e.target.value }))}
-            />
-            <input
-              className="input"
-              type="number"
-              placeholder="Pto vta local"
-              value={settings?.arca_pto_vta_store || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, arca_pto_vta_store: e.target.value }))}
-            />
-            <input
-              className="input"
-              type="number"
-              placeholder="Pto vta online"
-              value={settings?.arca_pto_vta_online || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, arca_pto_vta_online: e.target.value }))}
-            />
-
-            <input
-              className="input"
-              placeholder="ARCA cert path"
-              value={settings?.arca_cert_path || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, arca_cert_path: e.target.value }))}
-            />
-            <input
-              className="input"
-              placeholder="ARCA key path"
-              value={settings?.arca_key_path || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, arca_key_path: e.target.value }))}
-            />
-
-            <input
-              className="input"
-              type="number"
-              placeholder="Tienda Nube store_id"
-              value={settings?.tiendanube_store_id || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, tiendanube_store_id: e.target.value }))}
-            />
-            <input
-              className="input"
-              placeholder="Tienda Nube client_id"
-              value={settings?.tiendanube_client_id || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, tiendanube_client_id: e.target.value }))}
-            />
-            <input
-              className="input"
-              placeholder="Tienda Nube client_secret"
-              value={settings?.tiendanube_client_secret || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, tiendanube_client_secret: e.target.value }))}
-            />
-            <input
-              className="input"
-              placeholder="Tienda Nube access_token"
-              value={settings?.tiendanube_access_token || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, tiendanube_access_token: e.target.value }))}
-            />
-            <input
-              className="input"
-              placeholder="Tienda Nube webhook_secret"
-              value={settings?.tiendanube_webhook_secret || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, tiendanube_webhook_secret: e.target.value }))}
-            />
-
-            <input
-              className="input"
-              placeholder="Impresora ticket"
-              value={settings?.ticket_printer_name || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, ticket_printer_name: e.target.value }))}
-            />
-            <input
-              className="input"
-              placeholder="Impresora etiquetas"
-              value={settings?.label_printer_name || ''}
-              onChange={(e) => setSettings((v) => ({ ...v, label_printer_name: e.target.value }))}
-            />
-            <input
-              className="input"
-              type="number"
-              min="1"
-              placeholder="Garantia cambio de talle (dias)"
-              value={settings?.return_warranty_size_days ?? 30}
-              onChange={(e) => setSettings((v) => ({ ...v, return_warranty_size_days: e.target.value }))}
-            />
-            <input
-              className="input"
-              type="number"
-              min="1"
-              placeholder="Garantia por roturas (dias)"
-              value={settings?.return_warranty_breakage_days ?? 90}
-              onChange={(e) => setSettings((v) => ({ ...v, return_warranty_breakage_days: e.target.value }))}
-            />
-            <label className="inline-flex items-center gap-2 text-sm px-2">
-              <input
-                type="checkbox"
-                checked={toBool(settings?.auto_invoice_online_paid)}
-                onChange={(e) => setSettings((v) => ({ ...v, auto_invoice_online_paid: e.target.checked }))}
-              />
-              Facturar online automaticamente
-            </label>
+        <form className="card space-y-4" onSubmit={saveSettings}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Parametros del negocio e integraciones</h2>
+              <p className="text-sm text-gray-600">Facturacion y Tienda Nube quedaron en bloques separados para una carga mas clara.</p>
+            </div>
+            <button className="btn" type="submit" disabled={saving}>
+              Guardar parametros
+            </button>
           </div>
+
+          <section className="space-y-3 rounded-xl border border-gray-200 bg-white/60 p-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-600">Negocio y operacion</h3>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <input
+                className="input"
+                placeholder="Nombre comercial"
+                value={settings?.business_name || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, business_name: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder="Condicion IVA"
+                value={settings?.iva_condition || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, iva_condition: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder="Impresora ticket"
+                value={settings?.ticket_printer_name || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, ticket_printer_name: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder="Impresora etiquetas"
+                value={settings?.label_printer_name || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, label_printer_name: e.target.value }))}
+              />
+              <input
+                className="input"
+                type="number"
+                min="1"
+                placeholder="Garantia cambio de talle (dias)"
+                value={settings?.return_warranty_size_days ?? 30}
+                onChange={(e) => setSettings((v) => ({ ...v, return_warranty_size_days: e.target.value }))}
+              />
+              <input
+                className="input"
+                type="number"
+                min="1"
+                placeholder="Garantia por roturas (dias)"
+                value={settings?.return_warranty_breakage_days ?? 90}
+                onChange={(e) => setSettings((v) => ({ ...v, return_warranty_breakage_days: e.target.value }))}
+              />
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Margen compras por defecto (%)"
+                value={settings?.purchase_default_markup_pct ?? 100}
+                onChange={(e) => setSettings((v) => ({ ...v, purchase_default_markup_pct: e.target.value }))}
+              />
+            </div>
+          </section>
+
+          <section className="space-y-3 rounded-xl border border-gray-200 bg-white/60 p-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-600">Facturacion (ARCA)</h3>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <select
+                className="input"
+                value={settings?.arca_env || 'homologacion'}
+                onChange={(e) => setSettings((v) => ({ ...v, arca_env: e.target.value }))}
+              >
+                <option value="homologacion">ARCA homologacion</option>
+                <option value="produccion">ARCA produccion</option>
+              </select>
+              <input
+                className="input"
+                placeholder="ARCA CUIT"
+                value={settings?.arca_cuit || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, arca_cuit: e.target.value }))}
+              />
+              <input
+                className="input"
+                type="number"
+                placeholder="Pto vta local"
+                value={settings?.arca_pto_vta_store || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, arca_pto_vta_store: e.target.value }))}
+              />
+              <input
+                className="input"
+                type="number"
+                placeholder="Pto vta online"
+                value={settings?.arca_pto_vta_online || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, arca_pto_vta_online: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder={
+                  settings?.arca_cert_path_configured
+                    ? `ARCA cert path (actual: ${settings?.arca_cert_path_masked || 'configurado'})`
+                    : 'ARCA cert path'
+                }
+                value={settings?.arca_cert_path || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, arca_cert_path: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder={
+                  settings?.arca_key_path_configured
+                    ? `ARCA key path (actual: ${settings?.arca_key_path_masked || 'configurado'})`
+                    : 'ARCA key path'
+                }
+                value={settings?.arca_key_path || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, arca_key_path: e.target.value }))}
+              />
+              <label className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={toBool(settings?.auto_invoice_online_paid)}
+                  onChange={(e) => setSettings((v) => ({ ...v, auto_invoice_online_paid: e.target.checked }))}
+                />
+                Facturar online automaticamente
+              </label>
+            </div>
+          </section>
+
+          <section className="space-y-3 rounded-xl border border-gray-200 bg-white/60 p-3">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-600">Integracion Tienda Nube</h3>
+            <p className="text-xs text-gray-500">Estos campos son solo para el enlace de tienda online y webhooks.</p>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <input
+                className="input"
+                type="number"
+                placeholder="Tienda Nube store_id"
+                value={settings?.tiendanube_store_id || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_store_id: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder="Tienda Nube client_id"
+                value={settings?.tiendanube_client_id || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_client_id: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder={
+                  settings?.tiendanube_client_secret_configured
+                    ? `Tienda Nube client_secret (actual: ${settings?.tiendanube_client_secret_masked || 'configurado'})`
+                    : 'Tienda Nube client_secret'
+                }
+                value={settings?.tiendanube_client_secret || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_client_secret: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder={
+                  settings?.tiendanube_access_token_configured
+                    ? `Tienda Nube access_token (actual: ${settings?.tiendanube_access_token_masked || 'configurado'})`
+                    : 'Tienda Nube access_token'
+                }
+                value={settings?.tiendanube_access_token || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_access_token: e.target.value }))}
+              />
+              <input
+                className="input md:col-span-2"
+                placeholder={
+                  settings?.tiendanube_webhook_secret_configured
+                    ? `Tienda Nube webhook secret (actual: ${settings?.tiendanube_webhook_secret_masked || 'configurado'})`
+                    : 'Tienda Nube webhook secret (client_secret)'
+                }
+                value={settings?.tiendanube_webhook_secret || ''}
+                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_webhook_secret: e.target.value }))}
+              />
+            </div>
+          </section>
+
           <button className="btn" type="submit" disabled={saving}>
             Guardar parametros
           </button>

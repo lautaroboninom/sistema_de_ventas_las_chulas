@@ -3,6 +3,8 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import logging
+import math
 import mimetypes
 import os
 import random
@@ -16,6 +18,8 @@ from django.core.files.storage import default_storage
 from django.db import transaction
 from django.http import FileResponse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import permissions
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny
@@ -24,6 +28,8 @@ from rest_framework.views import APIView
 
 from ..permissions import user_has_permission
 from .helpers import _set_audit_user, exec_returning, exec_void, q, require_roles
+
+security_logger = logging.getLogger("security.integrations")
 
 
 TWO_DEC = Decimal('0.01')
@@ -52,6 +58,13 @@ PRODUCT_IMAGE_CT_TO_EXT = {
     'image/webp': '.webp',
     'image/gif': '.gif',
 }
+PROMO_TYPE_PERCENT = 'percent_off'
+PROMO_TYPE_X_FOR_Y = 'x_for_y'
+PROMO_TYPE_EXTERNAL = 'external'
+PROMO_CHANNELS = {'local', 'online', 'both'}
+PROMO_ACTIVATION_MODES = {'automatic', 'coupon', 'both'}
+PROMO_BOGO_MODES = {'sku', 'mix'}
+PRICING_SOURCES = {'local_engine', 'tiendanube'}
 
 DEFAULT_UI_PAGE_SETTINGS = {
     'app_name': 'Las Chulas',
@@ -64,6 +77,7 @@ DEFAULT_UI_PAGE_SETTINGS = {
         'productos': 'Productos',
         'compras': 'Compras',
         'ventas': 'Ventas',
+        'promociones': 'Promociones',
         'garantias': 'Cambios y devoluciones',
         'reportes': 'Reportes',
         'online': 'Online',
@@ -75,6 +89,7 @@ DEFAULT_UI_PAGE_SETTINGS = {
         'productos': 'Productos y variantes',
         'compras': 'Compras',
         'ventas': 'Ventas, devoluciones y facturacion',
+        'promociones': 'Promociones',
         'garantias': 'Cambios y devoluciones vigentes',
         'reportes': 'Reportes retail',
         'online': 'Online (Tienda Nube)',
@@ -82,7 +97,7 @@ DEFAULT_UI_PAGE_SETTINGS = {
         'config_paginas': 'Configuracion de paginas',
     },
 }
-VALID_DEFAULT_ROUTES = {'/pos', '/productos', '/compras', '/ventas', '/garantias', '/online', '/config'}
+VALID_DEFAULT_ROUTES = {'/pos', '/productos', '/compras', '/ventas', '/promociones', '/garantias', '/online', '/config'}
 
 
 def _default_ui_page_settings():
@@ -228,6 +243,30 @@ def _pct(val):
     return _to_decimal(val, 'porcentaje').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
 
 
+def _safe_pct(numerator, denominator):
+    den = _to_decimal(denominator or 0, 'denominador', allow_none=True) or Decimal('0')
+    if den <= 0:
+        return None
+    num = _to_decimal(numerator or 0, 'numerador', allow_none=True) or Decimal('0')
+    return ((num / den) * Decimal('100')).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+
+
+def _percentile(values, percentile):
+    vals = sorted(float(v) for v in (values or []) if v is not None)
+    if not vals:
+        return None
+    if len(vals) == 1:
+        return vals[0]
+    p = max(0.0, min(1.0, float(percentile)))
+    pos = (len(vals) - 1) * p
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return vals[lo]
+    frac = pos - lo
+    return vals[lo] + (vals[hi] - vals[lo]) * frac
+
+
 def _json(raw):
     if isinstance(raw, dict):
         return raw
@@ -266,6 +305,14 @@ def _can_override_return_warranty(request):
     return _user_role(request) == 'admin' or user_has_permission(request, 'action.ventas.devolver.override_garantia')
 
 
+def _can_manage_promotions(request):
+    return _user_role(request) == 'admin' or user_has_permission(request, 'action.promociones.editar')
+
+
+def _can_exchange_sale(request):
+    return _user_role(request) == 'admin' or user_has_permission(request, 'action.ventas.cambiar')
+
+
 def _parse_dates(request):
     today = timezone.localdate()
     since = (request.query_params.get('desde') or request.query_params.get('from') or (today - dt.timedelta(days=30)).isoformat()).strip()
@@ -284,10 +331,13 @@ def _load_settings():
     row = q('SELECT * FROM retail_settings WHERE id=1', one=True) or {}
     size_days = int(row.get('return_warranty_size_days') or 30)
     breakage_days = int(row.get('return_warranty_breakage_days') or 90)
+    purchase_markup = _to_decimal(row.get('purchase_default_markup_pct') or 100, 'purchase_default_markup_pct', allow_none=True) or Decimal('100')
     if size_days <= 0:
         size_days = 30
     if breakage_days <= 0:
         breakage_days = 90
+    if purchase_markup < 0:
+        purchase_markup = Decimal('100')
     return {
         'arca_env': row.get('arca_env') or 'homologacion',
         'arca_cuit': row.get('arca_cuit') or '',
@@ -297,10 +347,39 @@ def _load_settings():
         'tiendanube_access_token': row.get('tiendanube_access_token') or '',
         'tiendanube_webhook_secret': row.get('tiendanube_webhook_secret') or '',
         'auto_invoice_online_paid': bool(row.get('auto_invoice_online_paid')),
+        'purchase_default_markup_pct': purchase_markup.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
         'return_warranty_size_days': size_days,
         'return_warranty_breakage_days': breakage_days,
         'ui_page_settings': _normalize_ui_page_settings(row.get('ui_page_settings')),
     }
+
+
+_SENSITIVE_SETTINGS_FIELDS = (
+    'tiendanube_client_secret',
+    'tiendanube_access_token',
+    'tiendanube_webhook_secret',
+    'arca_key_path',
+    'arca_cert_path',
+)
+
+
+def _mask_secret_value(value):
+    raw = _clean_text(value)
+    if not raw:
+        return None
+    if len(raw) <= 4:
+        return '*' * len(raw)
+    return f"{'*' * (len(raw) - 4)}{raw[-4:]}"
+
+
+def _sanitize_retail_settings_response(row):
+    out = dict(row or {})
+    for field in _SENSITIVE_SETTINGS_FIELDS:
+        raw = out.pop(field, None)
+        configured = bool(_clean_text(raw))
+        out[f'{field}_configured'] = configured
+        out[f'{field}_masked'] = _mask_secret_value(raw) if configured else None
+    return out
 
 
 def _create_job(provider, job_type, payload, status='pending', last_error=None):
@@ -385,19 +464,191 @@ def _ensure_payment_account(payload, payment_method):
     account_code = _clean_text(payload.get('payment_account_code'))
     row = None
     if account_id:
-        row = q('SELECT id, code, label, active FROM retail_payment_accounts WHERE id=%s', [account_id], one=True)
+        row = q(
+            'SELECT id, code, label, payment_method, active FROM retail_payment_accounts WHERE id=%s',
+            [account_id],
+            one=True,
+        )
     elif account_code:
-        row = q('SELECT id, code, label, active FROM retail_payment_accounts WHERE LOWER(code)=LOWER(%s)', [account_code], one=True)
+        row = q(
+            'SELECT id, code, label, payment_method, active FROM retail_payment_accounts WHERE LOWER(code)=LOWER(%s)',
+            [account_code],
+            one=True,
+        )
     else:
         default_code = DEFAULT_ACCOUNT_BY_METHOD.get(payment_method)
         if default_code:
-            row = q('SELECT id, code, label, active FROM retail_payment_accounts WHERE code=%s', [default_code], one=True)
+            row = q(
+                'SELECT id, code, label, payment_method, active FROM retail_payment_accounts WHERE code=%s',
+                [default_code],
+                one=True,
+            )
 
     if not row:
         raise ValidationError('Cuenta/caja de cobro invalida')
     if not row.get('active'):
         raise ValidationError('Cuenta/caja inactiva')
+    account_method = _clean_text(row.get('payment_method'))
+    if account_method and payment_method and account_method.lower() != str(payment_method).lower():
+        raise ValidationError('Cuenta/caja incompatible con el medio de pago')
     return row
+
+
+def _sale_number(venta_id):
+    today = timezone.localdate().strftime('%Y%m%d')
+    return f"VTA-{today}-{int(venta_id):06d}"
+
+
+def _draft_number(draft_id):
+    today = timezone.localdate().strftime('%Y%m%d')
+    return f"DRF-{today}-{int(draft_id):06d}"
+
+
+def _load_sale_payments(sale_id, fallback_sale=None):
+    sid = _to_int(sale_id, 'sale_id', allow_none=True)
+    rows = []
+    if sid:
+        rows = q(
+            '''
+            SELECT sp.id, sp.sale_id, sp.payment_method, sp.payment_account_id,
+                   sp.amount_ars, sp.metadata, sp.created_at,
+                   COALESCE(pa.code,'') AS payment_account_code,
+                   COALESCE(pa.label,'') AS payment_account_label
+            FROM retail_sale_payments sp
+            LEFT JOIN retail_payment_accounts pa ON pa.id=sp.payment_account_id
+            WHERE sp.sale_id=%s
+            ORDER BY sp.id
+            ''',
+            [sid],
+        ) or []
+    if rows:
+        return rows
+    if not fallback_sale:
+        return []
+    return [
+        {
+            'id': None,
+            'sale_id': fallback_sale.get('id'),
+            'payment_method': fallback_sale.get('payment_method'),
+            'payment_account_id': fallback_sale.get('payment_account_id'),
+            'payment_account_code': fallback_sale.get('payment_account_code'),
+            'payment_account_label': fallback_sale.get('payment_account_label'),
+            'amount_ars': fallback_sale.get('total_ars'),
+            'metadata': {},
+            'created_at': fallback_sale.get('created_at'),
+        }
+    ]
+
+
+def _normalize_payments(payload, quote):
+    raw = (payload or {}).get('payments')
+    if raw is None:
+        payment_account = _ensure_payment_account(payload or {}, quote['payment_method'])
+        amount = _to_decimal(quote['total_ars'], 'total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        item = {
+            'method': quote['payment_method'],
+            'account_id': payment_account['id'],
+            'account_code': payment_account['code'],
+            'account_label': payment_account['label'],
+            'amount_ars': amount,
+            'metadata': {},
+        }
+        return [item], item
+
+    if not isinstance(raw, list) or not raw:
+        raise ValidationError('payments debe ser una lista no vacia')
+
+    rows = []
+    total = Decimal('0.00')
+    for idx, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            raise ValidationError(f'payments[{idx}] debe ser objeto')
+        method = _normalize_payment_method(item.get('method') or item.get('payment_method'))
+        account = _ensure_payment_account(
+            {
+                'payment_account_id': item.get('account_id') or item.get('payment_account_id'),
+                'payment_account_code': item.get('account_code') or item.get('payment_account_code'),
+            },
+            method,
+        )
+        amount = _money(item.get('amount_ars'))
+        if amount <= 0:
+            raise ValidationError(f'payments[{idx}].amount_ars debe ser mayor a 0')
+        metadata = _json(item.get('metadata')) or {}
+        row = {
+            'method': method,
+            'account_id': account['id'],
+            'account_code': account['code'],
+            'account_label': account['label'],
+            'amount_ars': amount.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+            'metadata': metadata if isinstance(metadata, dict) else {},
+        }
+        rows.append(row)
+        total += row['amount_ars']
+
+    expected = _to_decimal(quote['total_ars'], 'total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if total.quantize(TWO_DEC, rounding=ROUND_HALF_UP) != expected:
+        raise ValidationError('La suma de payments debe coincidir exactamente con total_ars')
+
+    primary = sorted(
+        rows,
+        key=lambda item: (item['amount_ars'], item['method'] == quote['payment_method']),
+        reverse=True,
+    )[0]
+    return rows, primary
+
+
+def _persist_sale_payments(sale_id, payments):
+    for row in payments or []:
+        amount = _to_decimal(row.get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if amount <= 0:
+            continue
+        exec_void(
+            '''
+            INSERT INTO retail_sale_payments(
+              sale_id, payment_method, payment_account_id, amount_ars, metadata
+            )
+            VALUES (%s,%s,%s,%s,%s::jsonb)
+            ''',
+            [
+                sale_id,
+                _normalize_payment_method(row.get('method') or row.get('payment_method')),
+                _to_int(row.get('account_id') or row.get('payment_account_id'), 'payment_account_id'),
+                amount,
+                json.dumps(_json(row.get('metadata')) or {}, ensure_ascii=False),
+            ],
+        )
+
+
+def _split_amount_across_payments(payments, total_amount):
+    amount = _to_decimal(total_amount, 'total_amount').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    rows = []
+    prepared = []
+    base_total = Decimal('0.00')
+    for row in payments or []:
+        val = _to_decimal(row.get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if val <= 0:
+            continue
+        prepared.append((row, val))
+        base_total += val
+    if not prepared:
+        return rows
+
+    if base_total == amount:
+        return [{'payment': row, 'amount_ars': val} for row, val in prepared]
+
+    assigned = Decimal('0.00')
+    for idx, (row, val) in enumerate(prepared):
+        if idx == len(prepared) - 1:
+            part = (amount - assigned).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        else:
+            ratio = (val / base_total) if base_total > 0 else Decimal('0')
+            part = (amount * ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            assigned += part
+        if part <= 0:
+            continue
+        rows.append({'payment': row, 'amount_ars': part})
+    return rows
 
 
 def _open_cash_session(lock=False):
@@ -696,6 +947,7 @@ class RetailVariantesView(APIView):
         _require_staff(request)
         qtxt = (request.query_params.get('q') or '').strip()
         only_active = (request.query_params.get('active') or '').strip().lower()
+        limit = _to_int(request.query_params.get('limit') or 0, 'limit', allow_none=True)
         params = []
         filters = []
         if qtxt:
@@ -706,6 +958,10 @@ class RetailVariantesView(APIView):
         if only_active in ('0', 'false', 'no'):
             filters.append('v.active=FALSE')
         where = f"WHERE {' AND '.join(filters)}" if filters else ''
+        limit_sql = ''
+        if limit and int(limit) > 0:
+            limit_sql = 'LIMIT %s'
+            params.append(max(1, min(int(limit), 300)))
 
         rows = q(
             f'''
@@ -720,6 +976,7 @@ class RetailVariantesView(APIView):
             JOIN retail_products p ON p.id=v.product_id
             {where}
             ORDER BY p.name, v.id
+            {limit_sql}
             ''',
             params,
         ) or []
@@ -964,7 +1221,9 @@ def _load_compra(compra_id, include_costs=False):
     items = q(
         '''
         SELECT pi.id, pi.purchase_id, pi.variant_id, pi.quantity,
-               pi.unit_cost_currency, pi.unit_cost_ars, pi.line_total_ars,
+               pi.unit_cost_currency, pi.unit_cost_ars, pi.suggested_markup_pct,
+               pi.unit_price_suggested_ars, pi.unit_price_final_ars,
+               pi.real_margin_pct, pi.line_total_ars,
                v.sku, v.barcode_internal, v.option_signature,
                rp.name AS producto
         FROM retail_purchase_items pi
@@ -979,9 +1238,67 @@ def _load_compra(compra_id, include_costs=False):
         for item in items:
             item['unit_cost_currency'] = None
             item['unit_cost_ars'] = None
+            item['suggested_markup_pct'] = None
+            item['unit_price_suggested_ars'] = None
+            item['unit_price_final_ars'] = None
+            item['real_margin_pct'] = None
             item['line_total_ars'] = None
     head['items'] = items
     return head
+
+
+class RetailComprasConfigView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        row = q('SELECT purchase_default_markup_pct FROM retail_settings WHERE id=1', one=True) or {}
+        markup = _to_decimal(row.get('purchase_default_markup_pct') or 100, 'purchase_default_markup_pct', allow_none=True) or Decimal('100')
+        if markup < 0:
+            markup = Decimal('100')
+        return Response(
+            {
+                'purchase_default_markup_pct': markup.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'formula': 'markup_on_cost',
+            }
+        )
+
+
+class RetailComprasProveedoresView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        search = _clean_text(request.query_params.get('q'))
+        limit = _to_int(request.query_params.get('limit') or 100, 'limit', allow_none=True) or 100
+        if limit <= 0:
+            limit = 100
+        limit = min(limit, 500)
+
+        where_sql = ''
+        params = []
+        if search:
+            where_sql = 'WHERE LOWER(s.name) LIKE %s'
+            params.append(f'%{search.lower()}%')
+        params.append(limit)
+
+        rows = q(
+            f'''
+            SELECT s.id,
+                   s.name,
+                   s.active,
+                   COUNT(p.id)::int AS purchases_count,
+                   MAX(p.purchase_date) AS last_purchase_date
+            FROM retail_suppliers s
+            LEFT JOIN retail_purchases p ON p.supplier_id=s.id
+            {where_sql}
+            GROUP BY s.id, s.name, s.active
+            ORDER BY LOWER(s.name), s.id
+            LIMIT %s
+            ''',
+            params,
+        ) or []
+        return Response(rows)
 
 
 class RetailComprasView(APIView):
@@ -1021,6 +1338,12 @@ class RetailComprasView(APIView):
         items = data.get('items') or []
         if not isinstance(items, list) or not items:
             raise ValidationError('items requerido')
+        cfg = q('SELECT purchase_default_markup_pct FROM retail_settings WHERE id=1', one=True) or {}
+        suggested_markup_pct = _to_decimal(cfg.get('purchase_default_markup_pct') or 100, 'purchase_default_markup_pct', allow_none=True) or Decimal('100')
+        if suggested_markup_pct < 0:
+            suggested_markup_pct = Decimal('100')
+        suggested_markup_pct = suggested_markup_pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        suggested_ratio = (Decimal('1.00') + (suggested_markup_pct / Decimal('100.00')))
 
         purchase_id = exec_returning(
             '''
@@ -1054,6 +1377,15 @@ class RetailComprasView(APIView):
                 raise ValidationError('unit_cost_currency no puede ser negativo')
             unit_cost_ars = unit_cost_currency if currency == 'ARS' else (unit_cost_currency * fx_rate)
             unit_cost_ars = unit_cost_ars.quantize(FOUR_DEC, rounding=ROUND_HALF_UP)
+            unit_price_suggested_ars = (unit_cost_ars * suggested_ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            unit_price_final_ars = _money(
+                item.get('unit_price_final_ars')
+                or item.get('precio_final_ars')
+                or item.get('precio_final')
+            )
+            if unit_price_final_ars < 0:
+                raise ValidationError('unit_price_final_ars no puede ser negativo')
+            real_margin_pct = _safe_pct(unit_price_final_ars - unit_cost_ars, unit_cost_ars)
             line_total = (unit_cost_ars * Decimal(qty)).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
 
             variant = q(
@@ -1077,13 +1409,29 @@ class RetailComprasView(APIView):
                 '''
                 INSERT INTO retail_purchase_items(
                   purchase_id, variant_id, quantity,
-                  unit_cost_currency, unit_cost_ars, line_total_ars
+                  unit_cost_currency, unit_cost_ars, suggested_markup_pct,
+                  unit_price_suggested_ars, unit_price_final_ars, real_margin_pct,
+                  line_total_ars
                 )
-                VALUES (%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ''',
-                [purchase_id, variant_id, qty, unit_cost_currency, unit_cost_ars, line_total],
+                [
+                    purchase_id,
+                    variant_id,
+                    qty,
+                    unit_cost_currency,
+                    unit_cost_ars,
+                    suggested_markup_pct,
+                    unit_price_suggested_ars,
+                    unit_price_final_ars,
+                    real_margin_pct,
+                    line_total,
+                ],
             )
-            exec_void('UPDATE retail_product_variants SET stock_on_hand=%s, cost_avg_ars=%s WHERE id=%s', [new_stock, new_cost, variant_id])
+            exec_void(
+                'UPDATE retail_product_variants SET stock_on_hand=%s, cost_avg_ars=%s, price_store_ars=%s WHERE id=%s',
+                [new_stock, new_cost, unit_price_final_ars, variant_id],
+            )
             exec_void(
                 '''
                 INSERT INTO retail_stock_movements(
@@ -1355,6 +1703,7 @@ class RetailVentasView(APIView):
             f'''
             SELECT s.id, s.sale_number, s.created_at, s.channel, s.status,
                    s.payment_method, s.total_ars, s.requires_invoice,
+                   s.promotion_discount_total_ars, s.pricing_source,
                    COALESCE(pa.code,'') AS payment_account_code,
                    COALESCE(pa.label,'') AS payment_account_label,
                    COALESCE((s.customer_snapshot->>'name'),'') AS customer_name,
@@ -1554,6 +1903,370 @@ def _normalize_payment_method(raw):
     return value
 
 
+def _normalize_pricing_source(raw, channel):
+    value = (_clean_text(raw) or '').lower()
+    if not value:
+        return 'local_engine'
+    if value not in PRICING_SOURCES:
+        raise ValidationError('pricing_source invalido (local_engine|tiendanube)')
+    if channel == 'local' and value != 'local_engine':
+        raise ValidationError('pricing_source tiendanube solo aplica para canal online')
+    return value
+
+
+def _normalize_coupon_codes(payload):
+    data = payload if isinstance(payload, dict) else {}
+    out = []
+    seen = set()
+
+    def push(code):
+        txt = _clean_text(code)
+        if not txt:
+            return
+        for token in str(txt).split(','):
+            t = token.strip()
+            if not t:
+                continue
+            key = t.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(t)
+
+    push(data.get('coupon_code') or data.get('cupon'))
+    many = data.get('coupon_codes')
+    if isinstance(many, list):
+        for item in many:
+            push(item)
+    elif many is not None:
+        push(many)
+    return out
+
+
+def _load_active_promotions(channel, coupon_codes):
+    coupon_keys = [str(c).strip().lower() for c in (coupon_codes or []) if _clean_text(c)]
+    rows = q(
+        '''
+        SELECT p.*,
+               COALESCE(pp.product_ids, ARRAY[]::BIGINT[]) AS product_ids,
+               COALESCE(pv.variant_ids, ARRAY[]::BIGINT[]) AS variant_ids
+        FROM retail_promotions p
+        LEFT JOIN LATERAL (
+          SELECT array_agg(rpp.product_id ORDER BY rpp.product_id) AS product_ids
+          FROM retail_promotion_products rpp
+          WHERE rpp.promotion_id=p.id
+        ) pp ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT array_agg(rpv.variant_id ORDER BY rpv.variant_id) AS variant_ids
+          FROM retail_promotion_variants rpv
+          WHERE rpv.promotion_id=p.id
+        ) pv ON TRUE
+        WHERE p.active=TRUE
+          AND p.channel_scope IN ('both', %s)
+          AND (p.valid_from IS NULL OR p.valid_from <= NOW())
+          AND (p.valid_until IS NULL OR p.valid_until >= NOW())
+          AND (
+            p.activation_mode IN ('automatic', 'both')
+            OR (
+              p.activation_mode = 'coupon'
+              AND LOWER(COALESCE(p.coupon_code,'')) = ANY(%s)
+            )
+          )
+        ORDER BY p.priority ASC, p.id ASC
+        ''',
+        [channel, coupon_keys],
+    ) or []
+
+    out = []
+    for row in rows:
+        product_ids = row.get('product_ids') or []
+        variant_ids = row.get('variant_ids') or []
+        pids = set()
+        vids = set()
+        for pid in product_ids:
+            try:
+                pids.add(int(pid))
+            except (TypeError, ValueError):
+                continue
+        for vid in variant_ids:
+            try:
+                vids.add(int(vid))
+            except (TypeError, ValueError):
+                continue
+        out.append(
+            {
+                'id': int(row['id']),
+                'name': _clean_text(row.get('name')) or f"Promo {int(row['id'])}",
+                'promo_type': _clean_text(row.get('promo_type')) or PROMO_TYPE_PERCENT,
+                'priority': int(row.get('priority') or 100),
+                'coupon_code': _clean_text(row.get('coupon_code')),
+                'combinable': bool(row.get('combinable')),
+                'bogo_mode': _clean_text(row.get('bogo_mode')),
+                'buy_qty': int(row.get('buy_qty') or 0),
+                'pay_qty': int(row.get('pay_qty') or 0),
+                'discount_pct': _to_decimal(row.get('discount_pct') or 0, 'discount_pct', allow_none=True) or Decimal('0'),
+                'applies_to_all_products': bool(row.get('applies_to_all_products')),
+                'product_ids': pids,
+                'variant_ids': vids,
+            }
+        )
+    return out
+
+
+def _promo_matches_line(promo, line):
+    ptype = (_clean_text(promo.get('promo_type')) or PROMO_TYPE_PERCENT).lower()
+    bogo_mode = (_clean_text(promo.get('bogo_mode')) or '').lower()
+    if ptype == PROMO_TYPE_X_FOR_Y and bogo_mode == 'mix':
+        return True
+    if ptype == PROMO_TYPE_X_FOR_Y and bogo_mode == 'sku':
+        return int(line.get('variant_id') or 0) in (promo.get('variant_ids') or set())
+    if bool(promo.get('applies_to_all_products')):
+        return True
+    return int(line.get('product_id') or 0) in (promo.get('product_ids') or set())
+
+
+def _sync_line_price_state(line):
+    qty = int(line.get('quantity') or 0)
+    if qty <= 0:
+        line['unit_price_current_ars'] = Decimal('0.00')
+        return
+    line_pre = _to_decimal(line.get('line_pre_modifier_ars') or 0, 'line_pre_modifier_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    line['line_pre_modifier_ars'] = line_pre
+    line['unit_price_current_ars'] = (line_pre / Decimal(qty)).quantize(FOUR_DEC, rounding=ROUND_HALF_UP)
+
+
+def _build_promo_application(promo, total_discount, line_rows, metadata=None):
+    total = _to_decimal(total_discount or 0, 'discount_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if total <= 0:
+        return None
+    return {
+        'promotion_id': promo.get('id'),
+        'source': 'local_engine',
+        'promotion_name': promo.get('name') or '',
+        'promo_type': promo.get('promo_type') or PROMO_TYPE_PERCENT,
+        'priority': int(promo.get('priority') or 100),
+        'coupon_code': _clean_text(promo.get('coupon_code')),
+        'discount_amount_ars': total,
+        'metadata': metadata or {},
+        'lines': line_rows,
+    }
+
+
+def _apply_percent_promo(lines, promo):
+    pct = _to_decimal(promo.get('discount_pct') or 0, 'discount_pct').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if pct <= 0:
+        return None
+
+    total_discount = Decimal('0.00')
+    line_rows = []
+    for line in lines:
+        if not _promo_matches_line(promo, line):
+            continue
+        eligible = max(0, int(line['quantity']) - int(line.get('locked_units') or 0))
+        if eligible <= 0:
+            continue
+        unit = _to_decimal(line.get('unit_price_current_ars') or 0, 'unit_price_current_ars').quantize(FOUR_DEC, rounding=ROUND_HALF_UP)
+        if unit <= 0:
+            continue
+
+        line_discount = (unit * Decimal(eligible) * pct / Decimal('100.00')).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        cap = _to_decimal(line.get('line_pre_modifier_ars') or 0, 'line_pre_modifier_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if line_discount > cap:
+            line_discount = cap
+        if line_discount <= 0:
+            continue
+
+        line['line_pre_modifier_ars'] = (cap - line_discount).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        line['promotion_discount_ars'] = (_to_decimal(line.get('promotion_discount_ars') or 0, 'promotion_discount_ars') + line_discount).quantize(
+            TWO_DEC, rounding=ROUND_HALF_UP
+        )
+        if not bool(promo.get('combinable')):
+            line['locked_units'] = min(int(line['quantity']), int(line.get('locked_units') or 0) + eligible)
+        _sync_line_price_state(line)
+
+        total_discount += line_discount
+        line_rows.append(
+            {
+                'line_key': int(line['line_key']),
+                'variant_id': int(line['variant_id']),
+                'applied_qty': eligible,
+                'discount_amount_ars': line_discount,
+                'metadata': {'kind': 'percent_off', 'discount_pct': str(pct)},
+            }
+        )
+
+    return _build_promo_application(
+        promo,
+        total_discount,
+        line_rows,
+        metadata={'kind': 'percent_off', 'discount_pct': str(pct)},
+    )
+
+
+def _apply_x_for_y_sku(lines, promo):
+    buy_qty = int(promo.get('buy_qty') or 0)
+    pay_qty = int(promo.get('pay_qty') or 0)
+    if buy_qty <= 0 or pay_qty < 0 or pay_qty >= buy_qty:
+        return None
+    free_per_group = buy_qty - pay_qty
+    total_discount = Decimal('0.00')
+    line_rows = []
+
+    for line in lines:
+        if not _promo_matches_line(promo, line):
+            continue
+        eligible = max(0, int(line['quantity']) - int(line.get('locked_units') or 0))
+        groups = eligible // buy_qty
+        if groups <= 0:
+            continue
+        discount_units = groups * free_per_group
+        participants = groups * buy_qty
+        unit = _to_decimal(line.get('unit_price_current_ars') or 0, 'unit_price_current_ars').quantize(FOUR_DEC, rounding=ROUND_HALF_UP)
+        if unit <= 0:
+            continue
+
+        line_discount = (unit * Decimal(discount_units)).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        cap = _to_decimal(line.get('line_pre_modifier_ars') or 0, 'line_pre_modifier_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if line_discount > cap:
+            line_discount = cap
+        if line_discount <= 0:
+            continue
+
+        line['line_pre_modifier_ars'] = (cap - line_discount).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        line['promotion_discount_ars'] = (_to_decimal(line.get('promotion_discount_ars') or 0, 'promotion_discount_ars') + line_discount).quantize(
+            TWO_DEC, rounding=ROUND_HALF_UP
+        )
+        if not bool(promo.get('combinable')):
+            line['locked_units'] = min(int(line['quantity']), int(line.get('locked_units') or 0) + participants)
+        _sync_line_price_state(line)
+
+        total_discount += line_discount
+        line_rows.append(
+            {
+                'line_key': int(line['line_key']),
+                'variant_id': int(line['variant_id']),
+                'applied_qty': discount_units,
+                'discount_amount_ars': line_discount,
+                'metadata': {'kind': 'x_for_y_sku', 'buy_qty': buy_qty, 'pay_qty': pay_qty, 'participants': participants},
+            }
+        )
+
+    return _build_promo_application(
+        promo,
+        total_discount,
+        line_rows,
+        metadata={'kind': 'x_for_y_sku', 'buy_qty': buy_qty, 'pay_qty': pay_qty},
+    )
+
+
+def _apply_x_for_y_mix(lines, promo):
+    buy_qty = int(promo.get('buy_qty') or 0)
+    pay_qty = int(promo.get('pay_qty') or 0)
+    if buy_qty <= 0 or pay_qty < 0 or pay_qty >= buy_qty:
+        return None
+    free_per_group = buy_qty - pay_qty
+
+    unit_rows = []
+    for line in lines:
+        if not _promo_matches_line(promo, line):
+            continue
+        eligible = max(0, int(line['quantity']) - int(line.get('locked_units') or 0))
+        if eligible <= 0:
+            continue
+        unit_price = _to_decimal(line.get('unit_price_current_ars') or 0, 'unit_price_current_ars').quantize(FOUR_DEC, rounding=ROUND_HALF_UP)
+        for _ in range(eligible):
+            unit_rows.append({'line_key': int(line['line_key']), 'variant_id': int(line['variant_id']), 'unit_price': unit_price})
+
+    total_units = len(unit_rows)
+    groups = total_units // buy_qty
+    if groups <= 0:
+        return None
+
+    discount_units = groups * free_per_group
+    participants = groups * buy_qty
+    unit_rows.sort(key=lambda row: (row['unit_price'], row['line_key'], row['variant_id']))
+    discounted = unit_rows[:discount_units]
+    involved = unit_rows[:participants]
+
+    discount_by_line = {}
+    discount_qty_by_line = {}
+    involved_qty_by_line = {}
+
+    for row in discounted:
+        lk = int(row['line_key'])
+        discount_by_line[lk] = (discount_by_line.get(lk) or Decimal('0.00')) + _to_decimal(row['unit_price'], 'unit_price')
+        discount_qty_by_line[lk] = int(discount_qty_by_line.get(lk) or 0) + 1
+    for row in involved:
+        lk = int(row['line_key'])
+        involved_qty_by_line[lk] = int(involved_qty_by_line.get(lk) or 0) + 1
+
+    total_discount = Decimal('0.00')
+    line_rows = []
+    by_key = {int(line['line_key']): line for line in lines}
+    for line_key, line_discount_raw in discount_by_line.items():
+        line = by_key.get(int(line_key))
+        if not line:
+            continue
+        line_discount = _to_decimal(line_discount_raw or 0, 'line_discount').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        cap = _to_decimal(line.get('line_pre_modifier_ars') or 0, 'line_pre_modifier_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if line_discount > cap:
+            line_discount = cap
+        if line_discount <= 0:
+            continue
+
+        line['line_pre_modifier_ars'] = (cap - line_discount).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        line['promotion_discount_ars'] = (_to_decimal(line.get('promotion_discount_ars') or 0, 'promotion_discount_ars') + line_discount).quantize(
+            TWO_DEC, rounding=ROUND_HALF_UP
+        )
+        if not bool(promo.get('combinable')):
+            line['locked_units'] = min(
+                int(line['quantity']),
+                int(line.get('locked_units') or 0) + int(involved_qty_by_line.get(int(line_key)) or 0),
+            )
+        _sync_line_price_state(line)
+
+        total_discount += line_discount
+        line_rows.append(
+            {
+                'line_key': int(line['line_key']),
+                'variant_id': int(line['variant_id']),
+                'applied_qty': int(discount_qty_by_line.get(int(line_key)) or 0),
+                'discount_amount_ars': line_discount,
+                'metadata': {
+                    'kind': 'x_for_y_mix',
+                    'buy_qty': buy_qty,
+                    'pay_qty': pay_qty,
+                    'participants': int(involved_qty_by_line.get(int(line_key)) or 0),
+                },
+            }
+        )
+
+    return _build_promo_application(
+        promo,
+        total_discount,
+        line_rows,
+        metadata={'kind': 'x_for_y_mix', 'buy_qty': buy_qty, 'pay_qty': pay_qty},
+    )
+
+
+def _apply_local_promotions(lines, promotions):
+    out = []
+    for promo in promotions:
+        ptype = _clean_text(promo.get('promo_type')) or PROMO_TYPE_PERCENT
+        bogo_mode = _clean_text(promo.get('bogo_mode'))
+        app = None
+        if ptype == PROMO_TYPE_PERCENT:
+            app = _apply_percent_promo(lines, promo)
+        elif ptype == PROMO_TYPE_X_FOR_Y:
+            if bogo_mode == 'mix':
+                app = _apply_x_for_y_mix(lines, promo)
+            else:
+                app = _apply_x_for_y_sku(lines, promo)
+        if app:
+            out.append(app)
+    return out
+
+
 def _get_items(payload):
     items = payload.get('items') or []
     if not isinstance(items, list) or not items:
@@ -1567,13 +2280,29 @@ def _get_items(payload):
         if qty <= 0:
             raise ValidationError('quantity debe ser mayor a 0')
         override = _to_decimal(item.get('unit_price_override_ars'), 'unit_price_override_ars', allow_none=True)
-        parsed.append({'variant_id': variant_id, 'quantity': qty, 'unit_price_override_ars': override})
+        unit_price_net = _to_decimal(
+            item.get('unit_price_net_ars') or item.get('unit_price_paid_ars') or item.get('unit_price_external_ars'),
+            'unit_price_net_ars',
+            allow_none=True,
+        )
+        line_discount = _to_decimal(item.get('line_discount_ars'), 'line_discount_ars', allow_none=True)
+        parsed.append(
+            {
+                'variant_id': variant_id,
+                'quantity': qty,
+                'unit_price_override_ars': override,
+                'unit_price_net_ars': unit_price_net,
+                'line_discount_ars': line_discount,
+            }
+        )
     return parsed
 
 
 def _build_quote(request, payload, lock_variants=False):
     channel = _normalize_channel(payload.get('channel'))
     payment_method = _normalize_payment_method(payload.get('payment_method'))
+    pricing_source = _normalize_pricing_source(payload.get('pricing_source'), channel)
+    coupon_codes = _normalize_coupon_codes(payload)
     items = _get_items(payload)
 
     variants = {}
@@ -1588,68 +2317,257 @@ def _build_quote(request, payload, lock_variants=False):
             raise ValidationError(f"Variante inactiva: {item['variant_id']}")
         variants[item['variant_id']] = row
 
-    modifier_pct = PAYMENT_MODIFIERS[payment_method]
+    modifier_pct = PAYMENT_MODIFIERS[payment_method] if pricing_source == 'local_engine' and channel == 'local' else Decimal('0.00')
     modifier_ratio = (Decimal('1.00') + (modifier_pct / Decimal('100.00')))
 
     subtotal = Decimal('0.00')
-    total = Decimal('0.00')
     lines = []
     any_override = False
 
-    for item in items:
+    for idx, item in enumerate(items, start=1):
         variant = variants[item['variant_id']]
         qty = int(item['quantity'])
         if lock_variants and int(variant['stock_on_hand']) < qty:
             raise ValidationError(f"Stock insuficiente para variante {variant['id']}")
 
         list_price = _to_decimal(variant['price_store_ars'] if channel == 'local' else variant['price_online_ars'], 'price')
-        if item['unit_price_override_ars'] is not None:
-            if not _can_override_price(request):
-                raise PermissionDenied('No autorizado para override de precio')
-            unit_price = _to_decimal(item['unit_price_override_ars'], 'unit_price_override_ars')
-            any_override = True
+        if pricing_source == 'tiendanube':
+            unit_price = _to_decimal(item.get('unit_price_net_ars'), 'unit_price_net_ars', allow_none=True) or list_price
         else:
-            unit_price = list_price
+            if item['unit_price_override_ars'] is not None:
+                if not _can_override_price(request):
+                    raise PermissionDenied('No autorizado para override de precio')
+                unit_price = _to_decimal(item['unit_price_override_ars'], 'unit_price_override_ars')
+                any_override = True
+            else:
+                unit_price = list_price
 
         line_subtotal = (unit_price * Decimal(qty)).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
-        line_total = (line_subtotal * modifier_ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
-
         subtotal += line_subtotal
-        total += line_total
-
         lines.append(
             {
+                'line_key': idx,
                 'variant_id': variant['id'],
+                'product_id': variant['product_id'],
                 'quantity': qty,
                 'unit_price_list_ars': list_price.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
-                'unit_price_final_ars': (unit_price * modifier_ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP),
                 'unit_price_base_ars': unit_price.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'unit_price_current_ars': unit_price.quantize(FOUR_DEC, rounding=ROUND_HALF_UP),
                 'unit_cost_snapshot_ars': _to_decimal(variant.get('cost_avg_ars') or 0, 'cost_avg_ars').quantize(FOUR_DEC, rounding=ROUND_HALF_UP),
                 'line_subtotal_ars': line_subtotal,
-                'line_total_ars': line_total,
+                'line_pre_modifier_ars': line_subtotal,
+                'line_total_ars': line_subtotal,
+                'promotion_discount_ars': Decimal('0.00'),
+                'locked_units': 0,
             }
         )
 
     subtotal = subtotal.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    applied_promotions = []
+    if pricing_source == 'local_engine':
+        promotions = _load_active_promotions(channel, coupon_codes)
+        applied_promotions = _apply_local_promotions(lines, promotions)
+    else:
+        inferred_total = Decimal('0.00')
+        promo_lines = []
+        for line, src in zip(lines, items):
+            explicit_discount = _to_decimal(src.get('line_discount_ars'), 'line_discount_ars', allow_none=True)
+            if explicit_discount is None:
+                list_total = (_to_decimal(line['unit_price_list_ars'], 'unit_price_list_ars') * Decimal(line['quantity'])).quantize(
+                    TWO_DEC, rounding=ROUND_HALF_UP
+                )
+                explicit_discount = (list_total - _to_decimal(line['line_pre_modifier_ars'], 'line_pre_modifier_ars')).quantize(
+                    TWO_DEC, rounding=ROUND_HALF_UP
+                )
+            if explicit_discount < 0:
+                explicit_discount = Decimal('0.00')
+            line['promotion_discount_ars'] = explicit_discount.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            line['line_subtotal_ars'] = (
+                _to_decimal(line.get('line_pre_modifier_ars') or 0, 'line_pre_modifier_ars') + line['promotion_discount_ars']
+            ).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            if line['promotion_discount_ars'] > 0:
+                inferred_total += line['promotion_discount_ars']
+                promo_lines.append(
+                    {
+                        'line_key': int(line['line_key']),
+                        'variant_id': int(line['variant_id']),
+                        'applied_qty': int(line['quantity']),
+                        'discount_amount_ars': line['promotion_discount_ars'],
+                        'metadata': {'kind': 'external_line_discount'},
+                    }
+                )
+        inferred_total = inferred_total.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if inferred_total > 0:
+            applied_promotions.append(
+                {
+                    'promotion_id': None,
+                    'source': 'tiendanube',
+                    'promotion_name': 'Descuentos Tienda Nube',
+                    'promo_type': PROMO_TYPE_EXTERNAL,
+                    'priority': 100,
+                    'coupon_code': ','.join(coupon_codes) if coupon_codes else None,
+                    'discount_amount_ars': inferred_total,
+                    'metadata': {'kind': 'tiendanube_external', 'coupon_codes': coupon_codes},
+                    'lines': promo_lines,
+                }
+            )
+        subtotal = Decimal('0.00')
+        for line in lines:
+            subtotal += _to_decimal(line.get('line_subtotal_ars') or 0, 'line_subtotal_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        subtotal = subtotal.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+
+    promotion_discount_total = Decimal('0.00')
+    total = Decimal('0.00')
+    for line in lines:
+        line_pre = _to_decimal(line.get('line_pre_modifier_ars') or 0, 'line_pre_modifier_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        promo_discount = _to_decimal(line.get('promotion_discount_ars') or 0, 'promotion_discount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if promo_discount < 0:
+            promo_discount = Decimal('0.00')
+        if promo_discount > _to_decimal(line['line_subtotal_ars'], 'line_subtotal_ars'):
+            promo_discount = _to_decimal(line['line_subtotal_ars'], 'line_subtotal_ars')
+        line['promotion_discount_ars'] = promo_discount
+        line['line_pre_modifier_ars'] = line_pre
+        line_total = (line_pre * modifier_ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        line['line_total_ars'] = line_total
+        line['unit_price_final_ars'] = (
+            line_total / Decimal(max(1, int(line['quantity'])))
+        ).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        promotion_discount_total += promo_discount
+        total += line_total
+
+    promotion_discount_total = promotion_discount_total.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    subtotal_after_promotions = (subtotal - promotion_discount_total).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if subtotal_after_promotions < 0:
+        subtotal_after_promotions = Decimal('0.00')
     total = total.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
-    modifier_amount = (total - subtotal).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    modifier_amount = (total - subtotal_after_promotions).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+
+    out_lines = []
+    for line in lines:
+        out_lines.append(
+            {
+                'line_key': int(line['line_key']),
+                'variant_id': int(line['variant_id']),
+                'quantity': int(line['quantity']),
+                'unit_price_list_ars': _to_decimal(line['unit_price_list_ars'], 'unit_price_list_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'unit_price_base_ars': _to_decimal(line['unit_price_base_ars'], 'unit_price_base_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'unit_price_final_ars': _to_decimal(line['unit_price_final_ars'], 'unit_price_final_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'unit_cost_snapshot_ars': _to_decimal(line['unit_cost_snapshot_ars'], 'unit_cost_snapshot_ars').quantize(FOUR_DEC, rounding=ROUND_HALF_UP),
+                'line_subtotal_ars': _to_decimal(line['line_subtotal_ars'], 'line_subtotal_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'promotion_discount_ars': _to_decimal(line['promotion_discount_ars'], 'promotion_discount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'line_total_ars': _to_decimal(line['line_total_ars'], 'line_total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+            }
+        )
+
+    promo_out = []
+    for promo in applied_promotions:
+        promo_out.append(
+            {
+                'promotion_id': promo.get('promotion_id'),
+                'source': promo.get('source') or 'local_engine',
+                'promotion_name': promo.get('promotion_name') or '',
+                'promo_type': promo.get('promo_type') or PROMO_TYPE_PERCENT,
+                'priority': int(promo.get('priority') or 100),
+                'coupon_code': _clean_text(promo.get('coupon_code')),
+                'discount_amount_ars': _to_decimal(promo.get('discount_amount_ars') or 0, 'discount_amount_ars').quantize(
+                    TWO_DEC, rounding=ROUND_HALF_UP
+                ),
+                'metadata': promo.get('metadata') or {},
+                'lines': promo.get('lines') or [],
+            }
+        )
 
     return {
         'channel': channel,
         'payment_method': payment_method,
+        'pricing_source': pricing_source,
+        'coupon_codes': coupon_codes,
         'modifier_pct': modifier_pct,
         'modifier_amount_ars': modifier_amount,
         'subtotal_ars': subtotal,
+        'promotion_discount_total_ars': promotion_discount_total,
+        'subtotal_after_promotions_ars': subtotal_after_promotions,
         'total_ars': total,
         'invoice_required': payment_method in INVOICE_REQUIRED_METHODS,
-        'items': lines,
+        'items': out_lines,
+        'applied_promotions': promo_out,
         'any_override': any_override,
     }
 
 
-def _sale_number(venta_id):
-    today = timezone.localdate().strftime('%Y%m%d')
-    return f"VTA-{today}-{int(venta_id):06d}"
+def _persist_sale_promotions(sale_id, quote, persisted_items):
+    applied_promotions = (quote or {}).get('applied_promotions') or []
+    if not applied_promotions:
+        return
+    item_by_line_key = {}
+    for row in persisted_items or []:
+        try:
+            item_by_line_key[int(row.get('line_key'))] = int(row.get('sale_item_id'))
+        except (TypeError, ValueError):
+            continue
+
+    for promo in applied_promotions:
+        amount = _to_decimal(promo.get('discount_amount_ars') or 0, 'discount_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if amount <= 0:
+            continue
+        ptype = (_clean_text(promo.get('promo_type')) or PROMO_TYPE_PERCENT).lower()
+        if ptype not in (PROMO_TYPE_PERCENT, PROMO_TYPE_X_FOR_Y, PROMO_TYPE_EXTERNAL):
+            ptype = PROMO_TYPE_EXTERNAL
+        source = (_clean_text(promo.get('source')) or 'local_engine').lower()
+        if source not in ('local_engine', 'tiendanube'):
+            source = 'local_engine'
+
+        sale_promo_id = exec_returning(
+            '''
+            INSERT INTO retail_sale_promotion_applications(
+              sale_id, promotion_id, source, promotion_name, promo_type,
+              priority, coupon_code, discount_amount_ars, metadata
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+            RETURNING id
+            ''',
+            [
+                sale_id,
+                _to_int(promo.get('promotion_id'), 'promotion_id', allow_none=True),
+                source,
+                _clean_text(promo.get('promotion_name')) or 'Promocion',
+                ptype,
+                _to_int(promo.get('priority'), 'priority', allow_none=True) or 100,
+                _clean_text(promo.get('coupon_code')),
+                amount,
+                json.dumps(promo.get('metadata') or {}, ensure_ascii=False),
+            ],
+        )
+
+        for line in promo.get('lines') or []:
+            line_key = _to_int(line.get('line_key'), 'line_key', allow_none=True)
+            sale_item_id = item_by_line_key.get(int(line_key or 0))
+            if not sale_item_id:
+                continue
+            applied_qty = _to_int(line.get('applied_qty') if line.get('applied_qty') is not None else 0, 'applied_qty')
+            if applied_qty < 0:
+                applied_qty = 0
+            line_discount = _to_decimal(line.get('discount_amount_ars') or 0, 'discount_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            if line_discount < 0:
+                line_discount = Decimal('0.00')
+            exec_void(
+                '''
+                INSERT INTO retail_sale_item_promotion_applications(
+                  sale_item_id, sale_promotion_application_id, promotion_id, source,
+                  applied_qty, discount_amount_ars, metadata
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb)
+                ''',
+                [
+                    sale_item_id,
+                    sale_promo_id,
+                    _to_int(promo.get('promotion_id'), 'promotion_id', allow_none=True),
+                    source,
+                    applied_qty,
+                    line_discount,
+                    json.dumps(line.get('metadata') or {}, ensure_ascii=False),
+                ],
+            )
 
 
 def _coerce_local_date(value):
@@ -1796,7 +2714,7 @@ def _load_venta(venta_id, include_costs=False, warranty_settings=None):
 
     items = q(
         '''
-        SELECT si.*, v.sku, v.barcode_internal, v.option_signature,
+        SELECT si.*, v.sku, v.barcode_internal, v.option_signature, v.product_id,
                p.name AS producto, COALESCE(p.brand,'') AS marca
         FROM retail_sale_items si
         JOIN retail_product_variants v ON v.id=si.variant_id
@@ -1811,53 +2729,332 @@ def _load_venta(venta_id, include_costs=False, warranty_settings=None):
             item['unit_cost_snapshot_ars'] = None
 
     invoice = q('SELECT * FROM retail_invoices WHERE sale_id=%s', [venta_id], one=True)
+    promos = q(
+        '''
+        SELECT *
+        FROM retail_sale_promotion_applications
+        WHERE sale_id=%s
+        ORDER BY priority, id
+        ''',
+        [venta_id],
+    ) or []
+    promo_item_rows = q(
+        '''
+        SELECT sipa.*
+        FROM retail_sale_item_promotion_applications sipa
+        JOIN retail_sale_items si ON si.id=sipa.sale_item_id
+        WHERE si.sale_id=%s
+        ORDER BY sipa.id
+        ''',
+        [venta_id],
+    ) or []
+    promo_items_by_sale_item = {}
+    for row in promo_item_rows:
+        sid = int(row.get('sale_item_id') or 0)
+        promo_items_by_sale_item.setdefault(sid, []).append(row)
+    promo_items_by_promo = {}
+    for row in promo_item_rows:
+        pid = row.get('sale_promotion_application_id')
+        if pid is None:
+            continue
+        try:
+            promo_items_by_promo.setdefault(int(pid), []).append(row)
+        except (TypeError, ValueError):
+            continue
+
+    for item in items:
+        item['promotion_applications'] = promo_items_by_sale_item.get(int(item.get('id') or 0), [])
+
+    for promo in promos:
+        promo['items'] = promo_items_by_promo.get(int(promo.get('id') or 0), [])
+
+    exchanges = q(
+        '''
+        SELECT e.*, COALESCE(u.nombre,'') AS processed_by_name
+        FROM retail_exchanges e
+        LEFT JOIN users u ON u.id=e.processed_by
+        WHERE e.sale_id=%s
+        ORDER BY e.id DESC
+        ''',
+        [venta_id],
+    ) or []
+    exchange_items = q(
+        '''
+        SELECT ei.*, vf.sku AS variant_from_sku, vt.sku AS variant_to_sku,
+               pf.name AS product_from_name, pt.name AS product_to_name
+        FROM retail_exchange_items ei
+        JOIN retail_product_variants vf ON vf.id=ei.variant_from_id
+        JOIN retail_product_variants vt ON vt.id=ei.variant_to_id
+        JOIN retail_products pf ON pf.id=vf.product_id
+        JOIN retail_products pt ON pt.id=vt.product_id
+        JOIN retail_exchanges e ON e.id=ei.exchange_id
+        WHERE e.sale_id=%s
+        ORDER BY ei.id
+        ''',
+        [venta_id],
+    ) or []
+    ex_items_by_exchange = {}
+    for item in exchange_items:
+        ex_items_by_exchange.setdefault(int(item.get('exchange_id') or 0), []).append(item)
+    for exchange in exchanges:
+        exchange['items'] = ex_items_by_exchange.get(int(exchange.get('id') or 0), [])
+
+    payments = _load_sale_payments(venta_id, fallback_sale=sale)
     sale['items'] = items
     sale['invoice'] = invoice
+    sale['promotions'] = promos
+    sale['exchanges'] = exchanges
+    sale['payments'] = payments
     sale['warranty'] = _sale_warranty_info(sale, sale_items=items, settings_row=warranty_settings)
     return sale
 
 
+def _sale_items_have_x_for_y_promos(sale_item_ids):
+    ids = []
+    for sid in sale_item_ids or []:
+        try:
+            ids.append(int(sid))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return False
+    row = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM retail_sale_item_promotion_applications sipa
+        JOIN retail_sale_promotion_applications spa ON spa.id=sipa.sale_promotion_application_id
+        WHERE sipa.sale_item_id = ANY(%s)
+          AND spa.promo_type='x_for_y'
+        ''',
+        [ids],
+        one=True,
+    ) or {'cnt': 0}
+    return int(row.get('cnt') or 0) > 0
+
+
 def _register_cash_in(session_id, sale_row, user_id, note='Venta mostrador'):
-    exec_void(
-        '''
-        INSERT INTO retail_cash_session_movements(
-          cash_session_id, movement_type, direction, payment_method,
-          payment_account_id, amount_ars, reference_type, reference_id, notes, created_by
+    sale_id = _to_int(sale_row.get('id'), 'sale_id')
+    payments = _load_sale_payments(sale_id, fallback_sale=sale_row)
+    splits = _split_amount_across_payments(payments, sale_row.get('total_ars') or 0)
+    for split in splits:
+        payment = split['payment']
+        method = _normalize_payment_method(payment.get('payment_method') or payment.get('method'))
+        account_id = _to_int(payment.get('payment_account_id') or payment.get('account_id'), 'payment_account_id')
+        amount = _to_decimal(split.get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if amount <= 0:
+            continue
+        exec_void(
+            '''
+            INSERT INTO retail_cash_session_movements(
+              cash_session_id, movement_type, direction, payment_method,
+              payment_account_id, amount_ars, reference_type, reference_id, notes, created_by
+            )
+            VALUES (%s,'sale','in',%s,%s,%s,'sale',%s,%s,%s)
+            ''',
+            [
+                session_id,
+                method,
+                account_id,
+                amount,
+                sale_id,
+                note,
+                user_id,
+            ],
         )
-        VALUES (%s,'sale','in',%s,%s,%s,'sale',%s,%s,%s)
-        ''',
-        [
-            session_id,
-            sale_row['payment_method'],
-            sale_row['payment_account_id'],
-            sale_row['total_ars'],
-            sale_row['id'],
-            note,
-            user_id,
-        ],
-    )
 
 
-def _register_cash_out(session_id, sale_row, user_id, movement_type='return', note='Egreso por devolucion'):
-    exec_void(
-        '''
-        INSERT INTO retail_cash_session_movements(
-          cash_session_id, movement_type, direction, payment_method,
-          payment_account_id, amount_ars, reference_type, reference_id, notes, created_by
+def _register_cash_out(
+    session_id,
+    sale_row,
+    user_id,
+    movement_type='return',
+    note='Egreso por devolucion',
+    amount_ars=None,
+    reference_type='sale',
+    reference_id=None,
+):
+    sale_id = _to_int(sale_row.get('id'), 'sale_id')
+    target_amount = _to_decimal(
+        amount_ars if amount_ars is not None else sale_row.get('total_ars') or 0,
+        'amount_ars',
+    ).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if target_amount <= 0:
+        return
+
+    payments = _load_sale_payments(sale_id, fallback_sale=sale_row)
+    splits = _split_amount_across_payments(payments, target_amount)
+    ref_id = _to_int(reference_id, 'reference_id', allow_none=True) if reference_id is not None else sale_id
+    for split in splits:
+        payment = split['payment']
+        method = _normalize_payment_method(payment.get('payment_method') or payment.get('method'))
+        account_id = _to_int(payment.get('payment_account_id') or payment.get('account_id'), 'payment_account_id')
+        amount = _to_decimal(split.get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if amount <= 0:
+            continue
+        exec_void(
+            '''
+            INSERT INTO retail_cash_session_movements(
+              cash_session_id, movement_type, direction, payment_method,
+              payment_account_id, amount_ars, reference_type, reference_id, notes, created_by
+            )
+            VALUES (%s,%s,'out',%s,%s,%s,%s,%s,%s,%s)
+            ''',
+            [
+                session_id,
+                movement_type,
+                method,
+                account_id,
+                amount,
+                _clean_text(reference_type) or 'sale',
+                ref_id,
+                note,
+                user_id,
+            ],
         )
-        VALUES (%s,%s,'out',%s,%s,%s,'sale',%s,%s,%s)
+
+
+def _confirm_sale_from_payload(request, payload):
+    data = payload or {}
+    quote = _build_quote(request, data, lock_variants=True)
+    payments, primary_payment = _normalize_payments(data, quote)
+    channel = quote['channel']
+
+    cash_session_id = None
+    if channel == 'local':
+        open_session = _open_cash_session(lock=True)
+        if not open_session:
+            raise ValidationError('Debe abrir caja antes de vender en mostrador')
+        cash_session_id = open_session['id']
+
+    override_reason = _clean_text(data.get('price_override_reason'))
+    if quote['any_override'] and not override_reason:
+        raise ValidationError('price_override_reason requerido cuando hay override de precio')
+
+    customer_snapshot = {
+        'name': _clean_text(data.get('customer_name')),
+        'doc': _clean_text(data.get('customer_doc')),
+        'email': _clean_text(data.get('customer_email')),
+    }
+
+    sale_id = exec_returning(
+        '''
+        INSERT INTO retail_sales(
+          sale_number, channel, status, payment_method, payment_account_id, cash_session_id,
+          customer_snapshot, subtotal_ars, promotion_discount_total_ars, price_adjustment_pct, price_adjustment_amount_ars,
+          total_ars, currency_code, requires_invoice, notes, source_order_id,
+          pricing_source, price_override_by, price_override_reason, created_by
+        )
+        VALUES (
+          'PENDIENTE', %s, 'confirmed', %s, %s, %s,
+          %s, %s, %s, %s, %s,
+          %s, 'ARS', %s, %s, %s, %s,
+          %s, %s, %s
+        )
+        RETURNING id
         ''',
         [
-            session_id,
-            movement_type,
-            sale_row['payment_method'],
-            sale_row['payment_account_id'],
-            sale_row['total_ars'],
-            sale_row['id'],
-            note,
-            user_id,
+            channel,
+            primary_payment['method'],
+            primary_payment['account_id'],
+            cash_session_id,
+            json.dumps(customer_snapshot),
+            quote['subtotal_ars'],
+            quote.get('promotion_discount_total_ars') or 0,
+            quote['modifier_pct'],
+            quote['modifier_amount_ars'],
+            quote['total_ars'],
+            quote['invoice_required'],
+            _clean_text(data.get('notes')),
+            _clean_text(data.get('source_order_id')),
+            quote.get('pricing_source') or 'local_engine',
+            getattr(request.user, 'id', None) if quote['any_override'] else None,
+            override_reason,
+            getattr(request.user, 'id', None),
         ],
     )
+    exec_void('UPDATE retail_sales SET sale_number=%s WHERE id=%s', [_sale_number(sale_id), sale_id])
+
+    persisted_items = []
+    for line in quote['items']:
+        variant = q('SELECT id, stock_on_hand FROM retail_product_variants WHERE id=%s FOR UPDATE', [line['variant_id']], one=True)
+        new_stock = int(variant['stock_on_hand']) - int(line['quantity'])
+        if new_stock < 0:
+            raise ValidationError(f"Stock insuficiente para variante {line['variant_id']}")
+
+        sale_item_id = exec_returning(
+            '''
+            INSERT INTO retail_sale_items(
+              sale_id, variant_id, quantity,
+              unit_price_list_ars, unit_price_final_ars, promotion_discount_ars, unit_cost_snapshot_ars,
+              line_subtotal_ars, line_total_ars
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+            ''',
+            [
+                sale_id,
+                line['variant_id'],
+                line['quantity'],
+                line['unit_price_list_ars'],
+                line['unit_price_final_ars'],
+                line.get('promotion_discount_ars') or 0,
+                line['unit_cost_snapshot_ars'],
+                line['line_subtotal_ars'],
+                line['line_total_ars'],
+            ],
+        )
+        persisted_items.append({'line_key': line.get('line_key'), 'sale_item_id': sale_item_id})
+        exec_void('UPDATE retail_product_variants SET stock_on_hand=%s WHERE id=%s', [new_stock, line['variant_id']])
+        exec_void(
+            '''
+            INSERT INTO retail_stock_movements(
+              variant_id, movement_kind, qty_signed, stock_after,
+              cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
+            )
+            VALUES (%s,%s,%s,%s,%s,'sale',%s,'Descuento por venta',%s)
+            ''',
+            [
+                line['variant_id'],
+                'sale' if channel == 'local' else 'online_sale',
+                -int(line['quantity']),
+                new_stock,
+                line['unit_cost_snapshot_ars'],
+                sale_id,
+                getattr(request.user, 'id', None),
+            ],
+        )
+
+    _persist_sale_promotions(sale_id, quote, persisted_items)
+    _persist_sale_payments(sale_id, payments)
+
+    if quote['invoice_required']:
+        exec_void(
+            '''
+            INSERT INTO retail_invoices(sale_id, status, invoice_mode, amount_total_ars)
+            VALUES (%s,'pending','arca',%s)
+            ON CONFLICT (sale_id) DO NOTHING
+            ''',
+            [sale_id, quote['total_ars']],
+        )
+    else:
+        exec_void(
+            '''
+            INSERT INTO retail_invoices(sale_id, status, invoice_mode, amount_total_ars)
+            VALUES (%s,'not_required','internal',%s)
+            ON CONFLICT (sale_id) DO NOTHING
+            ''',
+            [sale_id, quote['total_ars']],
+        )
+
+    sale_full = _load_venta(sale_id, include_costs=True)
+    if channel == 'local' and cash_session_id:
+        _register_cash_in(cash_session_id, sale_full, getattr(request.user, 'id', None))
+
+    auto_emit = bool(data.get('auto_emit_invoice'))
+    if auto_emit and quote['invoice_required']:
+        _emitir_factura(sale_id, request)
+
+    return _load_venta(sale_id, include_costs=_can_view_costs(request))
 
 
 class RetailVentasCotizarView(APIView):
@@ -1876,12 +3073,17 @@ class RetailVentasCotizarView(APIView):
             {
                 'channel': quote['channel'],
                 'payment_method': quote['payment_method'],
+                'pricing_source': quote['pricing_source'],
+                'coupon_codes': quote.get('coupon_codes') or [],
                 'price_modifier_pct': quote['modifier_pct'],
                 'modifier_amount_ars': quote['modifier_amount_ars'],
                 'subtotal_ars': quote['subtotal_ars'],
+                'promotion_discount_total_ars': quote.get('promotion_discount_total_ars') or 0,
+                'subtotal_after_promotions_ars': quote.get('subtotal_after_promotions_ars') or quote['subtotal_ars'],
                 'total_ars': quote['total_ars'],
                 'invoice_required': quote['invoice_required'],
                 'items': items,
+                'applied_promotions': quote.get('applied_promotions') or [],
             }
         )
 
@@ -1894,137 +3096,375 @@ class RetailVentasConfirmarView(APIView):
         _require_staff(request)
         _set_audit_user(request)
         data = request.data or {}
-        quote = _build_quote(request, data, lock_variants=True)
-        payment_account = _ensure_payment_account(data, quote['payment_method'])
-        channel = quote['channel']
+        sale = _confirm_sale_from_payload(request, data)
+        return Response(sale, status=201)
 
-        cash_session_id = None
-        if channel == 'local':
-            open_session = _open_cash_session(lock=True)
-            if not open_session:
-                raise ValidationError('Debe abrir caja antes de vender en mostrador')
-            cash_session_id = open_session['id']
 
-        override_reason = _clean_text(data.get('price_override_reason'))
-        if quote['any_override'] and not override_reason:
-            raise ValidationError('price_override_reason requerido cuando hay override de precio')
+POS_DRAFT_INLINE_FIELDS = {
+    'channel',
+    'payment_method',
+    'payment_account_id',
+    'payment_account_code',
+    'customer_name',
+    'customer_doc',
+    'customer_email',
+    'notes',
+    'coupon_codes',
+    'price_override_reason',
+    'auto_emit_invoice',
+    'source_order_id',
+    'pricing_source',
+    'items',
+    'payments',
+}
 
-        customer_snapshot = {
-            'name': _clean_text(data.get('customer_name')),
-            'doc': _clean_text(data.get('customer_doc')),
-            'email': _clean_text(data.get('customer_email')),
-        }
 
-        sale_id = exec_returning(
+def _normalize_pos_draft_status(raw, allow_all=False):
+    value = (_clean_text(raw) or '').lower()
+    if allow_all and value == 'all':
+        return 'all'
+    if not value:
+        value = 'open'
+    if value not in ('open', 'confirmed', 'cancelled'):
+        raise ValidationError('status invalido (open|confirmed|cancelled)')
+    return value
+
+
+def _extract_inline_draft_payload(data):
+    out = {}
+    for key in POS_DRAFT_INLINE_FIELDS:
+        if key in data:
+            out[key] = data.get(key)
+    return out
+
+
+def _extract_pos_draft_payload(data, allow_missing=False):
+    if not isinstance(data, dict):
+        if allow_missing:
+            return False, {}
+        raise ValidationError('Payload invalido')
+
+    provided = False
+    payload = {}
+    if 'payload' in data:
+        provided = True
+        payload = data.get('payload') or {}
+        if not isinstance(payload, dict):
+            raise ValidationError('payload debe ser objeto')
+    else:
+        payload = _extract_inline_draft_payload(data)
+        provided = bool(payload)
+
+    if not provided and allow_missing:
+        return False, {}
+
+    if 'items' in payload and not isinstance(payload.get('items'), list):
+        raise ValidationError('payload.items debe ser lista')
+    if 'payments' in payload and payload.get('payments') is not None and not isinstance(payload.get('payments'), list):
+        raise ValidationError('payload.payments debe ser lista')
+    return provided, payload
+
+
+def _extract_pos_draft_quote_snapshot(data, allow_missing=True):
+    if not isinstance(data, dict):
+        if allow_missing:
+            return False, {}
+        raise ValidationError('Payload invalido')
+    if 'quote_snapshot' not in data:
+        if allow_missing:
+            return False, {}
+        raise ValidationError('quote_snapshot requerido')
+    value = data.get('quote_snapshot') or {}
+    if not isinstance(value, dict):
+        raise ValidationError('quote_snapshot debe ser objeto')
+    return True, value
+
+
+def _draft_channel(payload):
+    raw = _clean_text((payload or {}).get('channel')) or 'local'
+    channel = raw.lower()
+    return channel if channel in ('local', 'online') else 'local'
+
+
+def _draft_item_count(payload):
+    items = (payload or {}).get('items')
+    if not isinstance(items, list):
+        return 0
+    total = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            qty = int(item.get('quantity') or item.get('qty') or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        total += max(0, qty)
+    return total
+
+
+def _draft_total_ars(payload, quote_snapshot):
+    q_total = None
+    if isinstance(quote_snapshot, dict):
+        q_total = quote_snapshot.get('total_ars')
+    if q_total is None and isinstance(payload, dict):
+        q_total = payload.get('total_ars')
+    if q_total is None:
+        return Decimal('0.00')
+    return _money(q_total).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+
+
+def _draft_customer_snapshot(payload):
+    data = payload or {}
+    return {
+        'name': _clean_text(data.get('customer_name')),
+        'doc': _clean_text(data.get('customer_doc')),
+        'email': _clean_text(data.get('customer_email')),
+    }
+
+
+def _load_pos_draft(draft_id, lock=False):
+    did = _to_int(draft_id, 'draft_id')
+    sql = '''
+        SELECT d.*,
+               COALESCE(uc.nombre,'') AS created_by_name,
+               COALESCE(uu.nombre,'') AS updated_by_name,
+               COALESCE(s.sale_number,'') AS confirmed_sale_number
+        FROM retail_pos_drafts d
+        LEFT JOIN users uc ON uc.id=d.created_by
+        LEFT JOIN users uu ON uu.id=d.updated_by
+        LEFT JOIN retail_sales s ON s.id=d.confirmed_sale_id
+        WHERE d.id=%s
+    '''
+    if lock:
+        sql += ' FOR UPDATE'
+    row = q(sql, [did], one=True)
+    if not row:
+        return None
+    row['customer_snapshot'] = _json(row.get('customer_snapshot')) or {}
+    row['payload'] = _json(row.get('payload')) or {}
+    row['quote_snapshot'] = _json(row.get('quote_snapshot')) or {}
+    return row
+
+
+class RetailPosDraftsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        status = _normalize_pos_draft_status(request.query_params.get('status'), allow_all=True)
+        qtxt = _clean_text(request.query_params.get('q'))
+        limit = _to_int(request.query_params.get('limit') or 50, 'limit')
+        limit = max(1, min(limit, 200))
+
+        where = []
+        params = []
+        if status != 'all':
+            where.append('d.status=%s')
+            params.append(status)
+        if qtxt:
+            like = f'%{qtxt}%'
+            where.append(
+                '''
+                (
+                  d.draft_number ILIKE %s OR
+                  COALESCE(d.name,'') ILIKE %s OR
+                  COALESCE(d.customer_snapshot->>'name','') ILIKE %s
+                )
+                '''
+            )
+            params.extend([like, like, like])
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ''
+
+        rows = q(
+            f'''
+            SELECT d.id, d.draft_number, d.status, d.channel, d.name,
+                   d.item_count, d.total_ars, d.last_activity_at, d.created_at, d.updated_at,
+                   d.confirmed_sale_id, COALESCE(s.sale_number,'') AS confirmed_sale_number,
+                   COALESCE(d.customer_snapshot->>'name','') AS customer_name,
+                   COALESCE(u.nombre,'') AS created_by_name
+            FROM retail_pos_drafts d
+            LEFT JOIN retail_sales s ON s.id=d.confirmed_sale_id
+            LEFT JOIN users u ON u.id=d.created_by
+            {where_sql}
+            ORDER BY d.last_activity_at DESC, d.id DESC
+            LIMIT %s
+            ''',
+            [*params, limit],
+        ) or []
+        return Response({'rows': rows})
+
+    @transaction.atomic
+    def post(self, request):
+        _require_staff(request)
+        _set_audit_user(request)
+        data = request.data or {}
+        _, payload = _extract_pos_draft_payload(data, allow_missing=True)
+        _, quote_snapshot = _extract_pos_draft_quote_snapshot(data, allow_missing=True)
+        status = _normalize_pos_draft_status(data.get('status') or 'open')
+        if status == 'confirmed':
+            raise ValidationError('No se puede crear un draft confirmado')
+
+        channel = _draft_channel(payload)
+        customer_snapshot = _draft_customer_snapshot(payload)
+        item_count = _draft_item_count(payload)
+        total_ars = _draft_total_ars(payload, quote_snapshot)
+        name = _clean_text(data.get('name') or data.get('draft_name'))
+        user_id = getattr(request.user, 'id', None)
+
+        draft_id = exec_returning(
             '''
-            INSERT INTO retail_sales(
-              sale_number, channel, status, payment_method, payment_account_id, cash_session_id,
-              customer_snapshot, subtotal_ars, price_adjustment_pct, price_adjustment_amount_ars,
-              total_ars, currency_code, requires_invoice, notes, source_order_id,
-              price_override_by, price_override_reason, created_by
+            INSERT INTO retail_pos_drafts(
+              draft_number, status, channel, name, customer_snapshot,
+              payload, quote_snapshot, item_count, total_ars,
+              last_activity_at, created_by, updated_by
             )
             VALUES (
-              'PENDIENTE', %s, 'confirmed', %s, %s, %s,
-              %s, %s, %s, %s,
-              %s, 'ARS', %s, %s, %s,
-              %s, %s, %s
+              'PENDIENTE', %s, %s, %s, %s::jsonb,
+              %s::jsonb, %s::jsonb, %s, %s,
+              NOW(), %s, %s
             )
             RETURNING id
             ''',
             [
+                status,
                 channel,
-                quote['payment_method'],
-                payment_account['id'],
-                cash_session_id,
-                json.dumps(customer_snapshot),
-                quote['subtotal_ars'],
-                quote['modifier_pct'],
-                quote['modifier_amount_ars'],
-                quote['total_ars'],
-                quote['invoice_required'],
-                _clean_text(data.get('notes')),
-                _clean_text(data.get('source_order_id')),
-                getattr(request.user, 'id', None) if quote['any_override'] else None,
-                override_reason,
-                getattr(request.user, 'id', None),
+                name,
+                json.dumps(customer_snapshot, ensure_ascii=False),
+                json.dumps(payload, ensure_ascii=False),
+                json.dumps(quote_snapshot, ensure_ascii=False),
+                item_count,
+                total_ars,
+                user_id,
+                user_id,
             ],
         )
-        exec_void('UPDATE retail_sales SET sale_number=%s WHERE id=%s', [_sale_number(sale_id), sale_id])
+        exec_void('UPDATE retail_pos_drafts SET draft_number=%s WHERE id=%s', [_draft_number(draft_id), draft_id])
+        return Response(_load_pos_draft(draft_id), status=201)
 
-        for line in quote['items']:
-            variant = q('SELECT id, stock_on_hand FROM retail_product_variants WHERE id=%s FOR UPDATE', [line['variant_id']], one=True)
-            new_stock = int(variant['stock_on_hand']) - int(line['quantity'])
-            if new_stock < 0:
-                raise ValidationError(f"Stock insuficiente para variante {line['variant_id']}")
 
-            exec_void(
-                '''
-                INSERT INTO retail_sale_items(
-                  sale_id, variant_id, quantity,
-                  unit_price_list_ars, unit_price_final_ars, unit_cost_snapshot_ars,
-                  line_subtotal_ars, line_total_ars
-                )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                ''',
-                [
-                    sale_id,
-                    line['variant_id'],
-                    line['quantity'],
-                    line['unit_price_list_ars'],
-                    line['unit_price_final_ars'],
-                    line['unit_cost_snapshot_ars'],
-                    line['line_subtotal_ars'],
-                    line['line_total_ars'],
-                ],
-            )
-            exec_void('UPDATE retail_product_variants SET stock_on_hand=%s WHERE id=%s', [new_stock, line['variant_id']])
-            exec_void(
-                '''
-                INSERT INTO retail_stock_movements(
-                  variant_id, movement_kind, qty_signed, stock_after,
-                  cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
-                )
-                VALUES (%s,%s,%s,%s,%s,'sale',%s,'Descuento por venta',%s)
-                ''',
-                [
-                    line['variant_id'],
-                    'sale' if channel == 'local' else 'online_sale',
-                    -int(line['quantity']),
-                    new_stock,
-                    line['unit_cost_snapshot_ars'],
-                    sale_id,
-                    getattr(request.user, 'id', None),
-                ],
-            )
+class RetailPosDraftDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
-        if quote['invoice_required']:
-            exec_void(
-                '''
-                INSERT INTO retail_invoices(sale_id, status, invoice_mode, amount_total_ars)
-                VALUES (%s,'pending','arca',%s)
-                ON CONFLICT (sale_id) DO NOTHING
-                ''',
-                [sale_id, quote['total_ars']],
-            )
-        else:
-            exec_void(
-                '''
-                INSERT INTO retail_invoices(sale_id, status, invoice_mode, amount_total_ars)
-                VALUES (%s,'not_required','internal',%s)
-                ON CONFLICT (sale_id) DO NOTHING
-                ''',
-                [sale_id, quote['total_ars']],
-            )
+    def get(self, request, draft_id):
+        _require_staff(request)
+        row = _load_pos_draft(draft_id, lock=False)
+        if not row:
+            return Response({'detail': 'Draft no encontrado'}, status=404)
+        return Response(row)
 
-        sale = _load_venta(sale_id, include_costs=True)
-        if channel == 'local' and cash_session_id:
-            _register_cash_in(cash_session_id, sale, getattr(request.user, 'id', None))
+    @transaction.atomic
+    def patch(self, request, draft_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        row = _load_pos_draft(draft_id, lock=True)
+        if not row:
+            return Response({'detail': 'Draft no encontrado'}, status=404)
+        if row.get('status') == 'confirmed':
+            raise ValidationError('No se puede editar un draft confirmado')
 
-        auto_emit = bool(data.get('auto_emit_invoice'))
-        if auto_emit and quote['invoice_required']:
-            _emitir_factura(sale_id, request)
+        data = request.data or {}
+        fields = []
+        params = []
 
-        return Response(_load_venta(sale_id, include_costs=_can_view_costs(request)), status=201)
+        if 'name' in data or 'draft_name' in data:
+            fields.append('name=%s')
+            params.append(_clean_text(data.get('name') or data.get('draft_name')))
+
+        if 'status' in data:
+            next_status = _normalize_pos_draft_status(data.get('status'))
+            if next_status == 'confirmed':
+                raise ValidationError('Usa /confirm para confirmar un draft')
+            fields.append('status=%s')
+            params.append(next_status)
+
+        payload_provided, payload_data = _extract_pos_draft_payload(data, allow_missing=True)
+        quote_provided, quote_data = _extract_pos_draft_quote_snapshot(data, allow_missing=True)
+
+        payload = row.get('payload') or {}
+        quote_snapshot = row.get('quote_snapshot') or {}
+        if payload_provided:
+            payload = payload_data
+            fields.append('payload=%s::jsonb')
+            params.append(json.dumps(payload, ensure_ascii=False))
+        if quote_provided:
+            quote_snapshot = quote_data
+            fields.append('quote_snapshot=%s::jsonb')
+            params.append(json.dumps(quote_snapshot, ensure_ascii=False))
+
+        if payload_provided or quote_provided:
+            fields.append('channel=%s')
+            params.append(_draft_channel(payload))
+            fields.append('customer_snapshot=%s::jsonb')
+            params.append(json.dumps(_draft_customer_snapshot(payload), ensure_ascii=False))
+            fields.append('item_count=%s')
+            params.append(_draft_item_count(payload))
+            fields.append('total_ars=%s')
+            params.append(_draft_total_ars(payload, quote_snapshot))
+
+        fields.append('last_activity_at=NOW()')
+        fields.append('updated_by=%s')
+        params.append(getattr(request.user, 'id', None))
+
+        params.append(_to_int(draft_id, 'draft_id'))
+        exec_void(f"UPDATE retail_pos_drafts SET {', '.join(fields)} WHERE id=%s", params)
+        return Response(_load_pos_draft(draft_id))
+
+
+class RetailPosDraftConfirmView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, draft_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        row = _load_pos_draft(draft_id, lock=True)
+        if not row:
+            return Response({'detail': 'Draft no encontrado'}, status=404)
+        if row.get('status') != 'open':
+            raise ValidationError('Solo se puede confirmar un draft abierto')
+
+        data = request.data or {}
+        payload = dict(row.get('payload') or {})
+        payload_provided, payload_updates = _extract_pos_draft_payload(data, allow_missing=True)
+        if payload_provided:
+            payload.update(payload_updates)
+
+        if not isinstance(payload.get('items'), list) or not payload.get('items'):
+            raise ValidationError('El draft no tiene items para confirmar')
+
+        sale = _confirm_sale_from_payload(request, payload)
+        quote_snapshot = data.get('quote_snapshot') if isinstance(data.get('quote_snapshot'), dict) else row.get('quote_snapshot')
+        if not isinstance(quote_snapshot, dict):
+            quote_snapshot = {}
+        exec_void(
+            '''
+            UPDATE retail_pos_drafts
+            SET status='confirmed',
+                payload=%s::jsonb,
+                quote_snapshot=%s::jsonb,
+                item_count=%s,
+                total_ars=%s,
+                customer_snapshot=%s::jsonb,
+                channel=%s,
+                confirmed_sale_id=%s,
+                confirmed_at=NOW(),
+                last_activity_at=NOW(),
+                updated_by=%s
+            WHERE id=%s
+            ''',
+            [
+                json.dumps(payload, ensure_ascii=False),
+                json.dumps(quote_snapshot, ensure_ascii=False),
+                _draft_item_count(payload),
+                _draft_total_ars(payload, quote_snapshot),
+                json.dumps(_draft_customer_snapshot(payload), ensure_ascii=False),
+                _draft_channel(payload),
+                sale['id'],
+                getattr(request.user, 'id', None),
+                _to_int(draft_id, 'draft_id'),
+            ],
+        )
+        return Response({'draft': _load_pos_draft(draft_id), 'sale': sale}, status=201)
 
 
 class RetailVentaAnularView(APIView):
@@ -2106,6 +3546,17 @@ class RetailVentaDevolverView(APIView):
 
         sale_items = q('SELECT * FROM retail_sale_items WHERE sale_id=%s FOR UPDATE', [venta_id]) or []
         by_item = {int(item['id']): item for item in sale_items}
+        exchanged_rows = q(
+            '''
+            SELECT ei.sale_item_id, COALESCE(SUM(ei.quantity),0)::int AS exchanged_qty
+            FROM retail_exchange_items ei
+            JOIN retail_exchanges e ON e.id=ei.exchange_id
+            WHERE e.sale_id=%s AND e.status='confirmed'
+            GROUP BY ei.sale_item_id
+            ''',
+            [venta_id],
+        ) or []
+        exchanged_by_item = {int(row['sale_item_id']): int(row.get('exchanged_qty') or 0) for row in exchanged_rows}
 
         data = request.data or {}
         return_items = data.get('items')
@@ -2129,12 +3580,16 @@ class RetailVentaDevolverView(APIView):
                 parsed.append({'sale_item_id': sale_item_id, 'quantity': qty})
         else:
             for item in sale_items:
-                available = int(item['quantity']) - int(item['returned_qty'])
+                already_exchanged = int(exchanged_by_item.get(int(item['id'])) or 0)
+                available = int(item['quantity']) - int(item['returned_qty']) - already_exchanged
                 if available > 0:
                     parsed.append({'sale_item_id': int(item['id']), 'quantity': available})
 
         if not parsed:
             raise ValidationError('No hay lineas disponibles para devolver')
+
+        if _sale_items_have_x_for_y_promos([it['sale_item_id'] for it in parsed]):
+            raise ValidationError('Las lineas con promociones 2x1/3x2 no admiten devolucion monetaria. Usa cambio 1:1.')
 
         warranty_info = _sale_warranty_info(sale, sale_items=sale_items)
         warranty_in_window = _warranty_active_for_type(warranty_info, warranty_type)
@@ -2183,7 +3638,8 @@ class RetailVentaDevolverView(APIView):
 
         for item in parsed:
             sale_item = by_item[item['sale_item_id']]
-            available = int(sale_item['quantity']) - int(sale_item['returned_qty'])
+            already_exchanged = int(exchanged_by_item.get(int(sale_item['id'])) or 0)
+            available = int(sale_item['quantity']) - int(sale_item['returned_qty']) - already_exchanged
             qty = int(item['quantity'])
             if qty > available:
                 raise ValidationError(f"Cantidad a devolver excede disponible en item {sale_item['id']}")
@@ -2247,22 +3703,15 @@ class RetailVentaDevolverView(APIView):
         exec_void('UPDATE retail_returns SET total_refund_ars=%s WHERE id=%s', [total_refund, rid])
 
         if sale['channel'] == 'local' and sale.get('cash_session_id'):
-            exec_void(
-                '''
-                INSERT INTO retail_cash_session_movements(
-                  cash_session_id, movement_type, direction, payment_method,
-                  payment_account_id, amount_ars, reference_type, reference_id, notes, created_by
-                )
-                VALUES (%s,'return','out',%s,%s,%s,'return',%s,'Devolucion en caja',%s)
-                ''',
-                [
-                    sale['cash_session_id'],
-                    sale['payment_method'],
-                    sale['payment_account_id'],
-                    total_refund,
-                    rid,
-                    getattr(request.user, 'id', None),
-                ],
+            _register_cash_out(
+                sale['cash_session_id'],
+                sale,
+                getattr(request.user, 'id', None),
+                movement_type='return',
+                note='Devolucion en caja',
+                amount_ars=total_refund,
+                reference_type='return',
+                reference_id=rid,
             )
 
         if requires_credit_note:
@@ -2290,6 +3739,227 @@ class RetailVentaDevolverView(APIView):
         ret['items'] = ret_items
         ret['sale'] = _load_venta(venta_id, include_costs=_can_view_costs(request))
         return Response(ret, status=201)
+
+
+class RetailVentaCambiarView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, venta_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        if not _can_exchange_sale(request):
+            raise PermissionDenied('No autorizado para registrar cambios 1:1')
+
+        sale = q('SELECT * FROM retail_sales WHERE id=%s FOR UPDATE', [venta_id], one=True)
+        if not sale:
+            return Response({'detail': 'Venta no encontrada'}, status=404)
+        if sale['status'] == 'cancelled':
+            raise ValidationError('No se puede cambiar una venta anulada')
+
+        sale_items = q('SELECT * FROM retail_sale_items WHERE sale_id=%s FOR UPDATE', [venta_id]) or []
+        by_item = {int(item['id']): item for item in sale_items}
+
+        exchanged_rows = q(
+            '''
+            SELECT ei.sale_item_id, COALESCE(SUM(ei.quantity),0)::int AS exchanged_qty
+            FROM retail_exchange_items ei
+            JOIN retail_exchanges e ON e.id=ei.exchange_id
+            WHERE e.sale_id=%s AND e.status='confirmed'
+            GROUP BY ei.sale_item_id
+            ''',
+            [venta_id],
+        ) or []
+        exchanged_by_item = {int(row['sale_item_id']): int(row.get('exchanged_qty') or 0) for row in exchanged_rows}
+
+        data = request.data or {}
+        raw_items = data.get('items')
+        if not isinstance(raw_items, list) or not raw_items:
+            raise ValidationError('items debe ser una lista no vacia')
+
+        parsed = []
+        for row in raw_items:
+            if not isinstance(row, dict):
+                raise ValidationError('Cada item de cambio debe ser objeto')
+            sale_item_id = _to_int(row.get('sale_item_id'), 'sale_item_id')
+            replacement_variant_id = _to_int(row.get('replacement_variant_id') or row.get('variant_id') or row.get('to_variant_id'), 'replacement_variant_id')
+            qty = _to_int(row.get('quantity') or row.get('cantidad'), 'quantity')
+            if qty <= 0:
+                raise ValidationError('quantity invalida')
+            if sale_item_id not in by_item:
+                raise ValidationError(f'sale_item_id no pertenece a la venta: {sale_item_id}')
+            parsed.append({'sale_item_id': sale_item_id, 'replacement_variant_id': replacement_variant_id, 'quantity': qty})
+
+        warranty_type = _normalize_warranty_type(data.get('warranty_type'), default='none')
+        override_out_of_warranty = bool(data.get('override_out_of_warranty'))
+        override_reason = _clean_text(data.get('override_reason'))
+        warranty_info = _sale_warranty_info(sale, sale_items=sale_items)
+        warranty_in_window = _warranty_active_for_type(warranty_info, warranty_type)
+        if not warranty_in_window:
+            if not override_out_of_warranty:
+                raise ValidationError('Venta fuera de garantia para el tipo seleccionado')
+            if not _can_override_return_warranty(request):
+                raise PermissionDenied('No autorizado para override de garantia')
+            if not override_reason:
+                raise ValidationError('override_reason requerido para override de garantia')
+
+        warranty_snapshot = {
+            'checked_at': timezone.now().isoformat(),
+            'selected_type': warranty_type,
+            'override_requested': override_out_of_warranty,
+            'override_reason': override_reason,
+            'in_window': warranty_in_window,
+            'warranty': warranty_info,
+        }
+
+        exchange_id = exec_returning(
+            '''
+            INSERT INTO retail_exchanges(
+              sale_id, status, reason, processed_by, warranty_type, warranty_override, warranty_snapshot
+            )
+            VALUES (%s,'confirmed',%s,%s,%s,%s,%s::jsonb)
+            RETURNING id
+            ''',
+            [
+                venta_id,
+                _clean_text(data.get('reason')) or 'Cambio 1:1',
+                getattr(request.user, 'id', None),
+                warranty_type,
+                bool(override_out_of_warranty and (not warranty_in_window)),
+                json.dumps(warranty_snapshot),
+            ],
+        )
+
+        for item in parsed:
+            sale_item = by_item[item['sale_item_id']]
+            already_exchanged = int(exchanged_by_item.get(int(sale_item['id'])) or 0)
+            available = int(sale_item['quantity']) - int(sale_item['returned_qty']) - already_exchanged
+            qty = int(item['quantity'])
+            if qty > available:
+                raise ValidationError(f"Cantidad a cambiar excede disponible en item {sale_item['id']}")
+
+            variant_from = q(
+                '''
+                SELECT v.id, v.product_id, v.price_store_ars, v.price_online_ars, v.stock_on_hand
+                FROM retail_product_variants v
+                WHERE v.id=%s
+                FOR UPDATE
+                ''',
+                [sale_item['variant_id']],
+                one=True,
+            )
+            variant_to = q(
+                '''
+                SELECT v.id, v.product_id, v.price_store_ars, v.price_online_ars, v.stock_on_hand, v.active
+                FROM retail_product_variants v
+                WHERE v.id=%s
+                FOR UPDATE
+                ''',
+                [item['replacement_variant_id']],
+                one=True,
+            )
+            if not variant_to:
+                raise ValidationError(f"Variante de reemplazo inexistente: {item['replacement_variant_id']}")
+            if not bool(variant_to.get('active')):
+                raise ValidationError(f"Variante de reemplazo inactiva: {item['replacement_variant_id']}")
+            if int(variant_from['product_id']) != int(variant_to['product_id']):
+                raise ValidationError('El cambio 1:1 exige variante del mismo producto (talle/color)')
+
+            price_field = 'price_store_ars' if (sale.get('channel') or 'local') == 'local' else 'price_online_ars'
+            from_price = _to_decimal(variant_from.get(price_field), price_field).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            to_price = _to_decimal(variant_to.get(price_field), price_field).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            if from_price != to_price:
+                raise ValidationError('El cambio 1:1 exige mismo precio de lista por canal')
+
+            new_stock_from = int(variant_from['stock_on_hand']) + qty
+            new_stock_to = int(variant_to['stock_on_hand']) - qty
+            if new_stock_to < 0:
+                raise ValidationError(f"Stock insuficiente en variante de reemplazo {variant_to['id']}")
+
+            exec_void('UPDATE retail_product_variants SET stock_on_hand=%s WHERE id=%s', [new_stock_from, variant_from['id']])
+            exec_void('UPDATE retail_product_variants SET stock_on_hand=%s WHERE id=%s', [new_stock_to, variant_to['id']])
+
+            exec_void(
+                '''
+                INSERT INTO retail_stock_movements(
+                  variant_id, movement_kind, qty_signed, stock_after,
+                  cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
+                )
+                VALUES (%s,'manual_adjustment',%s,%s,%s,'exchange',%s,%s,%s)
+                ''',
+                [
+                    variant_from['id'],
+                    qty,
+                    new_stock_from,
+                    sale_item.get('unit_cost_snapshot_ars'),
+                    exchange_id,
+                    'Cambio 1:1 ingreso variante original',
+                    getattr(request.user, 'id', None),
+                ],
+            )
+            exec_void(
+                '''
+                INSERT INTO retail_stock_movements(
+                  variant_id, movement_kind, qty_signed, stock_after,
+                  cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
+                )
+                VALUES (%s,'manual_adjustment',%s,%s,%s,'exchange',%s,%s,%s)
+                ''',
+                [
+                    variant_to['id'],
+                    -qty,
+                    new_stock_to,
+                    sale_item.get('unit_cost_snapshot_ars'),
+                    exchange_id,
+                    'Cambio 1:1 egreso variante reemplazo',
+                    getattr(request.user, 'id', None),
+                ],
+            )
+            exec_void(
+                '''
+                INSERT INTO retail_exchange_items(
+                  exchange_id, sale_item_id, variant_from_id, variant_to_id, quantity,
+                  unit_price_from_ars, unit_price_to_ars
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                ''',
+                [
+                    exchange_id,
+                    sale_item['id'],
+                    variant_from['id'],
+                    variant_to['id'],
+                    qty,
+                    _to_decimal(sale_item.get('unit_price_final_ars') or 0, 'unit_price_final_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                    _to_decimal(sale_item.get('unit_price_final_ars') or 0, 'unit_price_final_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                ],
+            )
+
+        exchange = q(
+            '''
+            SELECT e.*, COALESCE(u.nombre,'') AS processed_by_name
+            FROM retail_exchanges e
+            LEFT JOIN users u ON u.id=e.processed_by
+            WHERE e.id=%s
+            ''',
+            [exchange_id],
+            one=True,
+        ) or {}
+        exchange['items'] = q(
+            '''
+            SELECT ei.*, vf.sku AS variant_from_sku, vt.sku AS variant_to_sku,
+                   pf.name AS product_from_name, pt.name AS product_to_name
+            FROM retail_exchange_items ei
+            JOIN retail_product_variants vf ON vf.id=ei.variant_from_id
+            JOIN retail_product_variants vt ON vt.id=ei.variant_to_id
+            JOIN retail_products pf ON pf.id=vf.product_id
+            JOIN retail_products pt ON pt.id=vt.product_id
+            WHERE ei.exchange_id=%s
+            ORDER BY ei.id
+            ''',
+            [exchange_id],
+        ) or []
+        exchange['sale'] = _load_venta(venta_id, include_costs=_can_view_costs(request))
+        return Response(exchange, status=201)
 
 
 def _mock_enabled():
@@ -2507,20 +4177,142 @@ class RetailFacturacionNotaCreditoView(APIView):
 
 
 def _webhook_secret():
-    cfg = _load_settings()
-    return _clean_text(cfg.get('tiendanube_webhook_secret')) or _clean_text(getattr(settings, 'TIENDANUBE_WEBHOOK_SECRET', ''))
+    # Tienda Nube firma los webhooks con el secret de la app (client_secret).
+    # Permitimos configurarlo explícitamente como `tiendanube_webhook_secret` o reusar `tiendanube_client_secret`.
+    row = q(
+        'SELECT tiendanube_webhook_secret, tiendanube_client_secret FROM retail_settings WHERE id=1',
+        one=True,
+    )
+    candidates = []
+    if row:
+        candidates.extend(
+            [
+                row.get('tiendanube_webhook_secret'),
+                row.get('tiendanube_client_secret'),
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                getattr(settings, 'TIENDANUBE_WEBHOOK_SECRET', ''),
+                getattr(settings, 'TIENDANUBE_CLIENT_SECRET', ''),
+            ]
+        )
+    for val in candidates:
+        secret = _clean_text(val)
+        if secret:
+            return secret
+    return ''
 
 
 def _verify_tiendanube_signature(request):
     secret = _webhook_secret()
     if not secret:
+        security_logger.warning("tiendanube_webhook_secret_missing path=%s", request.path)
         raise ValidationError('Webhook secret de Tienda Nube no configurado')
     signature = request.headers.get('x-linkedstore-hmac-sha256') or request.headers.get('X-Linkedstore-Hmac-Sha256')
     if not signature:
+        security_logger.warning("tiendanube_webhook_signature_missing path=%s", request.path)
         raise ValidationError('Firma de webhook ausente')
-    expected = base64.b64encode(hmac.new(secret.encode('utf-8'), request.body or b'', hashlib.sha256).digest()).decode('ascii')
-    if not hmac.compare_digest(signature, expected):
-        raise ValidationError('Firma webhook invalida')
+
+    payload_bytes = request.body or b''
+    digest = hmac.new(secret.encode('utf-8'), payload_bytes, hashlib.sha256).digest()
+    expected_hex = digest.hex()
+    expected_b64 = base64.b64encode(digest).decode('ascii')
+    provided = signature.strip()
+
+    # Docs oficiales: `hash_hmac('sha256', $data, APP_SECRET)` -> HEX.
+    # Aceptamos también base64 por compatibilidad.
+    if hmac.compare_digest(provided.lower(), expected_hex):
+        return
+    if hmac.compare_digest(provided, expected_b64):
+        return
+    security_logger.warning("tiendanube_webhook_signature_invalid path=%s", request.path)
+    raise ValidationError('Firma webhook invalida')
+
+
+def _tiendanube_event_id(payload, default_event, resource_id):
+    data = payload if isinstance(payload, dict) else {}
+    store_id = _clean_text(data.get('store_id'))
+    event_name = _clean_text(data.get('event')) or _clean_text(default_event)
+    rid = _clean_text(resource_id)
+    parts = []
+    if store_id:
+        parts.append(store_id)
+    if event_name:
+        parts.append(event_name)
+    if rid:
+        parts.append(rid)
+    return ':'.join(parts) or (rid or f'event-{int(timezone.now().timestamp())}')
+
+
+def _tiendanube_cfg(payload=None):
+    cfg = q(
+        '''
+        SELECT tiendanube_store_id, tiendanube_access_token
+        FROM retail_settings
+        WHERE id=1
+        ''',
+        one=True,
+    )
+    if cfg:
+        store_id_cfg = _clean_text(cfg.get('tiendanube_store_id'))
+        access_token = _clean_text(cfg.get('tiendanube_access_token'))
+    else:
+        store_id_cfg = _clean_text(getattr(settings, 'TIENDANUBE_STORE_ID', ''))
+        access_token = _clean_text(getattr(settings, 'TIENDANUBE_ACCESS_TOKEN', ''))
+    api_base = _clean_text(getattr(settings, 'TIENDANUBE_API_BASE', 'https://api.tiendanube.com/2025-03')) or 'https://api.tiendanube.com/2025-03'
+    user_agent = _clean_text(getattr(settings, 'TIENDANUBE_USER_AGENT', 'RetailHub (admin@localhost)')) or 'RetailHub (admin@localhost)'
+    try:
+        timeout = int(getattr(settings, 'TIENDANUBE_TIMEOUT_SECS', 15) or 15)
+    except (TypeError, ValueError):
+        timeout = 15
+
+    store_id_payload = None
+    if isinstance(payload, dict):
+        store_id_payload = _clean_text(payload.get('store_id'))
+    store_id = store_id_cfg or store_id_payload
+    if store_id_cfg and store_id_payload and store_id_cfg != store_id_payload:
+        raise ValidationError('Webhook store_id no coincide con configuración Tienda Nube')
+
+    return {
+        'store_id': store_id,
+        'access_token': access_token,
+        'api_base': api_base.rstrip('/'),
+        'user_agent': user_agent,
+        'timeout': max(1, timeout),
+    }
+
+
+def _tiendanube_fetch_order(order_id, webhook_payload=None):
+    oid = _clean_text(order_id)
+    if not oid:
+        raise ValidationError('order_id invalido')
+
+    cfg = _tiendanube_cfg(webhook_payload)
+    if not cfg.get('store_id') or not cfg.get('access_token'):
+        raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
+
+    url = f"{cfg['api_base']}/{cfg['store_id']}/orders/{oid}"
+    headers = {
+        'Authentication': f"bearer {cfg['access_token']}",
+        'User-Agent': cfg['user_agent'],
+        'Content-Type': 'application/json',
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=min(10, cfg['timeout']))
+    except Exception as exc:
+        raise ValidationError(f'Error consultando orden en Tienda Nube: {exc}')
+
+    status_code = int(resp.status_code)
+    body = resp.text
+    if not (200 <= status_code < 300):
+        raise ValidationError(f'Tienda Nube HTTP {status_code}: {body[:500]}')
+
+    data = _json(body)
+    if not isinstance(data, dict):
+        raise ValidationError('Respuesta Tienda Nube invalida')
+    return data
 
 
 def _infer_payment_method_from_online(payload):
@@ -2532,6 +4324,51 @@ def _infer_payment_method_from_online(payload):
     if 'cash' in txt or 'efectivo' in txt:
         return 'cash'
     return 'transfer'
+
+
+def _first_money(*candidates):
+    for value in candidates:
+        if value in (None, ''):
+            continue
+        try:
+            return _to_decimal(value, 'monto', allow_none=True)
+        except ValidationError:
+            continue
+    return None
+
+
+def _extract_online_coupon_codes(payload):
+    data = payload if isinstance(payload, dict) else {}
+    out = []
+    seen = set()
+
+    def push(value):
+        raw = _clean_text(value)
+        if not raw:
+            return
+        for token in str(raw).split(','):
+            item = token.strip()
+            if not item:
+                continue
+            key = item.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+
+    push(data.get('coupon'))
+    push(data.get('coupon_code'))
+    push(data.get('discount_coupon'))
+    push(data.get('promotion_code'))
+
+    coupons = data.get('coupons')
+    if isinstance(coupons, list):
+        for cp in coupons:
+            if isinstance(cp, dict):
+                push(cp.get('code') or cp.get('coupon') or cp.get('name'))
+            else:
+                push(cp)
+    return out
 
 
 def _extract_online_items(payload):
@@ -2551,7 +4388,62 @@ def _extract_online_items(payload):
             row = q('SELECT id FROM retail_product_variants WHERE LOWER(sku)=LOWER(%s)', [sku], one=True)
             if not row:
                 continue
-            out.append({'variant_id': row['id'], 'quantity': qty})
+            list_unit = _first_money(
+                variant.get('compare_at_price'),
+                product.get('compare_at_price'),
+                variant.get('list_price'),
+                product.get('list_price'),
+                variant.get('price'),
+                product.get('price'),
+            )
+            paid_unit = _first_money(
+                variant.get('promotional_price'),
+                variant.get('final_price'),
+                variant.get('unit_price'),
+                product.get('promotional_price'),
+                product.get('final_price'),
+                variant.get('price'),
+                product.get('price'),
+            )
+            line_paid = _first_money(
+                variant.get('subtotal'),
+                variant.get('total'),
+                variant.get('line_total'),
+                product.get('subtotal'),
+                product.get('total'),
+                product.get('line_total'),
+            )
+            if paid_unit is None and line_paid is not None and qty > 0:
+                paid_unit = (line_paid / Decimal(qty)).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            if paid_unit is None:
+                paid_unit = list_unit
+            if paid_unit is None:
+                paid_unit = Decimal('0.00')
+            if list_unit is None:
+                list_unit = paid_unit
+
+            line_discount = _first_money(
+                variant.get('discount'),
+                variant.get('discount_amount'),
+                variant.get('total_discount'),
+                product.get('discount'),
+                product.get('discount_amount'),
+                product.get('total_discount'),
+            )
+            if line_discount is None:
+                inferred = ((list_unit - paid_unit) * Decimal(qty)).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+                line_discount = inferred if inferred > 0 else Decimal('0.00')
+            if line_discount < 0:
+                line_discount = Decimal('0.00')
+
+            out.append(
+                {
+                    'variant_id': row['id'],
+                    'quantity': qty,
+                    'unit_price_net_ars': paid_unit.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                    'line_discount_ars': line_discount.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                }
+            )
     if not out:
         raise ValidationError('No se pudieron mapear items por SKU de la orden online')
     return out
@@ -2605,6 +4497,7 @@ class RetailOnlineSyncStockView(APIView):
         return Response({'ok': True, 'job_id': job_id, 'processed': len(rows), 'linked': len(linked), 'unlinked': len(unlinked)})
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class RetailOnlineWebhookOrdenPagadaView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -2613,12 +4506,11 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
     def post(self, request):
         _verify_tiendanube_signature(request)
         payload = _json(request.body)
-        event_id = _clean_text(payload.get('event_id') or request.headers.get('x-event-id') or request.headers.get('X-Event-Id'))
         order_id = _clean_text(payload.get('id') or payload.get('order_id') or payload.get('number'))
-        if not event_id:
-            event_id = f'paid-{order_id}-{int(timezone.now().timestamp())}'
         if not order_id:
             raise ValidationError('order_id ausente en webhook')
+        event_id = _tiendanube_event_id(payload, 'order/paid', order_id)
+        signature = request.headers.get('x-linkedstore-hmac-sha256') or request.headers.get('X-Linkedstore-Hmac-Sha256')
 
         existing_event = q(
             'SELECT id, processed FROM retail_webhook_events WHERE provider=\'tiendanube\' AND event_id=%s FOR UPDATE',
@@ -2634,7 +4526,7 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
             VALUES ('tiendanube','order_paid',%s,%s,%s,%s)
             RETURNING id
             ''',
-            [event_id, order_id, request.headers.get('x-linkedstore-hmac-sha256'), json.dumps(payload)],
+            [event_id, order_id, signature, json.dumps(payload)],
         )
 
         existing_sale = q('SELECT id FROM retail_sales WHERE source_order_id=%s', [order_id], one=True)
@@ -2642,22 +4534,30 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
             exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
             return Response({'ok': True, 'duplicate': True, 'sale_id': existing_sale['id'], 'event_id': event_id})
 
-        items = _extract_online_items(payload)
-        payment_method = _infer_payment_method_from_online(payload)
-        account_code = 'payway' if payment_method in ('debit', 'credit') else ('cash' if payment_method == 'cash' else 'transfer_1')
-
-        sale_payload = {
-            'channel': 'online',
-            'payment_method': payment_method,
-            'payment_account_code': account_code,
-            'items': items,
-            'source_order_id': order_id,
-            'notes': 'Orden pagada webhook Tienda Nube',
-            'auto_emit_invoice': _load_settings().get('auto_invoice_online_paid', True),
-            'customer_name': _clean_text(payload.get('customer_name') or payload.get('name')),
-            'customer_email': _clean_text(payload.get('customer_email') or payload.get('email')),
-        }
         try:
+            # Los webhooks de Tienda Nube traen `store_id`, `event` e `id`.
+            # Para obtener items/pago/cliente, pedimos el detalle de la orden vía API.
+            order = _tiendanube_fetch_order(order_id, payload)
+            items = _extract_online_items(order)
+            coupon_codes = _extract_online_coupon_codes(order)
+            payment_method = _infer_payment_method_from_online(order)
+            account_code = 'payway' if payment_method in ('debit', 'credit') else ('cash' if payment_method == 'cash' else 'transfer_1')
+
+            customer = order.get('customer') if isinstance(order.get('customer'), dict) else {}
+            sale_payload = {
+                'channel': 'online',
+                'payment_method': payment_method,
+                'pricing_source': 'tiendanube',
+                'payment_account_code': account_code,
+                'items': items,
+                'coupon_codes': coupon_codes,
+                'source_order_id': order_id,
+                'notes': 'Orden pagada webhook Tienda Nube',
+                'auto_emit_invoice': _load_settings().get('auto_invoice_online_paid', True),
+                'customer_name': _clean_text(customer.get('name') or order.get('customer_name') or order.get('name')),
+                'customer_email': _clean_text(customer.get('email') or order.get('customer_email') or order.get('email') or order.get('contact_email')),
+            }
+
             quote = _build_quote(request, sale_payload, lock_variants=True)
             payment_account = _ensure_payment_account(sale_payload, quote['payment_method'])
 
@@ -2665,14 +4565,14 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
                 '''
                 INSERT INTO retail_sales(
                   sale_number, channel, status, payment_method, payment_account_id, cash_session_id,
-                  customer_snapshot, subtotal_ars, price_adjustment_pct, price_adjustment_amount_ars,
+                  customer_snapshot, subtotal_ars, promotion_discount_total_ars, price_adjustment_pct, price_adjustment_amount_ars,
                   total_ars, currency_code, requires_invoice, notes, source_order_id,
-                  price_override_by, price_override_reason, created_by
+                  pricing_source, price_override_by, price_override_reason, created_by
                 )
                 VALUES (
                   'PENDIENTE', %s, 'confirmed', %s, %s, NULL,
-                  %s, %s, %s, %s,
-                  %s, 'ARS', %s, %s, %s,
+                  %s, %s, %s, %s, %s,
+                  %s, 'ARS', %s, %s, %s, %s,
                   NULL, NULL, NULL
                 )
                 RETURNING id
@@ -2689,29 +4589,33 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
                         }
                     ),
                     quote['subtotal_ars'],
+                    quote.get('promotion_discount_total_ars') or 0,
                     quote['modifier_pct'],
                     quote['modifier_amount_ars'],
                     quote['total_ars'],
                     quote['invoice_required'],
                     sale_payload.get('notes'),
                     order_id,
+                    quote.get('pricing_source') or 'tiendanube',
                 ],
             )
             exec_void('UPDATE retail_sales SET sale_number=%s WHERE id=%s', [_sale_number(sale_id), sale_id])
 
+            persisted_items = []
             for line in quote['items']:
                 variant = q('SELECT id, stock_on_hand FROM retail_product_variants WHERE id=%s FOR UPDATE', [line['variant_id']], one=True)
                 new_stock = int(variant['stock_on_hand']) - int(line['quantity'])
                 if new_stock < 0:
                     raise ValidationError(f"Stock insuficiente para variante {line['variant_id']}")
-                exec_void(
+                sale_item_id = exec_returning(
                     '''
                     INSERT INTO retail_sale_items(
                       sale_id, variant_id, quantity,
-                      unit_price_list_ars, unit_price_final_ars, unit_cost_snapshot_ars,
+                      unit_price_list_ars, unit_price_final_ars, promotion_discount_ars, unit_cost_snapshot_ars,
                       line_subtotal_ars, line_total_ars
                     )
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
                     ''',
                     [
                         sale_id,
@@ -2719,11 +4623,13 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
                         line['quantity'],
                         line['unit_price_list_ars'],
                         line['unit_price_final_ars'],
+                        line.get('promotion_discount_ars') or 0,
                         line['unit_cost_snapshot_ars'],
                         line['line_subtotal_ars'],
                         line['line_total_ars'],
                     ],
                 )
+                persisted_items.append({'line_key': line.get('line_key'), 'sale_item_id': sale_item_id})
                 exec_void('UPDATE retail_product_variants SET stock_on_hand=%s WHERE id=%s', [new_stock, line['variant_id']])
                 exec_void(
                     '''
@@ -2735,6 +4641,8 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
                     ''',
                     [line['variant_id'], -int(line['quantity']), new_stock, line['unit_cost_snapshot_ars'], sale_id],
                 )
+
+            _persist_sale_promotions(sale_id, quote, persisted_items)
 
             if quote['invoice_required']:
                 exec_void(
@@ -2772,6 +4680,7 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
             return Response({'ok': False, 'detail': str(exc)}, status=400)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class RetailOnlineWebhookOrdenCanceladaView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -2780,12 +4689,11 @@ class RetailOnlineWebhookOrdenCanceladaView(APIView):
     def post(self, request):
         _verify_tiendanube_signature(request)
         payload = _json(request.body)
-        event_id = _clean_text(payload.get('event_id') or request.headers.get('x-event-id') or request.headers.get('X-Event-Id'))
         order_id = _clean_text(payload.get('id') or payload.get('order_id') or payload.get('number'))
-        if not event_id:
-            event_id = f'cancel-{order_id}-{int(timezone.now().timestamp())}'
         if not order_id:
             raise ValidationError('order_id ausente en webhook')
+        event_id = _tiendanube_event_id(payload, 'order/cancelled', order_id)
+        signature = request.headers.get('x-linkedstore-hmac-sha256') or request.headers.get('X-Linkedstore-Hmac-Sha256')
 
         existing_event = q(
             'SELECT id FROM retail_webhook_events WHERE provider=\'tiendanube\' AND event_id=%s FOR UPDATE',
@@ -2801,7 +4709,7 @@ class RetailOnlineWebhookOrdenCanceladaView(APIView):
             VALUES ('tiendanube','order_cancelled',%s,%s,%s,%s)
             RETURNING id
             ''',
-            [event_id, order_id, request.headers.get('x-linkedstore-hmac-sha256'), json.dumps(payload)],
+            [event_id, order_id, signature, json.dumps(payload)],
         )
 
         sale = q('SELECT * FROM retail_sales WHERE source_order_id=%s FOR UPDATE', [order_id], one=True)
@@ -2859,6 +4767,521 @@ class RetailOnlineWebhookOrdenCanceladaView(APIView):
         return Response({'ok': True, 'event_id': event_id, 'order_id': order_id})
 
 
+@method_decorator(csrf_exempt, name='dispatch')
+class RetailOnlineWebhookStoreRedactView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @transaction.atomic
+    def post(self, request):
+        _verify_tiendanube_signature(request)
+        payload = _json(request.body)
+        store_id = _clean_text(payload.get('store_id'))
+        event_id = _tiendanube_event_id(payload, 'store/redact', store_id or 'store')
+        signature = request.headers.get('x-linkedstore-hmac-sha256') or request.headers.get('X-Linkedstore-Hmac-Sha256')
+
+        existing_event = q(
+            'SELECT id FROM retail_webhook_events WHERE provider=\'tiendanube\' AND event_id=%s FOR UPDATE',
+            [event_id],
+            one=True,
+        )
+        if existing_event:
+            return Response({'ok': True, 'duplicate': True, 'event_id': event_id})
+
+        event_db_id = exec_returning(
+            '''
+            INSERT INTO retail_webhook_events(provider, event_type, event_id, external_order_id, signature, payload)
+            VALUES ('tiendanube','store_redact',%s,%s,%s,%s)
+            RETURNING id
+            ''',
+            [event_id, store_id, signature, json.dumps(payload)],
+        )
+
+        cfg = _load_settings()
+        cfg_store = _clean_text(cfg.get('tiendanube_store_id'))
+        if cfg_store and store_id and str(cfg_store) != str(store_id):
+            exec_void(
+                'UPDATE retail_webhook_events SET processed=FALSE, error_message=%s WHERE id=%s',
+                ['store_id webhook no coincide con configuracion local', event_db_id],
+            )
+            return Response({'ok': False, 'detail': 'store_id no coincide'}, status=400)
+
+        exec_void(
+            '''
+            UPDATE retail_settings
+            SET tiendanube_store_id=NULL,
+                tiendanube_access_token=NULL,
+                tiendanube_webhook_secret=NULL,
+                updated_at=NOW()
+            WHERE id=1
+            ''',
+        )
+        exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
+        security_logger.warning("tiendanube_store_redact_applied store_id=%s", store_id or "")
+        return Response({'ok': True, 'event_id': event_id, 'store_id': store_id})
+
+
+def _to_datetime(value, label, allow_none=True):
+    if value in (None, ''):
+        if allow_none:
+            return None
+        raise ValidationError(f'{label} requerido')
+    if isinstance(value, dt.datetime):
+        parsed = value
+    else:
+        raw = str(value).strip()
+        try:
+            parsed = dt.datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        except ValueError:
+            raise ValidationError(f'{label} invalido, usa ISO-8601')
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
+def _parse_product_ids(raw):
+    if raw in (None, ''):
+        return []
+    if not isinstance(raw, list):
+        raise ValidationError('product_ids debe ser una lista')
+    out = []
+    seen = set()
+    for value in raw:
+        pid = _to_int(value, 'product_id')
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def _validate_product_ids(product_ids):
+    if not product_ids:
+        return
+    rows = q('SELECT id FROM retail_products WHERE id = ANY(%s)', [product_ids]) or []
+    found = {int(row['id']) for row in rows}
+    missing = [pid for pid in product_ids if int(pid) not in found]
+    if missing:
+        raise ValidationError(f'product_ids inexistentes: {", ".join(str(x) for x in missing)}')
+
+
+def _parse_variant_ids(raw):
+    if raw in (None, ''):
+        return []
+    if not isinstance(raw, list):
+        raise ValidationError('variant_ids debe ser una lista')
+    out = []
+    seen = set()
+    for value in raw:
+        vid = _to_int(value, 'variant_id')
+        if vid in seen:
+            continue
+        seen.add(vid)
+        out.append(vid)
+    return out
+
+
+def _validate_variant_ids(variant_ids):
+    if not variant_ids:
+        return
+    rows = q('SELECT id FROM retail_product_variants WHERE id = ANY(%s)', [variant_ids]) or []
+    found = {int(row['id']) for row in rows}
+    missing = [vid for vid in variant_ids if int(vid) not in found]
+    if missing:
+        raise ValidationError(f'variant_ids inexistentes: {", ".join(str(x) for x in missing)}')
+
+
+def _normalize_promotion_payload(data, existing=None):
+    if not isinstance(data, dict):
+        raise ValidationError('Payload invalido')
+
+    base = {
+        'name': None,
+        'promo_type': PROMO_TYPE_PERCENT,
+        'active': True,
+        'channel_scope': 'both',
+        'activation_mode': 'automatic',
+        'coupon_code': None,
+        'priority': 100,
+        'combinable': True,
+        'bogo_mode': None,
+        'buy_qty': None,
+        'pay_qty': None,
+        'discount_pct': None,
+        'applies_to_all_products': True,
+        'valid_from': None,
+        'valid_until': None,
+        'product_ids': [],
+        'variant_ids': [],
+    }
+    if existing:
+        base.update(
+            {
+                'name': _clean_text(existing.get('name')),
+                'promo_type': _clean_text(existing.get('promo_type')) or PROMO_TYPE_PERCENT,
+                'active': bool(existing.get('active')),
+                'channel_scope': _clean_text(existing.get('channel_scope')) or 'both',
+                'activation_mode': _clean_text(existing.get('activation_mode')) or 'automatic',
+                'coupon_code': _clean_text(existing.get('coupon_code')),
+                'priority': int(existing.get('priority') or 100),
+                'combinable': bool(existing.get('combinable')),
+                'bogo_mode': _clean_text(existing.get('bogo_mode')),
+                'buy_qty': _to_int(existing.get('buy_qty'), 'buy_qty', allow_none=True),
+                'pay_qty': _to_int(existing.get('pay_qty'), 'pay_qty', allow_none=True),
+                'discount_pct': _to_decimal(existing.get('discount_pct'), 'discount_pct', allow_none=True),
+                'applies_to_all_products': bool(existing.get('applies_to_all_products')),
+                'valid_from': _to_datetime(existing.get('valid_from'), 'valid_from', allow_none=True),
+                'valid_until': _to_datetime(existing.get('valid_until'), 'valid_until', allow_none=True),
+                'product_ids': _parse_product_ids(existing.get('product_ids') or []),
+                'variant_ids': _parse_variant_ids(existing.get('variant_ids') or []),
+            }
+        )
+
+    if 'name' in data:
+        base['name'] = _clean_text(data.get('name') or data.get('nombre'))
+    if 'promo_type' in data:
+        base['promo_type'] = (_clean_text(data.get('promo_type')) or '').lower()
+    if 'active' in data:
+        base['active'] = _to_bool(data.get('active'))
+    if 'channel_scope' in data:
+        base['channel_scope'] = (_clean_text(data.get('channel_scope')) or '').lower()
+    if 'activation_mode' in data:
+        base['activation_mode'] = (_clean_text(data.get('activation_mode')) or '').lower()
+    if 'coupon_code' in data or 'cupon' in data:
+        base['coupon_code'] = _clean_text(data.get('coupon_code') or data.get('cupon'))
+    if 'priority' in data:
+        base['priority'] = _to_int(data.get('priority'), 'priority')
+    if 'combinable' in data:
+        base['combinable'] = _to_bool(data.get('combinable'))
+    if 'bogo_mode' in data:
+        base['bogo_mode'] = (_clean_text(data.get('bogo_mode')) or '').lower() or None
+    if 'buy_qty' in data:
+        base['buy_qty'] = _to_int(data.get('buy_qty'), 'buy_qty', allow_none=True)
+    if 'pay_qty' in data:
+        base['pay_qty'] = _to_int(data.get('pay_qty'), 'pay_qty', allow_none=True)
+    if 'discount_pct' in data:
+        base['discount_pct'] = _to_decimal(data.get('discount_pct'), 'discount_pct', allow_none=True)
+    if 'applies_to_all_products' in data:
+        base['applies_to_all_products'] = _to_bool(data.get('applies_to_all_products'))
+    if 'valid_from' in data:
+        base['valid_from'] = _to_datetime(data.get('valid_from'), 'valid_from', allow_none=True)
+    if 'valid_until' in data:
+        base['valid_until'] = _to_datetime(data.get('valid_until'), 'valid_until', allow_none=True)
+    if 'product_ids' in data:
+        base['product_ids'] = _parse_product_ids(data.get('product_ids'))
+    if 'variant_ids' in data:
+        base['variant_ids'] = _parse_variant_ids(data.get('variant_ids'))
+
+    if not base['name']:
+        raise ValidationError('name requerido')
+    if base['promo_type'] not in (PROMO_TYPE_PERCENT, PROMO_TYPE_X_FOR_Y):
+        raise ValidationError('promo_type invalido (percent_off|x_for_y)')
+    if base['channel_scope'] not in PROMO_CHANNELS:
+        raise ValidationError('channel_scope invalido (local|online|both)')
+    if base['activation_mode'] not in PROMO_ACTIVATION_MODES:
+        raise ValidationError('activation_mode invalido (automatic|coupon|both)')
+    if base['activation_mode'] in ('coupon', 'both') and not base['coupon_code']:
+        raise ValidationError('coupon_code requerido para activation_mode coupon/both')
+    if base['priority'] < 0:
+        raise ValidationError('priority debe ser >= 0')
+    if base['valid_from'] and base['valid_until'] and base['valid_until'] < base['valid_from']:
+        raise ValidationError('valid_until debe ser mayor o igual a valid_from')
+
+    if base['promo_type'] == PROMO_TYPE_PERCENT:
+        pct = _to_decimal(base.get('discount_pct'), 'discount_pct', allow_none=True)
+        if pct is None or pct <= 0 or pct > 100:
+            raise ValidationError('discount_pct invalido para percent_off (0 < pct <= 100)')
+        base['discount_pct'] = pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        base['bogo_mode'] = None
+        base['buy_qty'] = None
+        base['pay_qty'] = None
+        base['variant_ids'] = []
+        if not base['applies_to_all_products']:
+            if not base['product_ids']:
+                raise ValidationError('product_ids requerido cuando applies_to_all_products=false')
+            _validate_product_ids(base['product_ids'])
+        else:
+            base['product_ids'] = []
+    else:
+        if base['bogo_mode'] not in PROMO_BOGO_MODES:
+            raise ValidationError('bogo_mode invalido (sku|mix)')
+        buy_qty = _to_int(base.get('buy_qty'), 'buy_qty', allow_none=True)
+        pay_qty = _to_int(base.get('pay_qty'), 'pay_qty', allow_none=True)
+        if buy_qty is None or buy_qty <= 0:
+            raise ValidationError('buy_qty invalido para x_for_y')
+        if pay_qty is None or pay_qty < 0 or pay_qty >= buy_qty:
+            raise ValidationError('pay_qty invalido para x_for_y')
+        base['buy_qty'] = buy_qty
+        base['pay_qty'] = pay_qty
+        base['discount_pct'] = None
+        if base['bogo_mode'] == 'mix':
+            base['applies_to_all_products'] = True
+            base['product_ids'] = []
+            base['variant_ids'] = []
+        else:
+            base['applies_to_all_products'] = True
+            base['product_ids'] = []
+            if not base['variant_ids']:
+                raise ValidationError('variant_ids requerido cuando bogo_mode=sku')
+            _validate_variant_ids(base['variant_ids'])
+
+    if base['promo_type'] != PROMO_TYPE_PERCENT:
+        base['product_ids'] = []
+
+    return base
+
+
+def _sync_promotion_products(promotion_id, product_ids):
+    exec_void('DELETE FROM retail_promotion_products WHERE promotion_id=%s', [promotion_id])
+    for pid in product_ids or []:
+        exec_void(
+            '''
+            INSERT INTO retail_promotion_products(promotion_id, product_id)
+            VALUES (%s,%s)
+            ON CONFLICT (promotion_id, product_id) DO NOTHING
+            ''',
+            [promotion_id, pid],
+        )
+
+
+def _sync_promotion_variants(promotion_id, variant_ids):
+    exec_void('DELETE FROM retail_promotion_variants WHERE promotion_id=%s', [promotion_id])
+    for vid in variant_ids or []:
+        exec_void(
+            '''
+            INSERT INTO retail_promotion_variants(promotion_id, variant_id)
+            VALUES (%s,%s)
+            ON CONFLICT (promotion_id, variant_id) DO NOTHING
+            ''',
+            [promotion_id, vid],
+        )
+
+
+def _load_promotion(promotion_id):
+    row = q(
+        '''
+        SELECT p.*,
+               COALESCE(pp.product_ids, ARRAY[]::BIGINT[]) AS product_ids,
+               COALESCE(pv.variant_ids, ARRAY[]::BIGINT[]) AS variant_ids
+        FROM retail_promotions p
+        LEFT JOIN LATERAL (
+          SELECT array_agg(rpp.product_id ORDER BY rpp.product_id) AS product_ids
+          FROM retail_promotion_products rpp
+          WHERE rpp.promotion_id=p.id
+        ) pp ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT array_agg(rpv.variant_id ORDER BY rpv.variant_id) AS variant_ids
+          FROM retail_promotion_variants rpv
+          WHERE rpv.promotion_id=p.id
+        ) pv ON TRUE
+        WHERE p.id=%s
+        ''',
+        [promotion_id],
+        one=True,
+    )
+    if not row:
+        return None
+    pids = []
+    for pid in row.get('product_ids') or []:
+        try:
+            pids.append(int(pid))
+        except (TypeError, ValueError):
+            continue
+    row['product_ids'] = pids
+    vids = []
+    for vid in row.get('variant_ids') or []:
+        try:
+            vids.append(int(vid))
+        except (TypeError, ValueError):
+            continue
+    row['variant_ids'] = vids
+    products = q(
+        '''
+        SELECT id, name
+        FROM retail_products
+        WHERE id = ANY(%s)
+        ORDER BY name, id
+        ''',
+        [pids or [0]],
+    ) or []
+    row['products'] = products if pids else []
+    variants = q(
+        '''
+        SELECT v.id, v.sku, p.name AS producto
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.id = ANY(%s)
+        ORDER BY v.sku, v.id
+        ''',
+        [vids or [0]],
+    ) or []
+    row['variants'] = variants if vids else []
+    return row
+
+
+class RetailPromocionesView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        qtxt = _clean_text(request.query_params.get('q'))
+        active = _clean_text(request.query_params.get('active'))
+        params = []
+        where = []
+        if qtxt:
+            where.append('(p.name ILIKE %s OR COALESCE(p.coupon_code, \'\') ILIKE %s)')
+            params.extend([f'%{qtxt}%', f'%{qtxt}%'])
+        if active in ('1', 'true', 'si', 'yes'):
+            where.append('p.active=TRUE')
+        elif active in ('0', 'false', 'no'):
+            where.append('p.active=FALSE')
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ''
+        rows = q(
+            f'''
+            SELECT p.*,
+                   COALESCE(pp.product_ids, ARRAY[]::BIGINT[]) AS product_ids,
+                   COALESCE(pv.variant_ids, ARRAY[]::BIGINT[]) AS variant_ids,
+                   COALESCE(cardinality(pp.product_ids), 0)::int AS scoped_products,
+                   COALESCE(cardinality(pv.variant_ids), 0)::int AS scoped_variants
+            FROM retail_promotions p
+            LEFT JOIN LATERAL (
+              SELECT array_agg(rpp.product_id ORDER BY rpp.product_id) AS product_ids
+              FROM retail_promotion_products rpp
+              WHERE rpp.promotion_id=p.id
+            ) pp ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT array_agg(rpv.variant_id ORDER BY rpv.variant_id) AS variant_ids
+              FROM retail_promotion_variants rpv
+              WHERE rpv.promotion_id=p.id
+            ) pv ON TRUE
+            {where_sql}
+            ORDER BY p.priority, p.id
+            ''',
+            params,
+        ) or []
+        for row in rows:
+            pids = []
+            vids = []
+            for pid in row.get('product_ids') or []:
+                try:
+                    pids.append(int(pid))
+                except (TypeError, ValueError):
+                    continue
+            for vid in row.get('variant_ids') or []:
+                try:
+                    vids.append(int(vid))
+                except (TypeError, ValueError):
+                    continue
+            row['product_ids'] = pids
+            row['variant_ids'] = vids
+        return Response(rows)
+
+    @transaction.atomic
+    def post(self, request):
+        _require_staff(request)
+        if not _can_manage_promotions(request):
+            raise PermissionDenied('No autorizado para editar promociones')
+        _set_audit_user(request)
+        payload = _normalize_promotion_payload(request.data or {}, existing=None)
+        promo_id = exec_returning(
+            '''
+            INSERT INTO retail_promotions(
+              name, promo_type, active, channel_scope, activation_mode, coupon_code,
+              priority, combinable, bogo_mode, buy_qty, pay_qty, discount_pct,
+              applies_to_all_products, valid_from, valid_until
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+            ''',
+            [
+                payload['name'],
+                payload['promo_type'],
+                payload['active'],
+                payload['channel_scope'],
+                payload['activation_mode'],
+                payload['coupon_code'],
+                payload['priority'],
+                payload['combinable'],
+                payload['bogo_mode'],
+                payload['buy_qty'],
+                payload['pay_qty'],
+                payload['discount_pct'],
+                payload['applies_to_all_products'],
+                payload['valid_from'],
+                payload['valid_until'],
+            ],
+        )
+        _sync_promotion_products(promo_id, payload['product_ids'])
+        _sync_promotion_variants(promo_id, payload['variant_ids'])
+        return Response(_load_promotion(promo_id), status=201)
+
+
+class RetailPromocionDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, promocion_id):
+        _require_staff(request)
+        row = _load_promotion(promocion_id)
+        if not row:
+            return Response({'detail': 'Promocion no encontrada'}, status=404)
+        return Response(row)
+
+    @transaction.atomic
+    def patch(self, request, promocion_id):
+        _require_staff(request)
+        if not _can_manage_promotions(request):
+            raise PermissionDenied('No autorizado para editar promociones')
+        _set_audit_user(request)
+        existing = _load_promotion(promocion_id)
+        if not existing:
+            return Response({'detail': 'Promocion no encontrada'}, status=404)
+        payload = _normalize_promotion_payload(request.data or {}, existing=existing)
+        exec_void(
+            '''
+            UPDATE retail_promotions
+            SET name=%s,
+                promo_type=%s,
+                active=%s,
+                channel_scope=%s,
+                activation_mode=%s,
+                coupon_code=%s,
+                priority=%s,
+                combinable=%s,
+                bogo_mode=%s,
+                buy_qty=%s,
+                pay_qty=%s,
+                discount_pct=%s,
+                applies_to_all_products=%s,
+                valid_from=%s,
+                valid_until=%s
+            WHERE id=%s
+            ''',
+            [
+                payload['name'],
+                payload['promo_type'],
+                payload['active'],
+                payload['channel_scope'],
+                payload['activation_mode'],
+                payload['coupon_code'],
+                payload['priority'],
+                payload['combinable'],
+                payload['bogo_mode'],
+                payload['buy_qty'],
+                payload['pay_qty'],
+                payload['discount_pct'],
+                payload['applies_to_all_products'],
+                payload['valid_from'],
+                payload['valid_until'],
+                promocion_id,
+            ],
+        )
+        _sync_promotion_products(promocion_id, payload['product_ids'])
+        _sync_promotion_variants(promocion_id, payload['variant_ids'])
+        return Response(_load_promotion(promocion_id))
+
+    put = patch
+
+
 class RetailConfigSettingsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2868,12 +5291,7 @@ class RetailConfigSettingsView(APIView):
         if not row:
             exec_void('INSERT INTO retail_settings(id) VALUES (1) ON CONFLICT (id) DO NOTHING')
             row = q('SELECT * FROM retail_settings WHERE id=1', one=True) or {}
-        if _user_role(request) != 'admin':
-            row['tiendanube_access_token'] = None
-            row['tiendanube_client_secret'] = None
-            row['tiendanube_webhook_secret'] = None
-            row['arca_key_path'] = None
-        return Response(row)
+        return Response(_sanitize_retail_settings_response(row))
 
     @transaction.atomic
     def put(self, request):
@@ -2907,6 +5325,9 @@ class RetailConfigSettingsView(APIView):
             'return_warranty_size_days',
             'return_warranty_breakage_days',
         ]
+        non_negative_decimal_fields = [
+            'purchase_default_markup_pct',
+        ]
         bool_fields = ['auto_invoice_online_paid']
 
         for field in text_fields:
@@ -2922,6 +5343,13 @@ class RetailConfigSettingsView(APIView):
                 val = _to_int(data.get(field), field)
                 if val <= 0:
                     raise ValidationError(f'{field} debe ser mayor a 0')
+                updates.append(f'{field}=%s')
+                params.append(val)
+        for field in non_negative_decimal_fields:
+            if field in data:
+                val = _pct(data.get(field))
+                if val < 0:
+                    raise ValidationError(f'{field} debe ser mayor o igual a 0')
                 updates.append(f'{field}=%s')
                 params.append(val)
         for field in bool_fields:
@@ -3034,6 +5462,255 @@ class RetailConfigPaymentAccountsView(APIView):
                 )
 
         return self.get(request)
+
+
+class RetailReporteResumenComercialView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_admin(request)
+        since, until = _parse_dates(request)
+        row = q(
+            '''
+            SELECT COALESCE(SUM(si.line_subtotal_ars + si.promotion_discount_ars),0)::numeric(14,2) AS ventas_brutas_ars,
+                   COALESCE(SUM(si.promotion_discount_ars),0)::numeric(14,2) AS descuentos_ars,
+                   COALESCE(SUM(si.line_total_ars),0)::numeric(14,2) AS ventas_netas_ars,
+                   COALESCE(SUM(si.line_total_ars - (si.unit_cost_snapshot_ars * si.quantity)),0)::numeric(14,2) AS margen_bruto_ars,
+                   COALESCE(SUM(si.quantity),0)::int AS unidades,
+                   COUNT(DISTINCT s.id)::int AS tickets
+            FROM retail_sale_items si
+            JOIN retail_sales s ON s.id=si.sale_id
+            WHERE s.status IN ('confirmed','partial_return','returned')
+              AND s.created_at::date BETWEEN %s AND %s
+            ''',
+            [since, until],
+            one=True,
+        ) or {
+            'ventas_brutas_ars': Decimal('0.00'),
+            'descuentos_ars': Decimal('0.00'),
+            'ventas_netas_ars': Decimal('0.00'),
+            'margen_bruto_ars': Decimal('0.00'),
+            'unidades': 0,
+            'tickets': 0,
+        }
+        tickets = int(row.get('tickets') or 0)
+        ventas_netas = _to_decimal(row.get('ventas_netas_ars') or 0, 'ventas_netas_ars')
+        row['ticket_promedio_ars'] = (ventas_netas / Decimal(tickets)).quantize(TWO_DEC, rounding=ROUND_HALF_UP) if tickets > 0 else Decimal('0.00')
+        return Response({'range': {'from': since, 'to': until}, 'summary': row})
+
+
+class RetailReporteAnalisisProductosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_admin(request)
+        if not _can_view_costs(request):
+            raise PermissionDenied('No autorizado para ver costos/rentabilidad')
+        since, until = _parse_dates(request)
+        rows = q(
+            '''
+            SELECT p.id AS product_id,
+                   p.name AS producto,
+                   v.id AS variant_id,
+                   v.sku,
+                   v.option_signature,
+                   v.stock_on_hand,
+                   COALESCE(m.qty_delta,0)::int AS stock_delta_periodo,
+                   SUM(si.quantity)::int AS unidades,
+                   SUM(si.line_total_ars)::numeric(14,2) AS ventas_netas_ars,
+                   SUM(si.unit_cost_snapshot_ars * si.quantity)::numeric(14,2) AS costo_ars,
+                   (SUM(si.line_total_ars) - SUM(si.unit_cost_snapshot_ars * si.quantity))::numeric(14,2) AS margen_ars
+            FROM retail_sale_items si
+            JOIN retail_sales s ON s.id=si.sale_id
+            JOIN retail_product_variants v ON v.id=si.variant_id
+            JOIN retail_products p ON p.id=v.product_id
+            LEFT JOIN (
+              SELECT variant_id, SUM(qty_signed)::int AS qty_delta
+              FROM retail_stock_movements
+              WHERE created_at::date BETWEEN %s AND %s
+              GROUP BY variant_id
+            ) m ON m.variant_id=v.id
+            WHERE s.status IN ('confirmed','partial_return','returned')
+              AND s.created_at::date BETWEEN %s AND %s
+            GROUP BY p.id, p.name, v.id, v.sku, v.option_signature, v.stock_on_hand, m.qty_delta
+            ORDER BY margen_ars DESC, unidades DESC
+            ''',
+            [since, until, since, until],
+        ) or []
+
+        out = []
+        units_samples = []
+        margin_samples = []
+        rotation_samples = []
+        max_units = 0
+        max_margin = None
+        max_rotation = None
+        for row in rows:
+            units = int(row.get('unidades') or 0)
+            stock_actual = int(row.get('stock_on_hand') or 0)
+            stock_delta = int(row.get('stock_delta_periodo') or 0)
+            stock_inicio = max(0, stock_actual - stock_delta)
+            stock_promedio = ((Decimal(stock_inicio) + Decimal(max(0, stock_actual))) / Decimal('2')).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            rotation_idx = None
+            if stock_promedio > 0:
+                rotation_idx = (Decimal(units) / stock_promedio).quantize(FOUR_DEC, rounding=ROUND_HALF_UP)
+
+            costo_ars = _to_decimal(row.get('costo_ars') or 0, 'costo_ars')
+            margen_ars = _to_decimal(row.get('margen_ars') or 0, 'margen_ars')
+            margen_pct = _safe_pct(margen_ars, costo_ars)
+
+            units_samples.append(units)
+            if margen_pct is not None:
+                margin_samples.append(float(margen_pct))
+            if rotation_idx is not None:
+                rotation_samples.append(float(rotation_idx))
+            max_units = max(max_units, units)
+            max_margin = margen_ars if max_margin is None else max(max_margin, margen_ars)
+            if rotation_idx is not None:
+                max_rotation = rotation_idx if max_rotation is None else max(max_rotation, rotation_idx)
+
+            out.append(
+                {
+                    'product_id': int(row['product_id']),
+                    'producto': row.get('producto') or '',
+                    'variant_id': int(row['variant_id']),
+                    'sku': row.get('sku') or '',
+                    'option_signature': row.get('option_signature') or '',
+                    'unidades': units,
+                    'ventas_netas_ars': _to_decimal(row.get('ventas_netas_ars') or 0, 'ventas_netas_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                    'costo_ars': costo_ars.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                    'margen_ars': margen_ars.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                    'margen_pct': margen_pct,
+                    'stock_actual': stock_actual,
+                    'stock_inicio_estimado': stock_inicio,
+                    'stock_promedio_estimado': stock_promedio,
+                    'rotacion_idx': rotation_idx,
+                    'labels': [],
+                }
+            )
+
+        p25_units = _percentile(units_samples, 0.25)
+        p50_units = _percentile(units_samples, 0.50)
+        p75_units = _percentile(units_samples, 0.75)
+        p25_margin = _percentile(margin_samples, 0.25)
+        p75_margin = _percentile(margin_samples, 0.75)
+        p50_rotation = _percentile(rotation_samples, 0.50)
+
+        for row in out:
+            labels = []
+            units = int(row.get('unidades') or 0)
+            margin_pct = row.get('margen_pct')
+            rotation_idx = row.get('rotacion_idx')
+
+            margin_float = float(margin_pct) if margin_pct is not None else None
+            rotation_float = float(rotation_idx) if rotation_idx is not None else None
+
+            if margin_float is not None and p75_margin is not None and p25_units is not None:
+                if margin_float >= p75_margin and units <= p25_units:
+                    labels.append('buen_margen_poca_venta')
+            if margin_float is not None and p25_margin is not None and p75_units is not None:
+                if margin_float <= p25_margin and units >= p75_units:
+                    labels.append('mucha_venta_margen_bajo')
+            if max_margin is not None and _to_decimal(row.get('margen_ars') or 0, 'margen_ars') == max_margin and max_margin > 0:
+                labels.append('mas_ganancia')
+            if max_rotation is not None and rotation_idx is not None and rotation_idx == max_rotation and max_rotation > 0:
+                labels.append('rotador')
+            elif max_rotation is None and max_units > 0 and units == max_units:
+                labels.append('rotador')
+
+            if margin_float is not None and p75_margin is not None and margin_float >= p75_margin:
+                if rotation_float is not None and p50_rotation is not None and rotation_float >= p50_rotation:
+                    labels.append('conviene')
+                elif rotation_float is None and p50_units is not None and units >= p50_units:
+                    labels.append('conviene')
+
+            row['labels'] = labels
+
+        return Response(
+            {
+                'range': {'from': since, 'to': until},
+                'thresholds': {
+                    'units_p25': p25_units,
+                    'units_p75': p75_units,
+                    'margin_p25': p25_margin,
+                    'margin_p75': p75_margin,
+                    'rotation_p50': p50_rotation,
+                },
+                'rows': out,
+            }
+        )
+
+
+class RetailReporteAnalisisProveedoresView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_admin(request)
+        if not _can_view_costs(request):
+            raise PermissionDenied('No autorizado para ver costos/rentabilidad')
+        since, until = _parse_dates(request)
+        rows = q(
+            '''
+            SELECT sp.id AS supplier_id,
+                   sp.name AS proveedor,
+                   SUM(pi.line_total_ars)::numeric(14,2) AS costo_total_ars,
+                   SUM(pi.unit_price_final_ars * pi.quantity)::numeric(14,2) AS ingreso_potencial_ars,
+                   AVG(pi.real_margin_pct)::numeric(8,2) AS margen_promedio_pct,
+                   COALESCE(STDDEV_POP(pi.real_margin_pct),0)::numeric(8,2) AS consistencia_stddev_pct,
+                   COUNT(*)::int AS item_count,
+                   COUNT(DISTINCT pi.variant_id)::int AS variantes
+            FROM retail_purchase_items pi
+            JOIN retail_purchases p ON p.id=pi.purchase_id
+            JOIN retail_suppliers sp ON sp.id=p.supplier_id
+            WHERE p.purchase_date BETWEEN %s AND %s
+              AND pi.unit_price_final_ars IS NOT NULL
+            GROUP BY sp.id, sp.name
+            ''',
+            [since, until],
+        ) or []
+
+        total_cost = Decimal('0.00')
+        out = []
+        for row in rows:
+            costo_total = _to_decimal(row.get('costo_total_ars') or 0, 'costo_total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            ingreso_potencial = _to_decimal(row.get('ingreso_potencial_ars') or 0, 'ingreso_potencial_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            ganancia_potencial = (ingreso_potencial - costo_total).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            margen_promedio = _to_decimal(row.get('margen_promedio_pct') or 0, 'margen_promedio_pct', allow_none=True)
+            consistencia = _to_decimal(row.get('consistencia_stddev_pct') or 0, 'consistencia_stddev_pct', allow_none=True) or Decimal('0.00')
+            margen_ponderado = _safe_pct(ganancia_potencial, costo_total) or Decimal('0.00')
+            total_cost += costo_total
+            out.append(
+                {
+                    'supplier_id': int(row['supplier_id']),
+                    'proveedor': row.get('proveedor') or '',
+                    'costo_total_ars': costo_total,
+                    'ingreso_potencial_ars': ingreso_potencial,
+                    'ganancia_potencial_ars': ganancia_potencial,
+                    'margen_promedio_pct': (margen_promedio or Decimal('0.00')).quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                    'margen_ponderado_pct': margen_ponderado.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                    'consistencia_stddev_pct': consistencia.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                    'item_count': int(row.get('item_count') or 0),
+                    'variantes': int(row.get('variantes') or 0),
+                }
+            )
+
+        for row in out:
+            row['dependencia_pct_costo'] = (_safe_pct(row['costo_total_ars'], total_cost) or Decimal('0.00')).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+
+        out.sort(
+            key=lambda r: (
+                _to_decimal(r.get('ganancia_potencial_ars') or 0, 'ganancia_potencial_ars'),
+                _to_decimal(r.get('margen_ponderado_pct') or 0, 'margen_ponderado_pct'),
+                -_to_decimal(r.get('consistencia_stddev_pct') or 0, 'consistencia_stddev_pct'),
+            ),
+            reverse=True,
+        )
+
+        for idx, row in enumerate(out, start=1):
+            row['rank'] = idx
+            row['conviene_trabajar_mas'] = idx == 1
+
+        return Response({'range': {'from': since, 'to': until}, 'rows': out})
 
 
 class RetailReporteMasVendidosView(APIView):
@@ -3219,6 +5896,8 @@ __all__ = [
     'RetailVariantesView',
     'RetailVarianteDetailView',
     'RetailVarianteEscanearView',
+    'RetailComprasConfigView',
+    'RetailComprasProveedoresView',
     'RetailComprasView',
     'RetailCompraDetailView',
     'RetailCajaAperturaView',
@@ -3228,12 +5907,15 @@ __all__ = [
     'RetailCajaCuentasView',
     'RetailVentasView',
     'RetailVentaDetailView',
+    'RetailPromocionesView',
+    'RetailPromocionDetailView',
     'RetailGarantiaTicketView',
     'RetailGarantiasActivasView',
     'RetailVentasCotizarView',
     'RetailVentasConfirmarView',
     'RetailVentaAnularView',
     'RetailVentaDevolverView',
+    'RetailVentaCambiarView',
     'RetailFacturacionEmitirView',
     'RetailFacturacionDetailView',
     'RetailFacturacionNotaCreditoView',
@@ -3244,6 +5926,10 @@ __all__ = [
     'RetailOnlineSyncStockView',
     'RetailOnlineWebhookOrdenPagadaView',
     'RetailOnlineWebhookOrdenCanceladaView',
+    'RetailOnlineWebhookStoreRedactView',
+    'RetailReporteResumenComercialView',
+    'RetailReporteAnalisisProductosView',
+    'RetailReporteAnalisisProveedoresView',
     'RetailReporteMasVendidosView',
     'RetailReporteTallesColoresView',
     'RetailReporteBajoStockView',

@@ -5,8 +5,9 @@ import { can, PERMISSION_CODES } from '../lib/permissions';
 const DEFAULT_LABELS = {
   pos: 'POS',
   productos: 'Productos',
-  compras: 'Compras',
+  compras: 'Compras / Proveedores',
   ventas: 'Ventas',
+  promociones: 'Promociones',
   garantias: 'Cambios y devoluciones',
   reportes: 'Reportes',
   online: 'Online',
@@ -40,6 +41,7 @@ export default function Sidebar({ mobileOpen = false, onClose, labels = {}, sect
   const canProductos = can(user, PERMISSION_CODES.PAGE_PRODUCTOS);
   const canCompras = can(user, PERMISSION_CODES.PAGE_COMPRAS);
   const canVentas = can(user, PERMISSION_CODES.PAGE_VENTAS);
+  const canPromociones = can(user, PERMISSION_CODES.PAGE_PROMOCIONES);
   const canReportes = String(user?.rol || '').toLowerCase() === 'admin';
   const canOnline = can(user, PERMISSION_CODES.PAGE_ONLINE);
   const canConfig = can(user, PERMISSION_CODES.PAGE_CONFIG);
@@ -90,6 +92,7 @@ export default function Sidebar({ mobileOpen = false, onClose, labels = {}, sect
           {canProductos ? <LinkItem to="/productos" onClick={handleNavigate}>{navLabels.productos}</LinkItem> : null}
           {canCompras ? <LinkItem to="/compras" onClick={handleNavigate}>{navLabels.compras}</LinkItem> : null}
           {canVentas ? <LinkItem to="/ventas" onClick={handleNavigate}>{navLabels.ventas}</LinkItem> : null}
+          {canPromociones ? <LinkItem to="/promociones" onClick={handleNavigate}>{navLabels.promociones}</LinkItem> : null}
           {canVentas ? <LinkItem to="/garantias" onClick={handleNavigate}>{navLabels.garantias}</LinkItem> : null}
           {canReportes ? <LinkItem to="/reportes" onClick={handleNavigate}>{navLabels.reportes}</LinkItem> : null}
           {canOnline ? <LinkItem to="/online" onClick={handleNavigate}>{navLabels.online}</LinkItem> : null}

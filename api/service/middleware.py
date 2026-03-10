@@ -42,10 +42,6 @@ class ActivityLogMiddleware:
             return self.get_response(request)
 
         path = request.path or ""
-        for pref in getattr(settings, "AUDIT_LOG_EXCLUDE_PREFIXES", []):
-            if path.startswith(pref):
-                return self.get_response(request)
-
         is_write = request.method in self.WRITE_METHODS
         user = getattr(request, "user", None)
         user_id = getattr(user, "id", None)
@@ -53,12 +49,36 @@ class ActivityLogMiddleware:
         ip = get_client_ip(request.META)
         ua = request.META.get("HTTP_USER_AGENT", "")[:512]
 
+        excluded_prefixes = getattr(settings, "AUDIT_LOG_EXCLUDE_PREFIXES", []) or []
+        capture_body = True
+        for pref in excluded_prefixes:
+            if path.startswith(pref):
+                capture_body = False
+                break
+
+        redact_keys = {str(k or "").strip().lower() for k in (getattr(settings, "AUDIT_LOG_REDACT_KEYS", []) or []) if str(k or "").strip()}
+
+        def _redact_sensitive(value):
+            if isinstance(value, dict):
+                out = {}
+                for k, v in value.items():
+                    key = str(k or "")
+                    key_norm = key.strip().lower()
+                    if key_norm in redact_keys:
+                        out[key] = "[REDACTED]"
+                    else:
+                        out[key] = _redact_sensitive(v)
+                return out
+            if isinstance(value, list):
+                return [_redact_sensitive(v) for v in value]
+            return value
+
         body_json = None
-        if is_write:
+        if is_write and capture_body:
             try:
                 if request.body:
                     raw = request.body[: getattr(settings, "AUDIT_LOG_MAX_BODY", 4096)]
-                    body_json = json.loads(raw.decode("utf-8", errors="ignore"))
+                    body_json = _redact_sensitive(json.loads(raw.decode("utf-8", errors="ignore")))
             except Exception:
                 body_json = None
 
