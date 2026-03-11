@@ -215,6 +215,8 @@ export default function ConfigGeneral() {
         tiendanube_webhook_secret: settings.tiendanube_webhook_secret || undefined,
         ticket_printer_name: settings.ticket_printer_name || undefined,
         label_printer_name: settings.label_printer_name || undefined,
+        ean_country_prefix: settings.ean_country_prefix || undefined,
+        ean_generic_supplier_code: settings.ean_generic_supplier_code || undefined,
         auto_invoice_online_paid: toBool(settings.auto_invoice_online_paid),
         return_warranty_size_days:
           settings.return_warranty_size_days === '' || settings.return_warranty_size_days == null
@@ -446,6 +448,18 @@ export default function ConfigGeneral() {
                 placeholder="Impresora etiquetas"
                 value={settings?.label_printer_name || ''}
                 onChange={(e) => setSettings((v) => ({ ...v, label_printer_name: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder="Prefijo pais EAN-13 (ej 779)"
+                value={settings?.ean_country_prefix || '779'}
+                onChange={(e) => setSettings((v) => ({ ...v, ean_country_prefix: e.target.value }))}
+              />
+              <input
+                className="input"
+                placeholder="Codigo proveedor generico (0000)"
+                value={settings?.ean_generic_supplier_code || '0000'}
+                onChange={(e) => setSettings((v) => ({ ...v, ean_generic_supplier_code: e.target.value }))}
               />
               <input
                 className="input"

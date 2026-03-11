@@ -135,6 +135,20 @@ export const getRetailVariantes = (params = {}) => {
 export const postRetailVariante = (payload) => api.post('/api/retail/variantes/', payload);
 export const patchRetailVariante = (id, payload) => api.patch(`/api/retail/variantes/${id}/`, payload);
 export const getRetailVarianteByScan = (codigo) => api.get(`/api/retail/variantes/escanear/${encodeURIComponent(codigo)}/`);
+export const getRetailVarianteBarcodes = (id) => api.get(`/api/retail/variantes/${id}/barcodes/`);
+export const postRetailVarianteBarcodeGenerate = (id, payload) =>
+  api.post(`/api/retail/variantes/${id}/barcodes/generate/`, payload || {});
+export const postRetailVarianteBarcodeAssociate = (id, payload) =>
+  api.post(`/api/retail/variantes/${id}/barcodes/associate/`, payload || {});
+export const postRetailVarianteBarcodePrimary = (id, payload) =>
+  api.post(`/api/retail/variantes/${id}/barcodes/primary/`, payload || {});
+export const getRetailVarianteBarcodeLabelsUrl = (id, params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.scope) qs.set('scope', String(params.scope));
+  if (params.copies) qs.set('copies', String(params.copies));
+  if (params.code) qs.set('code', String(params.code));
+  return `${BASE}/api/retail/variantes/${id}/barcodes/labels.pdf${qs.toString() ? `?${qs}` : ''}`;
+};
 
 // Compras
 export const getRetailComprasConfig = () => api.get('/api/retail/compras/config/');

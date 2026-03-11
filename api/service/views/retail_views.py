@@ -2,6 +2,7 @@ import base64
 import datetime as dt
 import hashlib
 import hmac
+from io import BytesIO
 import json
 import logging
 import math
@@ -16,10 +17,14 @@ import requests
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from reportlab.graphics import renderPDF
+from reportlab.graphics.barcode import createBarcodeDrawing
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 from rest_framework import permissions
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny
@@ -350,6 +355,8 @@ def _load_settings():
         'purchase_default_markup_pct': purchase_markup.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
         'return_warranty_size_days': size_days,
         'return_warranty_breakage_days': breakage_days,
+        'ean_country_prefix': _clean_text(row.get('ean_country_prefix')) or '779',
+        'ean_generic_supplier_code': _clean_text(row.get('ean_generic_supplier_code')) or '0000',
         'ui_page_settings': _normalize_ui_page_settings(row.get('ui_page_settings')),
     }
 
@@ -685,10 +692,16 @@ def _load_variante(variante_id, include_costs=False):
                v.price_store_ars, v.price_online_ars, v.cost_avg_ars, v.stock_on_hand,
                v.stock_reserved, v.stock_min, v.active,
                v.tiendanube_product_id, v.tiendanube_variant_id,
+               COALESCE(vb.cnt, 0) AS barcode_count,
                v.created_at, v.updated_at
         FROM retail_product_variants v
         JOIN retail_products p ON p.id=v.product_id
         LEFT JOIN retail_categories c ON c.id=p.category_id
+        LEFT JOIN (
+          SELECT variant_id, COUNT(*)::int AS cnt
+          FROM retail_variant_barcodes
+          GROUP BY variant_id
+        ) vb ON vb.variant_id=v.id
         WHERE v.id=%s
         ''',
         [variante_id],
@@ -932,12 +945,349 @@ def _autogen_sku(product_row):
     return probe
 
 
-def _autogen_barcode(product_row):
-    base = f"LC-{product_row['id']}-{int(timezone.now().timestamp())}"
-    probe = base
-    while q('SELECT id FROM retail_product_variants WHERE LOWER(barcode_internal)=LOWER(%s)', [probe], one=True):
-        probe = f"{base}-{_random_suffix(2)}"
-    return probe
+class BarcodeConflictError(Exception):
+    def __init__(self, payload):
+        super().__init__(payload.get('detail') or 'Conflicto de barcode')
+        self.payload = payload
+
+
+def _digits(val):
+    return ''.join(ch for ch in str(val or '') if ch.isdigit())
+
+
+def _normalize_fixed_digits(raw, size, field_name, default=None):
+    val = _clean_text(raw)
+    if val is None and default is not None:
+        val = str(default)
+    txt = _digits(val)
+    if len(txt) != size:
+        raise ValidationError(f'{field_name} invalido, debe tener {size} digitos')
+    return txt
+
+
+def _ean13_check_digit(base12):
+    digits = _digits(base12)
+    if len(digits) != 12:
+        raise ValidationError('base EAN invalida, debe tener 12 digitos')
+    odd_sum = sum(int(digits[i]) for i in range(0, 12, 2))
+    even_sum = sum(int(digits[i]) for i in range(1, 12, 2))
+    total = odd_sum + (even_sum * 3)
+    return str((10 - (total % 10)) % 10)
+
+
+def _ean13_is_valid(code):
+    txt = _digits(code)
+    if len(txt) != 13:
+        return False
+    return _ean13_check_digit(txt[:12]) == txt[12]
+
+
+def _validate_new_ean13(code):
+    txt = _digits(code)
+    if len(txt) != 13:
+        raise ValidationError('barcode invalido: debe tener 13 digitos')
+    if not _ean13_is_valid(txt):
+        raise ValidationError('barcode invalido: checksum EAN-13 incorrecto')
+    return txt
+
+
+def _ean13_settings():
+    row = q('SELECT ean_country_prefix, ean_generic_supplier_code FROM retail_settings WHERE id=1', one=True) or {}
+    country = _normalize_fixed_digits(row.get('ean_country_prefix'), 3, 'ean_country_prefix', default='779')
+    generic = _normalize_fixed_digits(row.get('ean_generic_supplier_code'), 4, 'ean_generic_supplier_code', default='0000')
+    return country, generic
+
+
+def _resolve_supplier_code(supplier_id, allow_generic=True):
+    sid = _to_int(supplier_id, 'supplier_id', allow_none=True)
+    if sid is not None:
+        row = q('SELECT id, ean_supplier_code FROM retail_suppliers WHERE id=%s', [sid], one=True)
+        if not row:
+            raise ValidationError('Proveedor no encontrado')
+        code = _digits(row.get('ean_supplier_code'))
+        if len(code) == 4:
+            return sid, code
+        if not allow_generic:
+            raise ValidationError('El proveedor seleccionado no tiene ean_supplier_code configurado')
+        _, generic = _ean13_settings()
+        return sid, generic
+    if not allow_generic:
+        raise ValidationError('supplier_id requerido')
+    _, generic = _ean13_settings()
+    return None, generic
+
+
+def _next_supplier_item_code(supplier_code):
+    code = _normalize_fixed_digits(supplier_code, 4, 'supplier_code')
+    row = q(
+        'SELECT supplier_code, last_item_code FROM retail_ean13_supplier_sequences WHERE supplier_code=%s FOR UPDATE',
+        [code],
+        one=True,
+    )
+    if not row:
+        exec_void(
+            'INSERT INTO retail_ean13_supplier_sequences(supplier_code, last_item_code) VALUES (%s, 0) ON CONFLICT (supplier_code) DO NOTHING',
+            [code],
+        )
+        row = q(
+            'SELECT supplier_code, last_item_code FROM retail_ean13_supplier_sequences WHERE supplier_code=%s FOR UPDATE',
+            [code],
+            one=True,
+        ) or {'last_item_code': 0}
+    nxt = int(row.get('last_item_code') or 0) + 1
+    if nxt > 99999:
+        raise ValidationError(f'Secuencia agotada para supplier_code={code}')
+    exec_void('UPDATE retail_ean13_supplier_sequences SET last_item_code=%s WHERE supplier_code=%s', [nxt, code])
+    return nxt
+
+
+def _barcode_exists_anywhere(code):
+    row = q(
+        '''
+        SELECT 1
+        FROM (
+          SELECT barcode AS code FROM retail_variant_barcodes
+          UNION ALL
+          SELECT barcode_internal AS code FROM retail_product_variants
+        ) t
+        WHERE LOWER(t.code)=LOWER(%s)
+        LIMIT 1
+        ''',
+        [code],
+        one=True,
+    )
+    return bool(row)
+
+
+def _generate_ean13_code(supplier_code):
+    country, _ = _ean13_settings()
+    s_code = _normalize_fixed_digits(supplier_code, 4, 'supplier_code')
+    for _ in range(1000):
+        item = _next_supplier_item_code(s_code)
+        base12 = f'{country}{s_code}{item:05d}'
+        ean = f'{base12}{_ean13_check_digit(base12)}'
+        if not _barcode_exists_anywhere(ean):
+            return ean
+    raise ValidationError('No se pudo generar un EAN-13 unico')
+
+
+def _variant_summary(variante_id):
+    row = q(
+        '''
+        SELECT v.id, v.sku, v.barcode_internal, v.option_signature,
+               p.name AS producto
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.id=%s
+        ''',
+        [variante_id],
+        one=True,
+    )
+    if not row:
+        return None
+    return {
+        'id': row['id'],
+        'producto': row.get('producto') or '',
+        'sku': row.get('sku') or '',
+        'option_signature': row.get('option_signature') or '',
+        'barcode_internal': row.get('barcode_internal') or '',
+    }
+
+
+def _list_variant_barcodes(variante_id):
+    return q(
+        '''
+        SELECT b.id, b.variant_id, b.barcode, b.is_primary, b.supplier_id, b.source,
+               b.created_by, b.created_at, b.updated_at,
+               COALESCE(s.name,'') AS supplier_name,
+               COALESCE(s.ean_supplier_code,'') AS supplier_ean_code
+        FROM retail_variant_barcodes b
+        LEFT JOIN retail_suppliers s ON s.id=b.supplier_id
+        WHERE b.variant_id=%s
+        ORDER BY b.is_primary DESC, b.id
+        ''',
+        [variante_id],
+    ) or []
+
+
+def _set_variant_primary_barcode(variante_id, barcode_row_id):
+    exec_void('UPDATE retail_variant_barcodes SET is_primary=FALSE WHERE variant_id=%s', [variante_id])
+    exec_void('UPDATE retail_variant_barcodes SET is_primary=TRUE WHERE id=%s AND variant_id=%s', [barcode_row_id, variante_id])
+
+
+def _sync_variant_primary_barcode(variante_id):
+    primary = q(
+        '''
+        SELECT id, barcode
+        FROM retail_variant_barcodes
+        WHERE variant_id=%s AND is_primary=TRUE
+        ORDER BY id
+        LIMIT 1
+        ''',
+        [variante_id],
+        one=True,
+    )
+    if not primary:
+        first = q(
+            'SELECT id, barcode FROM retail_variant_barcodes WHERE variant_id=%s ORDER BY id LIMIT 1',
+            [variante_id],
+            one=True,
+        )
+        if first:
+            _set_variant_primary_barcode(variante_id, first['id'])
+            primary = first
+    if primary:
+        exec_void('UPDATE retail_product_variants SET barcode_internal=%s WHERE id=%s', [primary['barcode'], variante_id])
+        return primary['barcode']
+    return None
+
+
+def _create_generated_primary_barcode(variante_id, supplier_id=None, created_by=None, source='auto_repair'):
+    supplier_ref, supplier_code = _resolve_supplier_code(supplier_id, allow_generic=True)
+    barcode = _generate_ean13_code(supplier_code)
+    bid = exec_returning(
+        '''
+        INSERT INTO retail_variant_barcodes(
+          variant_id, barcode, is_primary, supplier_id, source, created_by
+        )
+        VALUES (%s,%s,TRUE,%s,%s,%s)
+        RETURNING id
+        ''',
+        [variante_id, barcode, supplier_ref, source, created_by],
+    )
+    _set_variant_primary_barcode(variante_id, bid)
+    _sync_variant_primary_barcode(variante_id)
+    return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [bid], one=True)
+
+
+def _ensure_variant_primary_barcode(variante_id, supplier_id=None, created_by=None, source='auto_repair'):
+    current = q(
+        'SELECT id FROM retail_variant_barcodes WHERE variant_id=%s AND is_primary=TRUE LIMIT 1',
+        [variante_id],
+        one=True,
+    )
+    if current:
+        _sync_variant_primary_barcode(variante_id)
+        return
+    first = q('SELECT id FROM retail_variant_barcodes WHERE variant_id=%s ORDER BY id LIMIT 1', [variante_id], one=True)
+    if first:
+        _set_variant_primary_barcode(variante_id, first['id'])
+        _sync_variant_primary_barcode(variante_id)
+        return
+    _create_generated_primary_barcode(
+        variante_id,
+        supplier_id=supplier_id,
+        created_by=created_by,
+        source=source,
+    )
+
+
+def _barcode_conflict_payload(target_variant_id, existing_row):
+    current = {
+        'variant': _variant_summary(existing_row['variant_id']),
+        'barcode': existing_row.get('barcode') or '',
+    }
+    target = _variant_summary(target_variant_id)
+    return {
+        'code': 'barcode_conflict',
+        'detail': 'El barcode ya esta asociado a otra variante',
+        'conflict': {
+            'target_variant': target,
+            'current_owner': current,
+        },
+    }
+
+
+def _associate_variant_barcode(
+    variante_id,
+    code,
+    *,
+    make_primary=True,
+    force_move=False,
+    supplier_id=None,
+    created_by=None,
+    source='manual_association'
+):
+    barcode = _validate_new_ean13(code)
+    supplier_ref, _ = _resolve_supplier_code(supplier_id, allow_generic=True)
+
+    existing = q(
+        '''
+        SELECT b.id, b.variant_id, b.is_primary, b.barcode
+        FROM retail_variant_barcodes b
+        WHERE LOWER(b.barcode)=LOWER(%s)
+        LIMIT 1
+        ''',
+        [barcode],
+        one=True,
+    )
+
+    if existing and int(existing['variant_id']) != int(variante_id) and not force_move:
+        raise BarcodeConflictError(_barcode_conflict_payload(variante_id, existing))
+
+    if existing and int(existing['variant_id']) == int(variante_id):
+        exec_void(
+            'UPDATE retail_variant_barcodes SET supplier_id=%s, source=%s WHERE id=%s',
+            [supplier_ref, source, existing['id']],
+        )
+        if make_primary:
+            _set_variant_primary_barcode(variante_id, existing['id'])
+        _ensure_variant_primary_barcode(variante_id, source='auto_repair')
+        _sync_variant_primary_barcode(variante_id)
+        return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [existing['id']], one=True)
+
+    if existing and int(existing['variant_id']) != int(variante_id):
+        old_variant_id = int(existing['variant_id'])
+        old_was_primary = bool(existing.get('is_primary'))
+        exec_void(
+            '''
+            UPDATE retail_variant_barcodes
+            SET variant_id=%s,
+                supplier_id=%s,
+                source=%s,
+                created_by=COALESCE(created_by,%s),
+                is_primary=%s
+            WHERE id=%s
+            ''',
+            [variante_id, supplier_ref, source, created_by, bool(make_primary), existing['id']],
+        )
+        if make_primary:
+            _set_variant_primary_barcode(variante_id, existing['id'])
+        else:
+            _ensure_variant_primary_barcode(variante_id, source='auto_repair')
+        _sync_variant_primary_barcode(variante_id)
+        if old_was_primary:
+            _ensure_variant_primary_barcode(
+                old_variant_id,
+                supplier_id=None,
+                created_by=created_by,
+                source='auto_generated_after_move',
+            )
+        else:
+            _sync_variant_primary_barcode(old_variant_id)
+        return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [existing['id']], one=True)
+
+    if make_primary:
+        exec_void('UPDATE retail_variant_barcodes SET is_primary=FALSE WHERE variant_id=%s', [variante_id])
+    bid = exec_returning(
+        '''
+        INSERT INTO retail_variant_barcodes(
+          variant_id, barcode, is_primary, supplier_id, source, created_by
+        )
+        VALUES (%s,%s,%s,%s,%s,%s)
+        RETURNING id
+        ''',
+        [variante_id, barcode, bool(make_primary), supplier_ref, source, created_by],
+    )
+    _ensure_variant_primary_barcode(variante_id, source='auto_repair')
+    _sync_variant_primary_barcode(variante_id)
+    return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [bid], one=True)
+
+
+def _autogen_barcode(product_row, supplier_id=None):
+    del product_row  # compat backward
+    _, supplier_code = _resolve_supplier_code(supplier_id, allow_generic=True)
+    return _generate_ean13_code(supplier_code)
 
 
 class RetailVariantesView(APIView):
@@ -951,8 +1301,22 @@ class RetailVariantesView(APIView):
         params = []
         filters = []
         if qtxt:
-            params.extend([f'%{qtxt}%', f'%{qtxt}%', f'%{qtxt}%'])
-            filters.append('(v.sku ILIKE %s OR v.barcode_internal ILIKE %s OR p.name ILIKE %s)')
+            params.extend([f'%{qtxt}%', f'%{qtxt}%', f'%{qtxt}%', f'%{qtxt}%'])
+            filters.append(
+                '''
+                (
+                  v.sku ILIKE %s
+                  OR v.barcode_internal ILIKE %s
+                  OR p.name ILIKE %s
+                  OR EXISTS (
+                    SELECT 1
+                    FROM retail_variant_barcodes vb2
+                    WHERE vb2.variant_id=v.id
+                      AND vb2.barcode ILIKE %s
+                  )
+                )
+                '''
+            )
         if only_active in ('1', 'true', 'si', 'yes'):
             filters.append('v.active=TRUE')
         if only_active in ('0', 'false', 'no'):
@@ -970,10 +1334,16 @@ class RetailVariantesView(APIView):
                    v.option_signature, v.display_name, v.sku, v.barcode_internal,
                    v.price_store_ars, v.price_online_ars, v.cost_avg_ars,
                    v.stock_on_hand, v.stock_reserved, v.stock_min,
+                   COALESCE(vb.cnt, 0) AS barcode_count,
                    v.active, v.created_at, v.updated_at,
                    v.tiendanube_product_id, v.tiendanube_variant_id
             FROM retail_product_variants v
             JOIN retail_products p ON p.id=v.product_id
+            LEFT JOIN (
+              SELECT variant_id, COUNT(*)::int AS cnt
+              FROM retail_variant_barcodes
+              GROUP BY variant_id
+            ) vb ON vb.variant_id=v.id
             {where}
             ORDER BY p.name, v.id
             {limit_sql}
@@ -1024,8 +1394,19 @@ class RetailVariantesView(APIView):
         if q('SELECT id FROM retail_product_variants WHERE product_id=%s AND LOWER(option_signature)=LOWER(%s)', [product_id, signature], one=True):
             raise ValidationError('Ya existe una variante con esa combinacion de atributos')
 
+        supplier_id = _to_int(data.get('supplier_id'), 'supplier_id', allow_none=True)
         sku = _clean_text(data.get('sku')) or _autogen_sku(product_row)
-        barcode = _clean_text(data.get('barcode_internal')) or _autogen_barcode(product_row)
+        raw_barcode = _clean_text(data.get('barcode_internal'))
+        if raw_barcode:
+            barcode = _validate_new_ean13(raw_barcode)
+            supplier_ref, _ = _resolve_supplier_code(supplier_id, allow_generic=True)
+            barcode_source = 'variant_create_manual'
+        else:
+            supplier_ref, supplier_code = _resolve_supplier_code(supplier_id, allow_generic=True)
+            barcode = _generate_ean13_code(supplier_code)
+            barcode_source = 'variant_create_auto'
+        if _barcode_exists_anywhere(barcode):
+            raise ValidationError('barcode ya existe en otra variante')
         display_name = _clean_text(data.get('display_name')) or f"{product_row['name']} ({signature})"
         price_store = _money(data.get('price_store_ars') or data.get('precio_local_ars') or 0)
         price_online = _money(data.get('price_online_ars') or data.get('precio_online_ars') or price_store)
@@ -1055,6 +1436,16 @@ class RetailVariantesView(APIView):
                 stock_on_hand,
                 stock_min,
             ],
+        )
+
+        exec_void(
+            '''
+            INSERT INTO retail_variant_barcodes(
+              variant_id, barcode, is_primary, supplier_id, source, created_by
+            )
+            VALUES (%s,%s,TRUE,%s,%s,%s)
+            ''',
+            [vid, barcode, supplier_ref, barcode_source, getattr(request.user, 'id', None)],
         )
 
         for opt in option_values:
@@ -1095,6 +1486,7 @@ class RetailVarianteDetailView(APIView):
 
         updates = []
         params = []
+        barcode_update = None
         if 'display_name' in data:
             updates.append('display_name=%s')
             params.append(_clean_text(data.get('display_name')))
@@ -1108,8 +1500,7 @@ class RetailVarianteDetailView(APIView):
             barcode = _clean_text(data.get('barcode_internal'))
             if not barcode:
                 raise ValidationError('barcode_internal invalido')
-            updates.append('barcode_internal=%s')
-            params.append(barcode)
+            barcode_update = barcode
         if 'price_store_ars' in data:
             updates.append('price_store_ars=%s')
             params.append(_money(data.get('price_store_ars')))
@@ -1176,6 +1567,22 @@ class RetailVarianteDetailView(APIView):
                 ],
             )
 
+        if barcode_update is not None:
+            force_move = _to_bool(data.get('force_move'))
+            supplier_id = _to_int(data.get('supplier_id'), 'supplier_id', allow_none=True)
+            try:
+                _associate_variant_barcode(
+                    variante_id,
+                    barcode_update,
+                    make_primary=True,
+                    force_move=force_move,
+                    supplier_id=supplier_id,
+                    created_by=getattr(request.user, 'id', None),
+                    source='variant_patch_primary',
+                )
+            except BarcodeConflictError as exc:
+                return Response(exc.payload, status=409)
+
         return Response(_load_variante(variante_id, include_costs=True))
 
 
@@ -1191,15 +1598,248 @@ class RetailVarianteEscanearView(APIView):
             '''
             SELECT v.id
             FROM retail_product_variants v
-            WHERE LOWER(v.barcode_internal)=LOWER(%s) OR LOWER(v.sku)=LOWER(%s)
+            LEFT JOIN retail_variant_barcodes b ON b.variant_id=v.id
+            WHERE LOWER(b.barcode)=LOWER(%s) OR LOWER(v.sku)=LOWER(%s)
+            ORDER BY CASE WHEN LOWER(b.barcode)=LOWER(%s) THEN 0 ELSE 1 END, v.id
             LIMIT 1
             ''',
-            [code, code],
+            [code, code, code],
             one=True,
         )
         if not row:
             return Response({'detail': 'Variante no encontrada'}, status=404)
         return Response(_load_variante(row['id'], include_costs=_can_view_costs(request)))
+
+
+def _trim_label_text(raw, max_len=48):
+    txt = str(raw or '').strip()
+    if len(txt) <= max_len:
+        return txt
+    return f'{txt[:max_len - 3]}...'
+
+
+def _build_barcodes_labels_pdf(variant_row, barcode_rows, copies=1):
+    copies_num = max(1, min(int(copies or 1), 200))
+    labels = []
+    for row in barcode_rows:
+        for _ in range(copies_num):
+            labels.append(row)
+    if not labels:
+        raise ValidationError('No hay barcodes para imprimir')
+
+    page_w, page_h = A4
+    cols = 3
+    rows = 8
+    margin_x = 18
+    margin_y = 18
+    gap_x = 4
+    gap_y = 4
+    label_w = (page_w - (2 * margin_x) - ((cols - 1) * gap_x)) / cols
+    label_h = (page_h - (2 * margin_y) - ((rows - 1) * gap_y)) / rows
+    per_page = cols * rows
+
+    product_title = _trim_label_text(variant_row.get('producto') or variant_row.get('display_name') or f"Variante #{variant_row.get('id')}", 44)
+    sku = _trim_label_text(variant_row.get('sku') or '-', 24)
+    signature = _trim_label_text(variant_row.get('option_signature') or '', 36)
+
+    out = BytesIO()
+    pdf = canvas.Canvas(out, pagesize=A4)
+    pdf.setTitle(f"Etiquetas variante {variant_row.get('id')}")
+
+    for idx, entry in enumerate(labels):
+        slot = idx % per_page
+        if idx > 0 and slot == 0:
+            pdf.showPage()
+        col = slot % cols
+        row = slot // cols
+        x = margin_x + (col * (label_w + gap_x))
+        y = page_h - margin_y - ((row + 1) * label_h) - (row * gap_y)
+
+        code = _digits(entry.get('barcode'))
+        if len(code) != 13:
+            continue
+
+        pdf.setLineWidth(0.6)
+        pdf.rect(x, y, label_w, label_h, stroke=1, fill=0)
+        pdf.setFont('Helvetica-Bold', 8)
+        pdf.drawString(x + 6, y + label_h - 12, product_title)
+        pdf.setFont('Helvetica', 7)
+        pdf.drawString(x + 6, y + label_h - 22, f'SKU: {sku}')
+        if signature:
+            pdf.drawString(x + 6, y + label_h - 31, signature)
+
+        drawing = createBarcodeDrawing('EAN13', value=code, humanReadable=False, barHeight=28)
+        target_w = max(12, label_w - 12)
+        target_h = max(12, label_h * 0.42)
+        sx = target_w / float(drawing.width or 1)
+        sy = target_h / float(drawing.height or 1)
+        scale = min(sx, sy)
+        draw_w = drawing.width * scale
+        draw_h = drawing.height * scale
+        draw_x = x + ((label_w - draw_w) / 2)
+        draw_y = y + (label_h * 0.18)
+
+        pdf.saveState()
+        pdf.translate(draw_x, draw_y)
+        pdf.scale(scale, scale)
+        renderPDF.draw(drawing, pdf, 0, 0)
+        pdf.restoreState()
+
+        pdf.setFont('Helvetica-Bold', 9)
+        pdf.drawCentredString(x + (label_w / 2), y + 8, code)
+
+    pdf.save()
+    out.seek(0)
+    return out.getvalue()
+
+
+class RetailVarianteBarcodesView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, variante_id):
+        _require_staff(request)
+        variant = _load_variante(variante_id, include_costs=_can_view_costs(request))
+        if not variant:
+            return Response({'detail': 'Variante no encontrada'}, status=404)
+        rows = _list_variant_barcodes(variante_id)
+        return Response({'variant': variant, 'barcodes': rows, 'count': len(rows)})
+
+
+class RetailVarianteBarcodeGenerateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, variante_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        variant = _load_variante(variante_id, include_costs=_can_view_costs(request))
+        if not variant:
+            return Response({'detail': 'Variante no encontrada'}, status=404)
+
+        data = request.data or {}
+        supplier_id = _to_int(data.get('supplier_id'), 'supplier_id', allow_none=True)
+        make_primary = True if 'make_primary' not in data else _to_bool(data.get('make_primary'))
+        supplier_ref, supplier_code = _resolve_supplier_code(supplier_id, allow_generic=True)
+        barcode = _generate_ean13_code(supplier_code)
+        row = _associate_variant_barcode(
+            variante_id,
+            barcode,
+            make_primary=make_primary,
+            force_move=False,
+            supplier_id=supplier_ref,
+            created_by=getattr(request.user, 'id', None),
+            source='generated',
+        )
+        return Response({'ok': True, 'barcode': row, 'barcodes': _list_variant_barcodes(variante_id)})
+
+
+class RetailVarianteBarcodeAssociateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, variante_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        variant = _load_variante(variante_id, include_costs=_can_view_costs(request))
+        if not variant:
+            return Response({'detail': 'Variante no encontrada'}, status=404)
+
+        data = request.data or {}
+        code = _clean_text(data.get('code') or data.get('barcode'))
+        if not code:
+            raise ValidationError('code requerido')
+        make_primary = True if 'make_primary' not in data else _to_bool(data.get('make_primary'))
+        force_move = _to_bool(data.get('force_move'))
+        supplier_id = _to_int(data.get('supplier_id'), 'supplier_id', allow_none=True)
+        try:
+            row = _associate_variant_barcode(
+                variante_id,
+                code,
+                make_primary=make_primary,
+                force_move=force_move,
+                supplier_id=supplier_id,
+                created_by=getattr(request.user, 'id', None),
+                source='manual_association',
+            )
+        except BarcodeConflictError as exc:
+            return Response(exc.payload, status=409)
+
+        return Response({'ok': True, 'barcode': row, 'barcodes': _list_variant_barcodes(variante_id)})
+
+
+class RetailVarianteBarcodePrimaryView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, variante_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        variant = _load_variante(variante_id, include_costs=_can_view_costs(request))
+        if not variant:
+            return Response({'detail': 'Variante no encontrada'}, status=404)
+
+        data = request.data or {}
+        barcode_id = _to_int(data.get('barcode_id'), 'barcode_id', allow_none=True)
+        code = _clean_text(data.get('code') or data.get('barcode'))
+        target = None
+        if barcode_id is not None:
+            target = q('SELECT id FROM retail_variant_barcodes WHERE id=%s AND variant_id=%s', [barcode_id, variante_id], one=True)
+        elif code:
+            target = q(
+                'SELECT id FROM retail_variant_barcodes WHERE variant_id=%s AND LOWER(barcode)=LOWER(%s)',
+                [variante_id, code],
+                one=True,
+            )
+        else:
+            raise ValidationError('barcode_id o code requerido')
+        if not target:
+            return Response({'detail': 'Barcode no encontrado para la variante'}, status=404)
+
+        _set_variant_primary_barcode(variante_id, target['id'])
+        _sync_variant_primary_barcode(variante_id)
+        return Response({'ok': True, 'barcodes': _list_variant_barcodes(variante_id)})
+
+
+class RetailVarianteBarcodeLabelsPdfView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, variante_id):
+        _require_staff(request)
+        variant = _load_variante(variante_id, include_costs=_can_view_costs(request))
+        if not variant:
+            return Response({'detail': 'Variante no encontrada'}, status=404)
+
+        scope = (_clean_text(request.query_params.get('scope')) or 'primary').lower()
+        copies = _to_int(request.query_params.get('copies') or 1, 'copies')
+        if copies <= 0:
+            raise ValidationError('copies debe ser mayor a 0')
+        copies = min(copies, 200)
+
+        rows = _list_variant_barcodes(variante_id)
+        if not rows:
+            raise ValidationError('La variante no tiene barcodes asociados')
+
+        selected = []
+        if scope == 'primary':
+            selected = [next((r for r in rows if r.get('is_primary')), rows[0])]
+        elif scope == 'all':
+            selected = rows
+        elif scope == 'code':
+            code = _clean_text(request.query_params.get('code'))
+            if not code:
+                raise ValidationError('code requerido cuando scope=code')
+            found = next((r for r in rows if (r.get('barcode') or '').lower() == code.lower()), None)
+            if not found:
+                return Response({'detail': 'Barcode no encontrado en la variante'}, status=404)
+            selected = [found]
+        else:
+            raise ValidationError('scope invalido (primary|all|code)')
+
+        payload = _build_barcodes_labels_pdf(variant, selected, copies=copies)
+        resp = HttpResponse(payload, content_type='application/pdf')
+        resp['Content-Disposition'] = f'inline; filename="variante-{variante_id}-barcodes.pdf"'
+        return resp
+
 
 def _load_compra(compra_id, include_costs=False):
     head = q(
@@ -1286,13 +1926,14 @@ class RetailComprasProveedoresView(APIView):
             f'''
             SELECT s.id,
                    s.name,
+                   s.ean_supplier_code,
                    s.active,
                    COUNT(p.id)::int AS purchases_count,
                    MAX(p.purchase_date) AS last_purchase_date
             FROM retail_suppliers s
             LEFT JOIN retail_purchases p ON p.supplier_id=s.id
             {where_sql}
-            GROUP BY s.id, s.name, s.active
+            GROUP BY s.id, s.name, s.ean_supplier_code, s.active
             ORDER BY LOWER(s.name), s.id
             LIMIT %s
             ''',
@@ -5330,6 +5971,13 @@ class RetailConfigSettingsView(APIView):
         ]
         bool_fields = ['auto_invoice_online_paid']
 
+        if 'ean_country_prefix' in data:
+            updates.append('ean_country_prefix=%s')
+            params.append(_normalize_fixed_digits(data.get('ean_country_prefix'), 3, 'ean_country_prefix'))
+        if 'ean_generic_supplier_code' in data:
+            updates.append('ean_generic_supplier_code=%s')
+            params.append(_normalize_fixed_digits(data.get('ean_generic_supplier_code'), 4, 'ean_generic_supplier_code'))
+
         for field in text_fields:
             if field in data:
                 updates.append(f'{field}=%s')
@@ -5896,6 +6544,11 @@ __all__ = [
     'RetailVariantesView',
     'RetailVarianteDetailView',
     'RetailVarianteEscanearView',
+    'RetailVarianteBarcodesView',
+    'RetailVarianteBarcodeGenerateView',
+    'RetailVarianteBarcodeAssociateView',
+    'RetailVarianteBarcodePrimaryView',
+    'RetailVarianteBarcodeLabelsPdfView',
     'RetailComprasConfigView',
     'RetailComprasProveedoresView',
     'RetailComprasView',

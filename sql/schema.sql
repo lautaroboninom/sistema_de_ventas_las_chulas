@@ -153,6 +153,8 @@ CREATE TABLE IF NOT EXISTS retail_settings (
   tiendanube_webhook_secret     TEXT,
   ticket_printer_name           TEXT,
   label_printer_name            TEXT,
+  ean_country_prefix            TEXT NOT NULL DEFAULT '779',
+  ean_generic_supplier_code     TEXT NOT NULL DEFAULT '0000',
   auto_invoice_online_paid      BOOLEAN NOT NULL DEFAULT TRUE,
   purchase_default_markup_pct   NUMERIC(6,2) NOT NULL DEFAULT 100.00,
   return_warranty_size_days     INTEGER NOT NULL DEFAULT 30,
@@ -163,6 +165,8 @@ CREATE TABLE IF NOT EXISTS retail_settings (
   CONSTRAINT chk_retail_settings_singleton CHECK (id = 1),
   CONSTRAINT chk_retail_settings_currency CHECK (currency_code = 'ARS'),
   CONSTRAINT chk_retail_settings_env CHECK (arca_env IN ('homologacion', 'produccion')),
+  CONSTRAINT chk_retail_settings_ean_country_prefix CHECK (ean_country_prefix ~ '^[0-9]{3}$'),
+  CONSTRAINT chk_retail_settings_ean_generic_supplier CHECK (ean_generic_supplier_code ~ '^[0-9]{4}$'),
   CONSTRAINT chk_retail_settings_purchase_markup CHECK (purchase_default_markup_pct >= 0),
   CONSTRAINT chk_retail_settings_return_warranty_size CHECK (return_warranty_size_days > 0),
   CONSTRAINT chk_retail_settings_return_warranty_breakage CHECK (return_warranty_breakage_days > 0)
@@ -180,15 +184,38 @@ ON CONFLICT (id) DO NOTHING;
 ALTER TABLE retail_settings
 ADD COLUMN IF NOT EXISTS purchase_default_markup_pct NUMERIC(6,2);
 
+ALTER TABLE retail_settings
+ADD COLUMN IF NOT EXISTS ean_country_prefix TEXT;
+
+ALTER TABLE retail_settings
+ADD COLUMN IF NOT EXISTS ean_generic_supplier_code TEXT;
+
 UPDATE retail_settings
 SET purchase_default_markup_pct = 100.00
 WHERE purchase_default_markup_pct IS NULL OR purchase_default_markup_pct < 0;
+
+UPDATE retail_settings
+SET ean_country_prefix = COALESCE(NULLIF(TRIM(ean_country_prefix), ''), '779'),
+    ean_generic_supplier_code = COALESCE(NULLIF(TRIM(ean_generic_supplier_code), ''), '0000')
+WHERE id = 1;
 
 ALTER TABLE retail_settings
 ALTER COLUMN purchase_default_markup_pct SET DEFAULT 100.00;
 
 ALTER TABLE retail_settings
+ALTER COLUMN ean_country_prefix SET DEFAULT '779';
+
+ALTER TABLE retail_settings
+ALTER COLUMN ean_generic_supplier_code SET DEFAULT '0000';
+
+ALTER TABLE retail_settings
 ALTER COLUMN purchase_default_markup_pct SET NOT NULL;
+
+ALTER TABLE retail_settings
+ALTER COLUMN ean_country_prefix SET NOT NULL;
+
+ALTER TABLE retail_settings
+ALTER COLUMN ean_generic_supplier_code SET NOT NULL;
 
 DO $$
 BEGIN
@@ -200,6 +227,26 @@ BEGIN
     ALTER TABLE retail_settings
       ADD CONSTRAINT chk_retail_settings_purchase_markup
       CHECK (purchase_default_markup_pct >= 0);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_retail_settings_ean_country_prefix'
+  ) THEN
+    ALTER TABLE retail_settings
+      ADD CONSTRAINT chk_retail_settings_ean_country_prefix
+      CHECK (ean_country_prefix ~ '^[0-9]{3}$');
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_retail_settings_ean_generic_supplier'
+  ) THEN
+    ALTER TABLE retail_settings
+      ADD CONSTRAINT chk_retail_settings_ean_generic_supplier
+      CHECK (ean_generic_supplier_code ~ '^[0-9]{4}$');
   END IF;
 END $$;
 
@@ -311,14 +358,32 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TABLE IF NOT EXISTS retail_suppliers (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name             TEXT NOT NULL UNIQUE,
+  ean_supplier_code TEXT,
   tax_id           TEXT,
   email            TEXT,
   phone            TEXT,
   notes            TEXT,
   active           BOOLEAN NOT NULL DEFAULT TRUE,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_retail_suppliers_ean_supplier_code CHECK (ean_supplier_code IS NULL OR ean_supplier_code ~ '^[0-9]{4}$')
 );
+
+ALTER TABLE retail_suppliers
+ADD COLUMN IF NOT EXISTS ean_supplier_code TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_retail_suppliers_ean_supplier_code'
+  ) THEN
+    ALTER TABLE retail_suppliers
+      ADD CONSTRAINT chk_retail_suppliers_ean_supplier_code
+      CHECK (ean_supplier_code IS NULL OR ean_supplier_code ~ '^[0-9]{4}$');
+  END IF;
+END $$;
 
 DROP TRIGGER IF EXISTS trg_retail_suppliers_updated_at ON retail_suppliers;
 CREATE TRIGGER trg_retail_suppliers_updated_at
@@ -418,6 +483,61 @@ DROP TRIGGER IF EXISTS trg_retail_product_variants_updated_at ON retail_product_
 CREATE TRIGGER trg_retail_product_variants_updated_at
 BEFORE UPDATE ON retail_product_variants
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_ean13_supplier_sequences (
+  supplier_code    TEXT PRIMARY KEY,
+  last_item_code   INTEGER NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_retail_ean13_supplier_code CHECK (supplier_code ~ '^[0-9]{4}$'),
+  CONSTRAINT chk_retail_ean13_last_item_code CHECK (last_item_code >= 0 AND last_item_code <= 99999)
+);
+
+DROP TRIGGER IF EXISTS trg_retail_ean13_sequences_updated_at ON retail_ean13_supplier_sequences;
+CREATE TRIGGER trg_retail_ean13_sequences_updated_at
+BEFORE UPDATE ON retail_ean13_supplier_sequences
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS retail_variant_barcodes (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  variant_id       BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE CASCADE,
+  barcode          TEXT NOT NULL,
+  is_primary       BOOLEAN NOT NULL DEFAULT FALSE,
+  supplier_id      BIGINT REFERENCES retail_suppliers(id) ON DELETE SET NULL,
+  source           TEXT NOT NULL DEFAULT 'manual',
+  created_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DROP TRIGGER IF EXISTS trg_retail_variant_barcodes_updated_at ON retail_variant_barcodes;
+CREATE TRIGGER trg_retail_variant_barcodes_updated_at
+BEFORE UPDATE ON retail_variant_barcodes
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+INSERT INTO retail_variant_barcodes(variant_id, barcode, is_primary, source, created_at, updated_at)
+SELECT v.id, v.barcode_internal, TRUE, 'legacy_backfill', COALESCE(v.created_at, NOW()), COALESCE(v.updated_at, NOW())
+FROM retail_product_variants v
+WHERE v.barcode_internal IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM retail_variant_barcodes b
+    WHERE LOWER(b.barcode) = LOWER(v.barcode_internal)
+  );
+
+UPDATE retail_variant_barcodes
+SET is_primary = FALSE;
+
+WITH ranked AS (
+  SELECT id,
+         ROW_NUMBER() OVER (PARTITION BY variant_id ORDER BY id) AS rn
+  FROM retail_variant_barcodes
+)
+UPDATE retail_variant_barcodes b
+SET is_primary = TRUE
+FROM ranked r
+WHERE b.id = r.id
+  AND r.rn = 1;
 
 CREATE TABLE IF NOT EXISTS retail_variant_option_values (
   id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -970,11 +1090,15 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_table_record ON audit_log(table_name, r
 CREATE INDEX IF NOT EXISTS idx_retail_customers_name_ci ON retail_customers ((LOWER(full_name)));
 CREATE INDEX IF NOT EXISTS idx_retail_customers_doc ON retail_customers(doc_number);
 CREATE INDEX IF NOT EXISTS idx_retail_suppliers_name_ci ON retail_suppliers ((LOWER(name)));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_retail_suppliers_ean_supplier_code ON retail_suppliers(ean_supplier_code) WHERE ean_supplier_code IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_retail_variants_product ON retail_product_variants(product_id);
 CREATE INDEX IF NOT EXISTS idx_retail_variants_sku_ci ON retail_product_variants ((LOWER(sku)));
 CREATE INDEX IF NOT EXISTS idx_retail_variants_barcode_ci ON retail_product_variants ((LOWER(barcode_internal)));
 CREATE INDEX IF NOT EXISTS idx_retail_variants_active_stock ON retail_product_variants(active, stock_on_hand);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_retail_variant_barcodes_code_ci ON retail_variant_barcodes ((LOWER(barcode)));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_retail_variant_barcodes_primary_per_variant ON retail_variant_barcodes (variant_id) WHERE is_primary;
+CREATE INDEX IF NOT EXISTS idx_retail_variant_barcodes_variant ON retail_variant_barcodes(variant_id, is_primary DESC, id);
 CREATE INDEX IF NOT EXISTS idx_retail_variant_options_attr_value ON retail_variant_option_values(attribute_id, option_value);
 CREATE INDEX IF NOT EXISTS idx_retail_promotions_active_window ON retail_promotions(active, channel_scope, priority, valid_from, valid_until);
 CREATE INDEX IF NOT EXISTS idx_retail_promotion_products_promotion ON retail_promotion_products(promotion_id);
