@@ -381,6 +381,8 @@ function Protect-EnvFileAcl {
 }
 
 function Ensure-EnvProd {
+  param([string]$SuggestedPublicHost = "")
+
   $templatePath = Join-Path $script:RepoDir ".env.prod.example"
   $envPath = Join-Path $script:RepoDir ".env.prod"
 
@@ -394,10 +396,20 @@ function Ensure-EnvProd {
 
   $map = Read-EnvMap -Path $envPath
 
-  $publicHost = Prompt-Value -Label "PUBLIC_HOST (dns ts.net de esta PC)" -CurrentValue ($map["PUBLIC_HOST"]) -Required
+  $defaultPublicHost = [string]$map["PUBLIC_HOST"]
+  if ([string]::IsNullOrWhiteSpace($defaultPublicHost) -and -not [string]::IsNullOrWhiteSpace($SuggestedPublicHost)) {
+    $defaultPublicHost = $SuggestedPublicHost
+    Write-Log "PUBLIC_HOST sugerido automaticamente desde Tailscale: $defaultPublicHost"
+  }
+
+  $publicHostInput = Prompt-Value -Label "PUBLIC_HOST (dns ts.net de esta PC)" -CurrentValue $defaultPublicHost -Required
+  $publicHost = ($publicHostInput | Out-String).Trim()
+  $publicHost = $publicHost -replace '^\s*https?://', ''
+  $publicHost = $publicHost.Trim().TrimEnd("/")
   if ([string]::IsNullOrWhiteSpace($publicHost)) {
     throw "PUBLIC_HOST es obligatorio."
   }
+  Write-Log "PUBLIC_HOST normalizado: $publicHost"
 
   $tiendaClientId = Prompt-Value -Label "TIENDANUBE_CLIENT_ID (opcional por ahora)" -CurrentValue ($map["TIENDANUBE_CLIENT_ID"])
   $tiendaClientSecret = Prompt-Value -Label "TIENDANUBE_CLIENT_SECRET (opcional por ahora)" -CurrentValue ($map["TIENDANUBE_CLIENT_SECRET"]) -Secret
@@ -672,12 +684,17 @@ try {
   Ensure-Dependencies
   Ensure-DockerReady
   Ensure-Repository
-  $envCfg = Ensure-EnvProd
-  Start-ProdStack
 
   $dnsHost = $null
   if (-not $SkipTailscale) {
     $dnsHost = Ensure-TailscaleLogin
+    Write-Log "Host Tailscale detectado: $dnsHost"
+  }
+
+  $envCfg = Ensure-EnvProd -SuggestedPublicHost $dnsHost
+  Start-ProdStack
+
+  if (-not $SkipTailscale) {
     Configure-TailscaleExposure
     Validate-Exposure -DnsHost $dnsHost
   }
