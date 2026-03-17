@@ -64,6 +64,62 @@ function buildOptionValues(rows) {
   return out;
 }
 
+const BARCODE_PRINT_PREFS_KEY = 'las_chulas_barcode_print_prefs_v1';
+const PRINT_LAYOUTS = {
+  A4: 'a4_grid',
+  THERMAL: 'thermal_custom',
+};
+const DEFAULT_PRINT_PREFS = {
+  layout: PRINT_LAYOUTS.THERMAL,
+  labelWidthMm: '50',
+  labelHeightMm: '30',
+};
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizePrintLayout(value) {
+  return value === PRINT_LAYOUTS.A4 ? PRINT_LAYOUTS.A4 : PRINT_LAYOUTS.THERMAL;
+}
+
+function normalizePrintMm(value, fallback) {
+  const n = clampNumber(value, 10, 200, Number(fallback));
+  return String(Math.round((n + Number.EPSILON) * 100) / 100);
+}
+
+function normalizeBarcodePrintPrefs(raw) {
+  const source = raw || {};
+  return {
+    layout: normalizePrintLayout(source.layout),
+    labelWidthMm: normalizePrintMm(source.labelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm),
+    labelHeightMm: normalizePrintMm(source.labelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm),
+  };
+}
+
+function loadBarcodePrintPrefs() {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return { ...DEFAULT_PRINT_PREFS };
+    const raw = window.localStorage.getItem(BARCODE_PRINT_PREFS_KEY);
+    if (!raw) return { ...DEFAULT_PRINT_PREFS };
+    return normalizeBarcodePrintPrefs(JSON.parse(raw));
+  } catch (_error) {
+    return { ...DEFAULT_PRINT_PREFS };
+  }
+}
+
+function saveBarcodePrintPrefs(raw) {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    const normalized = normalizeBarcodePrintPrefs(raw);
+    window.localStorage.setItem(BARCODE_PRINT_PREFS_KEY, JSON.stringify(normalized));
+  } catch (_error) {
+    // no-op: guardar preferencia no debe romper el flujo de impresion
+  }
+}
+
 const EMPTY_PRODUCT = { name: '', sku_prefix: '' };
 const EMPTY_ATTR = { name: '', code: '' };
 const EMPTY_VARIANT = {
@@ -93,6 +149,9 @@ const EMPTY_BARCODE_MODAL = {
   printScope: 'primary',
   printCode: '',
   printCopies: '1',
+  printLayout: DEFAULT_PRINT_PREFS.layout,
+  printLabelWidthMm: DEFAULT_PRINT_PREFS.labelWidthMm,
+  printLabelHeightMm: DEFAULT_PRINT_PREFS.labelHeightMm,
 };
 
 export default function ProductosPage() {
@@ -320,8 +379,12 @@ export default function ProductosPage() {
   }
 
   async function openBarcodeModal(row) {
+    const prefs = loadBarcodePrintPrefs();
     setBarcodeModal({
       ...EMPTY_BARCODE_MODAL,
+      printLayout: prefs.layout,
+      printLabelWidthMm: prefs.labelWidthMm,
+      printLabelHeightMm: prefs.labelHeightMm,
       open: true,
       variant: row,
     });
@@ -437,10 +500,27 @@ export default function ProductosPage() {
     const variantId = barcodeModal?.variant?.id;
     if (!variantId) return;
     const copies = Math.max(1, Math.min(200, Number(barcodeModal.printCopies || 1)));
-    const url = getRetailVarianteBarcodeLabelsUrl(variantId, {
+    const layout = normalizePrintLayout(barcodeModal.printLayout);
+    const widthMm = normalizePrintMm(barcodeModal.printLabelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm);
+    const heightMm = normalizePrintMm(barcodeModal.printLabelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm);
+    saveBarcodePrintPrefs({
+      layout,
+      labelWidthMm: widthMm,
+      labelHeightMm: heightMm,
+    });
+
+    const params = {
       scope,
       copies,
       code: code || undefined,
+      layout,
+    };
+    if (layout === PRINT_LAYOUTS.THERMAL) {
+      params.label_width_mm = widthMm;
+      params.label_height_mm = heightMm;
+    }
+    const url = getRetailVarianteBarcodeLabelsUrl(variantId, {
+      ...params,
     });
     const win = window.open(url, '_blank', 'noopener,noreferrer');
     if (!win) {
@@ -823,7 +903,18 @@ export default function ProductosPage() {
                         type="button"
                         className="px-2 py-1 rounded border text-xs"
                         onClick={() => {
-                          const url = getRetailVarianteBarcodeLabelsUrl(row.id, { scope: 'primary', copies: 1 });
+                          const prefs = loadBarcodePrintPrefs();
+                          const layout = normalizePrintLayout(prefs.layout);
+                          const params = {
+                            scope: 'primary',
+                            copies: 1,
+                            layout,
+                          };
+                          if (layout === PRINT_LAYOUTS.THERMAL) {
+                            params.label_width_mm = normalizePrintMm(prefs.labelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm);
+                            params.label_height_mm = normalizePrintMm(prefs.labelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm);
+                          }
+                          const url = getRetailVarianteBarcodeLabelsUrl(row.id, params);
                           window.open(url, '_blank', 'noopener,noreferrer');
                         }}
                       >
@@ -945,6 +1036,45 @@ export default function ProductosPage() {
                     value={barcodeModal.printCopies}
                     onChange={(e) => setBarcodeModal((prev) => ({ ...prev, printCopies: e.target.value }))}
                   />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
+                  <select
+                    className="input"
+                    value={barcodeModal.printLayout}
+                    onChange={(e) => setBarcodeModal((prev) => ({ ...prev, printLayout: e.target.value }))}
+                  >
+                    <option value={PRINT_LAYOUTS.THERMAL}>Termica personalizada</option>
+                    <option value={PRINT_LAYOUTS.A4}>A4 (grilla 3x8)</option>
+                  </select>
+                  {barcodeModal.printLayout === PRINT_LAYOUTS.THERMAL ? (
+                    <>
+                      <input
+                        className="input"
+                        type="number"
+                        min="10"
+                        max="200"
+                        step="0.1"
+                        value={barcodeModal.printLabelWidthMm}
+                        onChange={(e) => setBarcodeModal((prev) => ({ ...prev, printLabelWidthMm: e.target.value }))}
+                        placeholder="Ancho mm"
+                      />
+                      <input
+                        className="input"
+                        type="number"
+                        min="10"
+                        max="200"
+                        step="0.1"
+                        value={barcodeModal.printLabelHeightMm}
+                        onChange={(e) => setBarcodeModal((prev) => ({ ...prev, printLabelHeightMm: e.target.value }))}
+                        placeholder="Alto mm"
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <div />
+                      <div />
+                    </>
+                  )}
                 </div>
                 <button
                   className="px-3 py-2 rounded border"

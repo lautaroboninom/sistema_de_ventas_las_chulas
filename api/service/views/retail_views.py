@@ -24,6 +24,7 @@ from django.views.decorators.csrf import csrf_exempt
 from reportlab.graphics import renderPDF
 from reportlab.graphics.barcode import createBarcodeDrawing
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from rest_framework import permissions
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -1618,75 +1619,246 @@ def _trim_label_text(raw, max_len=48):
     return f'{txt[:max_len - 3]}...'
 
 
-def _build_barcodes_labels_pdf(variant_row, barcode_rows, copies=1):
-    copies_num = max(1, min(int(copies or 1), 200))
-    labels = []
-    for row in barcode_rows:
-        for _ in range(copies_num):
-            labels.append(row)
-    if not labels:
-        raise ValidationError('No hay barcodes para imprimir')
+LABEL_LAYOUT_A4_GRID = 'a4_grid'
+LABEL_LAYOUT_THERMAL_CUSTOM = 'thermal_custom'
+LABEL_LAYOUT_CHOICES = {LABEL_LAYOUT_A4_GRID, LABEL_LAYOUT_THERMAL_CUSTOM}
+LABEL_MM_MIN = Decimal('10')
+LABEL_MM_MAX = Decimal('200')
 
-    page_w, page_h = A4
-    cols = 3
-    rows = 8
-    margin_x = 18
-    margin_y = 18
-    gap_x = 4
-    gap_y = 4
-    label_w = (page_w - (2 * margin_x) - ((cols - 1) * gap_x)) / cols
-    label_h = (page_h - (2 * margin_y) - ((rows - 1) * gap_y)) / rows
-    per_page = cols * rows
 
-    product_title = _trim_label_text(variant_row.get('producto') or variant_row.get('display_name') or f"Variante #{variant_row.get('id')}", 44)
-    sku = _trim_label_text(variant_row.get('sku') or '-', 24)
-    signature = _trim_label_text(variant_row.get('option_signature') or '', 36)
+def _variant_description_for_label(variant_row):
+    opts = variant_row.get('option_values') or []
+    pieces = []
+    for opt in opts:
+        attr = _clean_text(opt.get('attribute_name') or opt.get('attribute_code'))
+        val = _clean_text(opt.get('option_value'))
+        if attr and val:
+            pieces.append(f'{attr}: {val}')
+        elif val:
+            pieces.append(val)
+    if pieces:
+        return ' | '.join(pieces)
 
-    out = BytesIO()
-    pdf = canvas.Canvas(out, pagesize=A4)
-    pdf.setTitle(f"Etiquetas variante {variant_row.get('id')}")
-
-    for idx, entry in enumerate(labels):
-        slot = idx % per_page
-        if idx > 0 and slot == 0:
-            pdf.showPage()
-        col = slot % cols
-        row = slot // cols
-        x = margin_x + (col * (label_w + gap_x))
-        y = page_h - margin_y - ((row + 1) * label_h) - (row * gap_y)
-
-        code = _digits(entry.get('barcode'))
-        if len(code) != 13:
+    signature = _clean_text(variant_row.get('option_signature'))
+    if not signature:
+        return ''
+    fallback = []
+    for raw_piece in signature.split(','):
+        piece = _clean_text(raw_piece)
+        if not piece:
             continue
+        if '=' in piece:
+            left, right = piece.split('=', 1)
+            left = _clean_text(left)
+            right = _clean_text(right)
+            if left and right:
+                fallback.append(f'{left}: {right}')
+            elif right:
+                fallback.append(right)
+            else:
+                fallback.append(piece)
+        else:
+            fallback.append(piece)
+    return ' | '.join(fallback) if fallback else signature
 
+
+def _format_ars_label_price(value):
+    amount = _to_decimal(value or 0, 'price_store_ars', allow_none=True) or Decimal('0')
+    amount = amount.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    txt = f'{amount:,.2f}'
+    txt = txt.replace(',', '#').replace('.', ',').replace('#', '.')
+    return f'$ {txt}'
+
+
+def _normalize_label_layout(layout, label_width_mm=None, label_height_mm=None):
+    layout_name = (_clean_text(layout) or LABEL_LAYOUT_A4_GRID).lower()
+    if layout_name not in LABEL_LAYOUT_CHOICES:
+        raise ValidationError('layout invalido (a4_grid|thermal_custom)')
+
+    width_mm = None
+    height_mm = None
+    if layout_name == LABEL_LAYOUT_THERMAL_CUSTOM:
+        width_mm = _to_decimal(label_width_mm, 'label_width_mm')
+        height_mm = _to_decimal(label_height_mm, 'label_height_mm')
+        if width_mm <= 0 or height_mm <= 0:
+            raise ValidationError('label_width_mm y label_height_mm deben ser mayores a 0')
+        if width_mm < LABEL_MM_MIN or width_mm > LABEL_MM_MAX:
+            raise ValidationError(f'label_width_mm fuera de rango ({int(LABEL_MM_MIN)}-{int(LABEL_MM_MAX)})')
+        if height_mm < LABEL_MM_MIN or height_mm > LABEL_MM_MAX:
+            raise ValidationError(f'label_height_mm fuera de rango ({int(LABEL_MM_MIN)}-{int(LABEL_MM_MAX)})')
+    return layout_name, width_mm, height_mm
+
+
+def _draw_barcode_label(
+    pdf,
+    x,
+    y,
+    label_w,
+    label_h,
+    code,
+    product_title,
+    sku,
+    description,
+    price_text,
+    draw_border=True,
+    compact=False,
+):
+    pad_x = 6 if not compact else 4
+    top_pad = 8 if not compact else 6
+    line_gap = 3 if not compact else 2
+    title_font = 8 if not compact else 6
+    text_font = 7 if not compact else 5.5
+    price_font = 7.5 if not compact else 6
+    code_font = 9 if not compact else 7
+
+    if draw_border:
         pdf.setLineWidth(0.6)
         pdf.rect(x, y, label_w, label_h, stroke=1, fill=0)
-        pdf.setFont('Helvetica-Bold', 8)
-        pdf.drawString(x + 6, y + label_h - 12, product_title)
-        pdf.setFont('Helvetica', 7)
-        pdf.drawString(x + 6, y + label_h - 22, f'SKU: {sku}')
-        if signature:
-            pdf.drawString(x + 6, y + label_h - 31, signature)
 
-        drawing = createBarcodeDrawing('EAN13', value=code, humanReadable=False, barHeight=28)
-        target_w = max(12, label_w - 12)
-        target_h = max(12, label_h * 0.42)
-        sx = target_w / float(drawing.width or 1)
-        sy = target_h / float(drawing.height or 1)
-        scale = min(sx, sy)
-        draw_w = drawing.width * scale
-        draw_h = drawing.height * scale
-        draw_x = x + ((label_w - draw_w) / 2)
-        draw_y = y + (label_h * 0.18)
+    lines = [
+        ('title', product_title),
+        ('text', f'SKU: {sku}'),
+        ('text', description),
+        ('price', f'Precio: {price_text}'),
+    ]
+    text_cursor = y + label_h - top_pad
+    text_bottom_limit = y + (label_h * (0.50 if not compact else 0.58))
+    for kind, line in lines:
+        if not line:
+            continue
+        if kind == 'title':
+            fnt = title_font
+            pdf.setFont('Helvetica-Bold', fnt)
+        elif kind == 'price':
+            fnt = price_font
+            pdf.setFont('Helvetica-Bold', fnt)
+        else:
+            fnt = text_font
+            pdf.setFont('Helvetica', fnt)
+        baseline = text_cursor - fnt
+        if baseline <= text_bottom_limit:
+            break
+        pdf.drawString(x + pad_x, baseline, line)
+        text_cursor = baseline - line_gap
 
-        pdf.saveState()
-        pdf.translate(draw_x, draw_y)
-        pdf.scale(scale, scale)
-        renderPDF.draw(drawing, pdf, 0, 0)
-        pdf.restoreState()
+    code_y = y + (5 if not compact else 4)
+    barcode_y = y + (14 if not compact else 11)
+    barcode_top = min(y + label_h - 4, text_cursor - 2)
+    target_h = max(10, barcode_top - barcode_y)
+    target_w = max(12, label_w - (2 * pad_x))
+    bar_height = max(10, min(30, target_h * 0.9))
+    drawing = createBarcodeDrawing('EAN13', value=code, humanReadable=False, barHeight=bar_height)
 
-        pdf.setFont('Helvetica-Bold', 9)
-        pdf.drawCentredString(x + (label_w / 2), y + 8, code)
+    sx = target_w / float(drawing.width or 1)
+    sy = target_h / float(drawing.height or 1)
+    scale = max(0.1, min(sx, sy))
+    draw_w = drawing.width * scale
+    draw_h = drawing.height * scale
+    draw_x = x + pad_x + ((target_w - draw_w) / 2)
+    draw_y = barcode_y + ((target_h - draw_h) / 2)
+
+    pdf.saveState()
+    pdf.translate(draw_x, draw_y)
+    pdf.scale(scale, scale)
+    renderPDF.draw(drawing, pdf, 0, 0)
+    pdf.restoreState()
+
+    pdf.setFont('Helvetica-Bold', code_font)
+    pdf.drawCentredString(x + (label_w / 2), code_y, code)
+
+
+def _build_barcodes_labels_pdf(
+    variant_row,
+    barcode_rows,
+    copies=1,
+    layout=LABEL_LAYOUT_A4_GRID,
+    label_width_mm=None,
+    label_height_mm=None,
+):
+    copies_num = max(1, min(int(copies or 1), 200))
+    layout_name, width_mm, height_mm = _normalize_label_layout(layout, label_width_mm, label_height_mm)
+
+    labels = []
+    for row in barcode_rows:
+        code = _digits(row.get('barcode'))
+        if len(code) != 13:
+            continue
+        for _ in range(copies_num):
+            labels.append({'barcode': code})
+    if not labels:
+        raise ValidationError('No hay barcodes EAN-13 validos para imprimir')
+
+    product_title_raw = variant_row.get('producto') or variant_row.get('display_name') or f"Variante #{variant_row.get('id')}"
+    sku_raw = variant_row.get('sku') or '-'
+    description_raw = _variant_description_for_label(variant_row)
+    price_txt = _format_ars_label_price(variant_row.get('price_store_ars'))
+
+    out = BytesIO()
+    if layout_name == LABEL_LAYOUT_A4_GRID:
+        page_w, page_h = A4
+        cols = 3
+        rows = 8
+        margin_x = 18
+        margin_y = 18
+        gap_x = 4
+        gap_y = 4
+        label_w = (page_w - (2 * margin_x) - ((cols - 1) * gap_x)) / cols
+        label_h = (page_h - (2 * margin_y) - ((rows - 1) * gap_y)) / rows
+        per_page = cols * rows
+
+        product_title = _trim_label_text(product_title_raw, 44)
+        sku = _trim_label_text(sku_raw, 24)
+        description = _trim_label_text(description_raw, 40)
+
+        pdf = canvas.Canvas(out, pagesize=A4)
+        pdf.setTitle(f"Etiquetas variante {variant_row.get('id')}")
+        for idx, entry in enumerate(labels):
+            slot = idx % per_page
+            if idx > 0 and slot == 0:
+                pdf.showPage()
+            col = slot % cols
+            row = slot // cols
+            x = margin_x + (col * (label_w + gap_x))
+            y = page_h - margin_y - ((row + 1) * label_h) - (row * gap_y)
+            _draw_barcode_label(
+                pdf,
+                x,
+                y,
+                label_w,
+                label_h,
+                entry['barcode'],
+                product_title,
+                sku,
+                description,
+                price_txt,
+                draw_border=True,
+                compact=False,
+            )
+    else:
+        page_w = float(width_mm) * mm
+        page_h = float(height_mm) * mm
+        product_title = _trim_label_text(product_title_raw, 30)
+        sku = _trim_label_text(sku_raw, 24)
+        description = _trim_label_text(description_raw, 34)
+        pdf = canvas.Canvas(out, pagesize=(page_w, page_h))
+        pdf.setTitle(f"Etiquetas termicas variante {variant_row.get('id')}")
+        for idx, entry in enumerate(labels):
+            if idx > 0:
+                pdf.showPage()
+            _draw_barcode_label(
+                pdf,
+                0,
+                0,
+                page_w,
+                page_h,
+                entry['barcode'],
+                product_title,
+                sku,
+                description,
+                price_txt,
+                draw_border=False,
+                compact=True,
+            )
 
     pdf.save()
     out.seek(0)
@@ -1811,6 +1983,9 @@ class RetailVarianteBarcodeLabelsPdfView(APIView):
 
         scope = (_clean_text(request.query_params.get('scope')) or 'primary').lower()
         copies = _to_int(request.query_params.get('copies') or 1, 'copies')
+        layout = (_clean_text(request.query_params.get('layout')) or LABEL_LAYOUT_A4_GRID).lower()
+        label_width_mm = request.query_params.get('label_width_mm')
+        label_height_mm = request.query_params.get('label_height_mm')
         if copies <= 0:
             raise ValidationError('copies debe ser mayor a 0')
         copies = min(copies, 200)
@@ -1835,7 +2010,14 @@ class RetailVarianteBarcodeLabelsPdfView(APIView):
         else:
             raise ValidationError('scope invalido (primary|all|code)')
 
-        payload = _build_barcodes_labels_pdf(variant, selected, copies=copies)
+        payload = _build_barcodes_labels_pdf(
+            variant,
+            selected,
+            copies=copies,
+            layout=layout,
+            label_width_mm=label_width_mm,
+            label_height_mm=label_height_mm,
+        )
         resp = HttpResponse(payload, content_type='application/pdf')
         resp['Content-Disposition'] = f'inline; filename="variante-{variante_id}-barcodes.pdf"'
         return resp

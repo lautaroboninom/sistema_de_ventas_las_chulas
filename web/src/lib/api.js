@@ -147,6 +147,13 @@ export const getRetailVarianteBarcodeLabelsUrl = (id, params = {}) => {
   if (params.scope) qs.set('scope', String(params.scope));
   if (params.copies) qs.set('copies', String(params.copies));
   if (params.code) qs.set('code', String(params.code));
+  if (params.layout) qs.set('layout', String(params.layout));
+  if (params.label_width_mm !== undefined && params.label_width_mm !== null) {
+    qs.set('label_width_mm', String(params.label_width_mm));
+  }
+  if (params.label_height_mm !== undefined && params.label_height_mm !== null) {
+    qs.set('label_height_mm', String(params.label_height_mm));
+  }
   return `${BASE}/api/retail/variantes/${id}/barcodes/labels.pdf${qs.toString() ? `?${qs}` : ''}`;
 };
 
