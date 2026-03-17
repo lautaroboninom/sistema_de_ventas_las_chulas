@@ -1717,7 +1717,7 @@ def _draw_barcode_label(
 
     lines = [
         ('title', product_title),
-        ('text', f'SKU: {sku}'),
+        ('text', sku),
         ('text', description),
         ('price', f'Precio: {price_text}'),
     ]

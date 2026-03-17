@@ -62,7 +62,31 @@ if %ERRORLEVEL%==0 (
   exit /b 0
 )
 echo [INFO] Requiere permisos de administrador. Solicitando elevacion...
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+set "SELF_PATH=%~f0"
+set "SELF_ARGS=%*"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$target = [System.IO.Path]::GetFullPath($env:SELF_PATH);" ^
+  "if ($target -match '^[A-Za-z]:\\') {" ^
+  "  try {" ^
+  "    $drive = $target.Substring(0,2);" ^
+  "    $disk = Get-CimInstance Win32_LogicalDisk -Filter (\"DeviceID='$drive'\") -ErrorAction Stop;" ^
+  "    if ($disk -and $disk.DriveType -eq 4 -and $disk.ProviderName) {" ^
+  "      $suffix = $target.Substring(2).TrimStart('\');" ^
+  "      $target = Join-Path $disk.ProviderName $suffix;" ^
+  "    }" ^
+  "  } catch { }" ^
+  "}" ^
+  "if ($target -like '\\\\*') {" ^
+  "  $localCopy = Join-Path $env:TEMP 'retailhub_bootstrap_elevated.bat';" ^
+  "  Copy-Item -LiteralPath $target -Destination $localCopy -Force;" ^
+  "  $target = $localCopy;" ^
+  "}" ^
+  "$workDir = Split-Path -Path $target -Parent;" ^
+  "if ([string]::IsNullOrWhiteSpace($env:SELF_ARGS)) {" ^
+  "  Start-Process -FilePath $target -Verb RunAs -WorkingDirectory $workDir;" ^
+  "} else {" ^
+  "  Start-Process -FilePath $target -ArgumentList $env:SELF_ARGS -Verb RunAs -WorkingDirectory $workDir;" ^
+  "}"
 if %ERRORLEVEL% NEQ 0 (
   echo [ERROR] No se pudo elevar permisos (UAC cancelado o bloqueado).
   exit /b 1
