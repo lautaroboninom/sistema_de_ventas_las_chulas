@@ -22,9 +22,9 @@ Nota:
 - Guardar.
 
 ### 1.3 Configurar webhooks (URL pública actual)
-- `order/paid` -> `https://retailhub.tailcee59c.ts.net/api/retail/online/webhooks/orden-pagada/`
-- `order/cancelled` -> `https://retailhub.tailcee59c.ts.net/api/retail/online/webhooks/orden-cancelada/`
-- `store/redact` -> `https://retailhub.tailcee59c.ts.net/api/retail/online/webhooks/store-redact/`
+- `order/paid` -> `https://retailhub.taila1413b.ts.net/api/retail/online/webhooks/orden-pagada/`
+- `order/cancelled` -> `https://retailhub.taila1413b.ts.net/api/retail/online/webhooks/orden-cancelada/`
+- `store/redact` -> `https://retailhub.taila1413b.ts.net/api/retail/online/webhooks/store-redact/`
 
 ### 1.4 Validación mínima
 - Crear una orden de prueba pagada en Tienda Nube.
@@ -64,4 +64,3 @@ Nota:
 
 ## 3) Regla de oro para evitar problemas
 - Nunca operar dos entornos productivos con webhooks activos en paralelo para la misma tienda.
-

@@ -20,13 +20,14 @@ Opcion recomendada (bootstrap):
 
 ```powershell
 .\instalar_cliente.bat
+.\instalar_cliente.bat --public-host retailhub.taila1413b.ts.net
 ```
 
 Este `.bat`:
 1. Eleva permisos.
-2. Instala Git si falta (winget).
-3. Clona/actualiza repo en `C:\RetailHub\sistema_de_ventas_las_chulas`.
-4. Ejecuta `deploy/install_cliente.ps1`.
+2. Verifica Git y lo instala si falta.
+3. Reutiliza una copia utilizable del repo o la clona si aun no existe.
+4. Ejecuta `deploy/install_cliente.ps1` con el host esperado.
 
 Opcion manual:
 
@@ -45,6 +46,7 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install_cliente.ps1
 ```powershell
 .\instalar_cliente.bat --help
 .\instalar_cliente.bat --dry-run
+.\instalar_cliente.bat --public-host retailhub.taila1413b.ts.net
 ```
 
 `--dry-run` no instala ni clona; solo valida flujo base.
@@ -63,6 +65,7 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install_cliente.ps1 `
   -InstallRoot "C:\RetailHub" `
   -RepoUrl "https://github.com/lautaroboninom/sistema_de_ventas_las_chulas.git" `
   -Branch "main" `
+  -ExpectedPublicHost "retailhub.taila1413b.ts.net" `
   -SkipWinget:$false `
   -SkipTailscale:$false `
   -NonInteractive:$false
@@ -72,18 +75,18 @@ Parametros:
 - `-InstallRoot`: carpeta base de instalacion (default `C:\RetailHub`).
 - `-RepoUrl`: URL git HTTPS del repo.
 - `-Branch`: rama a instalar/actualizar.
+- `-ExpectedPublicHost`: host publico esperado para `.env.prod` y validacion de Tailscale.
 - `-SkipWinget`: omite instalacion de dependencias con winget.
 - `-SkipTailscale`: omite login y configuracion Serve/Funnel.
 - `-NonInteractive`: no pregunta valores; requiere `.env.prod` ya completo.
 
 ## 4) Que hace el instalador
-1. Verifica admin, Windows, internet, winget y estado de virtualizacion/WSL2.
-2. Instala/actualiza `Git.Git`, `Docker.DockerDesktop`, `Tailscale.Tailscale`.
-3. Clona o actualiza el repo en:
-   - `C:\RetailHub\sistema_de_ventas_las_chulas`
-4. Genera/actualiza `.env.prod`:
+1. Verifica admin, Windows, internet y estado de virtualizacion/WSL2.
+2. Reutiliza dependencias ya instaladas y solo instala con winget lo que falta.
+3. Reutiliza el repo si esta usable; solo hace `fetch/pull --ff-only` cuando la copia local esta limpia y alineada.
+4. Genera o reconcilia `.env.prod` hacia `-ExpectedPublicHost`:
    - crea desde `.env.prod.example` si falta.
-   - pide `PUBLIC_HOST` + datos de Tienda Nube + ARCA opcional.
+   - reutiliza valores existentes validos.
    - genera secretos fuertes para `DJANGO_SECRET_KEY`, `JWT_SECRET`, `POSTGRES_PASSWORD` cuando faltan o son debiles.
    - deriva:
      - `DJANGO_ALLOWED_HOSTS=<PUBLIC_HOST>`
@@ -91,20 +94,21 @@ Parametros:
      - `FRONTEND_ORIGIN=https://<PUBLIC_HOST>:8443`
      - `PUBLIC_WEB_URL=https://<PUBLIC_HOST>`
    - aplica ACL restrictiva al `.env.prod`.
-5. Crea volumentes Docker:
-   - `laschulas_pg_data`
-   - `laschulas_staticfiles`
-   - `laschulas_mediafiles`
-6. Levanta stack prod:
-   - `docker compose -f docker-compose.prod.yml up -d --build`
-7. Configura Tailscale:
+5. Levanta o reconcilia el stack prod:
+   - crea volumenes Docker faltantes.
+   - guarda fingerprint local con commit + hash de `.env.prod` + hash de `docker-compose.prod.yml`.
+   - solo ejecuta `docker compose -f docker-compose.prod.yml up -d --build` cuando hay cambios o contenedores faltantes/degradados.
+6. Despues de Docker, valida Tailscale:
+   - hace `tailscale up` solo si falta login.
+   - compara el `DNSName` real de la PC con `-ExpectedPublicHost`.
+   - si no coincide, termina parcial con codigo `10` y no toca Serve/Funnel/certs.
+7. Si el host coincide, configura:
    - admin privado: `tailscale serve --bg --https=8443 http://127.0.0.1:80`
    - webhooks publicos: `tailscale funnel --bg --https=443 http://127.0.0.1:8080`
-8. Crea tarea programada:
+   - certificados locales: `tailscale cert --cert-file certs\tls.crt --key-file certs\tls.key --min-validity 720h <host>`
+8. Crea o actualiza la tarea programada:
    - `RetailHub-Start` al boot (SYSTEM, elevated).
-9. Entrega resumen final:
-   - admin privado: `https://<dns-tsnet>:8443`
-   - webhook publico: `https://<dns-tsnet>/api/retail/online/webhooks/...`
+9. Entrega resumen final por paso con estados `SKIP`, `RUN`, `UPDATED`, `BLOCKED`, `FAIL`.
 
 ## 5) Control diario del servicio
 Con launcher:
@@ -128,6 +132,11 @@ Cada corrida del instalador genera:
 
 No se imprimen secretos en log.
 
+Codigos de salida:
+- `0`: instalacion completa.
+- `10`: instalacion parcial; Docker/base OK, Tailscale pendiente por host/tailnet.
+- `1`: fallo real de prerequisito o despliegue.
+
 ## 7) Checklist despues de instalar
 1. Cargar webhooks de Tienda Nube apuntando al host publico.
 2. Probar orden pagada y orden cancelada.
@@ -138,3 +147,4 @@ No se imprimen secretos en log.
 - Modo soportado: cliente unico (una tienda / una instalacion).
 - No correr dos entornos productivos con webhooks activos en paralelo.
 - Si Docker Desktop pide reinicio o login inicial, completarlo y reintentar instalador.
+- Si el host esperado no coincide con `tailscale status`, el instalador no intentara forzarlo: dejara la instalacion parcial y esperara que el tailnet/nodo se corrija afuera del script.
