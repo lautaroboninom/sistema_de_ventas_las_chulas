@@ -15,23 +15,31 @@ export const PERMISSION_CODES = {
   ACTION_VENTAS_DEVOLVER: 'action.ventas.devolver',
   ACTION_VENTAS_CAMBIAR: 'action.ventas.cambiar',
   ACTION_VENTAS_DEVOLVER_OVERRIDE_GARANTIA: 'action.ventas.devolver.override_garantia',
+  ACTION_POSTVENTA_CREDITO_TIENDA: 'action.postventa.credito_tienda',
+  ACTION_CAJA_CIERRE_ASISTIDO: 'action.caja.cierre_asistido',
+  ACTION_INVENTARIO_CONTEO: 'action.inventario.conteo',
+  ACTION_ALERTAS_GESTIONAR: 'action.alertas.gestionar',
   ACTION_FACTURACION_EMITIR: 'action.facturacion.emitir',
   ACTION_FACTURACION_NOTA_CREDITO: 'action.facturacion.nota_credito',
   ACTION_ONLINE_SYNC: 'action.online.sync',
   ACTION_REPORTES_VER_COSTOS: 'action.reportes.ver_costos',
   ACTION_CONFIG_EDITAR: 'action.config.editar',
+  ACTION_CONFIG_ONLINE_CREDENTIALS: 'action.config.online_credentials',
 };
 
 const ROLE_DEFAULT_PERMISSIONS = {
-  admin: new Set(Object.values(PERMISSION_CODES)),
+  admin: new Set(
+    Object.values(PERMISSION_CODES).filter(
+      (code) => code !== PERMISSION_CODES.ACTION_CONFIG_ONLINE_CREDENTIALS,
+    ),
+  ),
   empleado: new Set([
     PERMISSION_CODES.PAGE_POS,
     PERMISSION_CODES.PAGE_PRODUCTOS,
     PERMISSION_CODES.PAGE_VENTAS,
-    PERMISSION_CODES.ACTION_VENTAS_ANULAR,
-    PERMISSION_CODES.ACTION_VENTAS_DEVOLVER,
     PERMISSION_CODES.ACTION_VENTAS_CAMBIAR,
     PERMISSION_CODES.ACTION_FACTURACION_EMITIR,
+    PERMISSION_CODES.ACTION_CAJA_CIERRE_ASISTIDO,
   ]),
 };
 

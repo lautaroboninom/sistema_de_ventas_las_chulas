@@ -83,7 +83,7 @@ Parametros:
 ## 4) Que hace el instalador
 1. Verifica admin, Windows, internet y estado de virtualizacion/WSL2.
 2. Reutiliza dependencias ya instaladas y solo instala con winget lo que falta.
-3. Reutiliza el repo si esta usable; solo hace `fetch/pull --ff-only` cuando la copia local esta limpia y alineada.
+3. Sincroniza el repo contra `origin/main`: si hay cambios locales en archivos versionados o untracked, los descarta y deja la copia igual a Git. Conserva archivos ignorados como `.env.prod`.
 4. Genera o reconcilia `.env.prod` hacia `-ExpectedPublicHost`:
    - crea desde `.env.prod.example` si falta.
    - reutiliza valores existentes validos.
@@ -138,10 +138,11 @@ Codigos de salida:
 - `1`: fallo real de prerequisito o despliegue.
 
 ## 7) Checklist despues de instalar
-1. Cargar webhooks de Tienda Nube apuntando al host publico.
-2. Probar orden pagada y orden cancelada.
-3. Validar login, compras, ventas y reportes.
-4. Rotar secretos expuestos durante pruebas y actualizar tokens.
+1. Cargar webhooks de Tienda Nube apuntando al host publico (`order/paid`, `order/cancelled`, `order/updated`, `store/redact`, `customers/redact`, `customers/data_request`).
+2. Probar orden pagada, cancelada y una actualización `refunded` (via `order/updated`).
+3. Validar recepción de `customers/redact` y `customers/data_request`.
+4. Validar login, compras, ventas y reportes.
+5. Rotar secretos expuestos durante pruebas y actualizar tokens.
 
 ## 8) Notas importantes
 - Modo soportado: cliente unico (una tienda / una instalacion).

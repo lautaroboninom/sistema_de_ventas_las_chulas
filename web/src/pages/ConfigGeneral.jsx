@@ -1,5 +1,6 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   deleteUsuario,
@@ -13,10 +14,13 @@ import {
   patchUsuarioRolePerm,
   postUsuario,
   postUsuarioPermisosReset,
+  postRetailOnlineOAuthApplyToken,
+  postRetailOnlineOAuthReauthorizeUrl,
   putRetailConfigPaymentAccounts,
   putRetailConfigSettings,
   putUsuarioPermisos,
 } from '../lib/api';
+import { can, PERMISSION_CODES } from '../lib/permissions';
 
 const EFFECT_LABELS = {
   inherit: 'Heredar',
@@ -24,13 +28,44 @@ const EFFECT_LABELS = {
   deny: 'Bloquear',
 };
 
+const ARCA_HELP_LINKS = [
+  {
+    id: 'acciones',
+    label: 'Pasos oficiales ARCA',
+    url: 'https://www.afip.gob.ar/fe/documentos/AccionesarealizarparaconsumirunWebservicedeFacturaElectr.pdf',
+  },
+  {
+    id: 'wsass',
+    label: 'Manual WSASS (homologacion)',
+    url: 'https://www.afip.gob.ar/ws/WSASS/html/index.html',
+  },
+  {
+    id: 'wsfe',
+    label: 'Manuales WS Factura Electronica',
+    url: 'https://www.afip.gob.ar/ws/documentacion/ws-factura-electronica.asp',
+  },
+  {
+    id: 'asociar',
+    label: 'Asociar certificado a WSN',
+    url: 'https://www.afip.gob.ar/ws/WSAA/wsaa_asociar_certificado_a_wsn_produccion.pdf',
+  },
+];
+
 function errMsg(error) {
+  const detail = error?.data?.detail;
+  const hint = error?.data?.hint;
+  if (detail && hint) return `${detail} ${hint}`;
+  if (detail) return detail;
   return error?.message || 'Ocurrio un error inesperado';
 }
-
 function toBool(value) {
   return value === true || value === 'true' || value === 1 || value === '1';
 }
+
+const ACTION_MENU_WIDTH = 192;
+const ACTION_MENU_HEIGHT = 188;
+const ACTION_MENU_GAP = 6;
+const ACTION_MENU_MARGIN = 8;
 
 export default function ConfigGeneral() {
   const { user, refreshSession } = useAuth();
@@ -43,6 +78,7 @@ export default function ConfigGeneral() {
   const [msg, setMsg] = useState('');
   const [form, setForm] = useState({ nombre: '', email: '', rol: 'empleado' });
   const [actionMenuUserId, setActionMenuUserId] = useState(null);
+  const [actionMenuPos, setActionMenuPos] = useState(null);
 
   const [permOpen, setPermOpen] = useState(false);
   const [permCatalog, setPermCatalog] = useState([]);
@@ -54,6 +90,62 @@ export default function ConfigGeneral() {
   const [permSaving, setPermSaving] = useState(false);
   const [permResetting, setPermResetting] = useState(false);
   const [permErr, setPermErr] = useState('');
+  const actionMenuFirstButtonRef = useRef(null);
+  const [oauthForm, setOauthForm] = useState({
+    store_id: '',
+    access_token: '',
+    webhook_secret: '',
+  });
+  const [oauthSaving, setOauthSaving] = useState(false);
+
+  const canEditBusinessSettings = can(user, PERMISSION_CODES.ACTION_CONFIG_EDITAR);
+  const canEditOnlineCredentials = can(user, PERMISSION_CODES.ACTION_CONFIG_ONLINE_CREDENTIALS);
+  const canSaveSettings = canEditBusinessSettings || canEditOnlineCredentials;
+  const actionMenuRow = useMemo(
+    () => rows.find((row) => Number(row.id) === Number(actionMenuUserId)) || null,
+    [rows, actionMenuUserId],
+  );
+
+  function closeActionMenu() {
+    setActionMenuUserId(null);
+    setActionMenuPos(null);
+  }
+
+  function calcActionMenuPosition(anchorRect) {
+    if (!anchorRect) return null;
+    const viewportW = window.innerWidth || 0;
+    const viewportH = window.innerHeight || 0;
+
+    const left = Math.max(
+      ACTION_MENU_MARGIN,
+      Math.min(viewportW - ACTION_MENU_WIDTH - ACTION_MENU_MARGIN, anchorRect.right - ACTION_MENU_WIDTH),
+    );
+
+    const openUpwards =
+      anchorRect.bottom + ACTION_MENU_GAP + ACTION_MENU_HEIGHT > viewportH - ACTION_MENU_MARGIN &&
+      anchorRect.top - ACTION_MENU_GAP - ACTION_MENU_HEIGHT >= ACTION_MENU_MARGIN;
+
+    const top = openUpwards
+      ? Math.max(ACTION_MENU_MARGIN, anchorRect.top - ACTION_MENU_HEIGHT - ACTION_MENU_GAP)
+      : Math.max(
+          ACTION_MENU_MARGIN,
+          Math.min(viewportH - ACTION_MENU_HEIGHT - ACTION_MENU_MARGIN, anchorRect.bottom + ACTION_MENU_GAP),
+        );
+
+    return { top, left };
+  }
+
+  function toggleActionMenu(userId, triggerEl) {
+    if (!triggerEl) return;
+    const nextId = Number(userId);
+    if (Number(actionMenuUserId) === nextId) {
+      closeActionMenu();
+      return;
+    }
+    const pos = calcActionMenuPosition(triggerEl.getBoundingClientRect());
+    setActionMenuUserId(nextId);
+    setActionMenuPos(pos);
+  }
 
   async function loadAll() {
     setLoading(true);
@@ -73,31 +165,58 @@ export default function ConfigGeneral() {
       setLoading(false);
     }
   }
-
   useEffect(() => {
     loadAll();
   }, []);
 
+  useEffect(() => {
+    if (!settings) return;
+    setOauthForm((prev) => {
+      const nextStoreId = settings?.tiendanube_store_id ? String(settings.tiendanube_store_id) : '';
+      if (prev.store_id || !nextStoreId) return prev;
+      return { ...prev, store_id: nextStoreId };
+    });
+  }, [settings?.tiendanube_store_id]);
   useEffect(() => {
     function onDocumentMouseDown(event) {
       const target = event.target;
       if (target instanceof Element && target.closest('[data-user-actions-menu="true"]')) {
         return;
       }
-      setActionMenuUserId(null);
+      closeActionMenu();
     }
 
     document.addEventListener('mousedown', onDocumentMouseDown);
     return () => document.removeEventListener('mousedown', onDocumentMouseDown);
   }, []);
-
   useEffect(() => {
     if (actionMenuUserId == null) return;
     const stillExists = rows.some((row) => Number(row.id) === Number(actionMenuUserId));
     if (!stillExists) {
-      setActionMenuUserId(null);
+      closeActionMenu();
     }
   }, [rows, actionMenuUserId]);
+
+  useEffect(() => {
+    if (actionMenuUserId == null) return undefined;
+    function closeOnViewportChange() {
+      closeActionMenu();
+    }
+    window.addEventListener('resize', closeOnViewportChange);
+    window.addEventListener('scroll', closeOnViewportChange, true);
+    return () => {
+      window.removeEventListener('resize', closeOnViewportChange);
+      window.removeEventListener('scroll', closeOnViewportChange, true);
+    };
+  }, [actionMenuUserId]);
+
+  useEffect(() => {
+    if (!actionMenuRow || !actionMenuPos) return undefined;
+    const timer = window.setTimeout(() => {
+      actionMenuFirstButtonRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [actionMenuRow, actionMenuPos]);
 
   async function createUser(e) {
     e.preventDefault();
@@ -154,8 +273,8 @@ export default function ConfigGeneral() {
     setErr('');
     setMsg('');
     try {
-      await patchUsuarioReset(row.id);
-      setMsg('Se envio el mail de recuperacion');
+      const data = await patchUsuarioReset(row.id);
+      setMsg(data?.detail || 'Mail de recuperacion enviado correctamente');
     } catch (error) {
       setErr(errMsg(error));
     } finally {
@@ -186,51 +305,75 @@ export default function ConfigGeneral() {
   async function saveSettings(e) {
     e.preventDefault();
     if (!settings) return;
+    if (!canSaveSettings) {
+      setErr('No tenes permisos para editar esta configuracion.');
+      return;
+    }
     setSaving(true);
     setErr('');
     setMsg('');
     try {
-      await putRetailConfigSettings({
-        business_name: settings.business_name || undefined,
-        iva_condition: settings.iva_condition || undefined,
-        arca_env: settings.arca_env || undefined,
-        arca_cuit: settings.arca_cuit || undefined,
-        arca_pto_vta_store:
+      const payload = {};
+      if (canEditBusinessSettings) {
+        payload.business_name = settings.business_name || undefined;
+        payload.iva_condition = settings.iva_condition || undefined;
+        payload.arca_env = settings.arca_env || undefined;
+        payload.arca_cuit = settings.arca_cuit || undefined;
+        payload.arca_pto_vta_store =
           settings.arca_pto_vta_store === '' || settings.arca_pto_vta_store == null
             ? undefined
-            : Number(settings.arca_pto_vta_store),
-        arca_pto_vta_online:
+            : Number(settings.arca_pto_vta_store);
+        payload.arca_pto_vta_online =
           settings.arca_pto_vta_online === '' || settings.arca_pto_vta_online == null
             ? undefined
-            : Number(settings.arca_pto_vta_online),
-        arca_cert_path: settings.arca_cert_path || undefined,
-        arca_key_path: settings.arca_key_path || undefined,
-        tiendanube_store_id:
-          settings.tiendanube_store_id === '' || settings.tiendanube_store_id == null
+            : Number(settings.arca_pto_vta_online);
+        payload.arca_cbte_tipo_store =
+          settings.arca_cbte_tipo_store === '' || settings.arca_cbte_tipo_store == null
             ? undefined
-            : Number(settings.tiendanube_store_id),
-        tiendanube_client_id: settings.tiendanube_client_id || undefined,
-        tiendanube_client_secret: settings.tiendanube_client_secret || undefined,
-        tiendanube_access_token: settings.tiendanube_access_token || undefined,
-        tiendanube_webhook_secret: settings.tiendanube_webhook_secret || undefined,
-        ticket_printer_name: settings.ticket_printer_name || undefined,
-        label_printer_name: settings.label_printer_name || undefined,
-        ean_country_prefix: settings.ean_country_prefix || undefined,
-        ean_generic_supplier_code: settings.ean_generic_supplier_code || undefined,
-        auto_invoice_online_paid: toBool(settings.auto_invoice_online_paid),
-        return_warranty_size_days:
+            : Number(settings.arca_cbte_tipo_store);
+        payload.arca_cbte_tipo_online =
+          settings.arca_cbte_tipo_online === '' || settings.arca_cbte_tipo_online == null
+            ? undefined
+            : Number(settings.arca_cbte_tipo_online);
+        payload.ticket_printer_name = settings.ticket_printer_name || undefined;
+        payload.label_printer_name = settings.label_printer_name || undefined;
+        payload.ean_country_prefix = settings.ean_country_prefix || undefined;
+        payload.ean_generic_supplier_code = settings.ean_generic_supplier_code || undefined;
+        payload.auto_invoice_online_paid = toBool(settings.auto_invoice_online_paid);
+        payload.return_warranty_size_days =
           settings.return_warranty_size_days === '' || settings.return_warranty_size_days == null
             ? undefined
-            : Number(settings.return_warranty_size_days),
-        return_warranty_breakage_days:
+            : Number(settings.return_warranty_size_days);
+        payload.return_warranty_breakage_days =
           settings.return_warranty_breakage_days === '' || settings.return_warranty_breakage_days == null
             ? undefined
-            : Number(settings.return_warranty_breakage_days),
-        purchase_default_markup_pct:
+            : Number(settings.return_warranty_breakage_days);
+        payload.purchase_default_markup_pct =
           settings.purchase_default_markup_pct === '' || settings.purchase_default_markup_pct == null
             ? undefined
-            : Number(settings.purchase_default_markup_pct),
-      });
+            : Number(settings.purchase_default_markup_pct);
+      }
+
+      if (canEditOnlineCredentials) {
+        payload.arca_cert_path = settings.arca_cert_path || undefined;
+        payload.arca_key_path = settings.arca_key_path || undefined;
+        payload.tiendanube_store_id =
+          settings.tiendanube_store_id === '' || settings.tiendanube_store_id == null
+            ? undefined
+            : Number(settings.tiendanube_store_id);
+        payload.tiendanube_client_id = settings.tiendanube_client_id || undefined;
+        payload.tiendanube_client_secret = settings.tiendanube_client_secret || undefined;
+        payload.tiendanube_access_token = settings.tiendanube_access_token || undefined;
+        payload.tiendanube_webhook_secret = settings.tiendanube_webhook_secret || undefined;
+      }
+
+      const hasChanges = Object.keys(payload).some((key) => payload[key] !== undefined);
+      if (!hasChanges) {
+        setErr('No hay campos permitidos para guardar con tu perfil.');
+        return;
+      }
+
+      await putRetailConfigSettings(payload);
       setMsg('Configuracion guardada');
       await loadAll();
     } catch (error) {
@@ -241,6 +384,10 @@ export default function ConfigGeneral() {
   }
 
   async function saveAccounts() {
+    if (!canEditBusinessSettings) {
+      setErr('No tenes permisos para editar cuentas de cobro.');
+      return;
+    }
     setSaving(true);
     setErr('');
     setMsg('');
@@ -263,6 +410,59 @@ export default function ConfigGeneral() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function openTiendaNubeReauthorize() {
+    if (!canEditOnlineCredentials) return;
+    setOauthSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      const data = await postRetailOnlineOAuthReauthorizeUrl({});
+      const url = data?.authorize_url || '';
+      if (!url) {
+        throw new Error('No se pudo generar URL de autorizacion.');
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setMsg('Se abrio la autorizacion de Tienda Nube en una nueva pestana.');
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setOauthSaving(false);
+    }
+  }
+
+  async function applyTiendaNubeToken() {
+    if (!canEditOnlineCredentials) return;
+    setOauthSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      const storeIdRaw = String(oauthForm.store_id || '').trim();
+      const accessToken = String(oauthForm.access_token || '').trim();
+      if (!storeIdRaw || !accessToken) {
+        throw new Error('Completa store_id y access_token para aplicar el token.');
+      }
+      await postRetailOnlineOAuthApplyToken({
+        store_id: Number(storeIdRaw),
+        access_token: accessToken,
+        webhook_secret: String(oauthForm.webhook_secret || '').trim() || undefined,
+      });
+      setOauthForm((prev) => ({ ...prev, access_token: '', webhook_secret: '' }));
+      setMsg('Token online aplicado correctamente.');
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setOauthSaving(false);
+    }
+  }
+
+  function openArcaHelp(link) {
+    if (!link?.url) return;
+    setErr('');
+    window.open(link.url, '_blank', 'noopener,noreferrer');
+    setMsg(`Se abrio "${link.label}" en una nueva pestana.`);
   }
 
   function updateAccount(idx, patch) {
@@ -310,10 +510,13 @@ export default function ConfigGeneral() {
   }
 
   const modalEditable = Boolean(permData?.editable);
-  const permTargetRole = String(permData?.user?.rol || '').toLowerCase();
+  const roleLockedPermissions = useMemo(
+    () => new Set(Array.isArray(permData?.role_locked_permissions) ? permData.role_locked_permissions : []),
+    [permData],
+  );
 
   function isRoleLockedPermission(code) {
-    return code === 'page.reportes' && permTargetRole !== 'admin';
+    return roleLockedPermissions.has(code);
   }
 
   const groupedPermissions = useMemo(() => {
@@ -416,8 +619,13 @@ export default function ConfigGeneral() {
             <div>
               <h2 className="text-lg font-semibold">Parametros del negocio e integraciones</h2>
               <p className="text-sm text-gray-600">Facturacion y Tienda Nube quedaron en bloques separados para una carga mas clara.</p>
+              {!canSaveSettings ? (
+                <p className="mt-1 text-xs text-amber-700">
+                  Tu usuario tiene acceso de lectura en esta seccion. Para editar, se requiere permiso tecnico.
+                </p>
+              ) : null}
             </div>
-            <button className="btn" type="submit" disabled={saving}>
+            <button className="btn" type="submit" disabled={saving || !canSaveSettings}>
               Guardar parametros
             </button>
           </div>
@@ -429,36 +637,42 @@ export default function ConfigGeneral() {
                 className="input"
                 placeholder="Nombre comercial"
                 value={settings?.business_name || ''}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, business_name: e.target.value }))}
               />
               <input
                 className="input"
                 placeholder="Condicion IVA"
                 value={settings?.iva_condition || ''}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, iva_condition: e.target.value }))}
               />
               <input
                 className="input"
                 placeholder="Impresora ticket"
                 value={settings?.ticket_printer_name || ''}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, ticket_printer_name: e.target.value }))}
               />
               <input
                 className="input"
                 placeholder="Impresora etiquetas"
                 value={settings?.label_printer_name || ''}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, label_printer_name: e.target.value }))}
               />
               <input
                 className="input"
                 placeholder="Prefijo pais EAN-13 (ej 779)"
                 value={settings?.ean_country_prefix || '779'}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, ean_country_prefix: e.target.value }))}
               />
               <input
                 className="input"
                 placeholder="Codigo proveedor generico (0000)"
                 value={settings?.ean_generic_supplier_code || '0000'}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, ean_generic_supplier_code: e.target.value }))}
               />
               <input
@@ -467,6 +681,7 @@ export default function ConfigGeneral() {
                 min="1"
                 placeholder="Garantia cambio de talle (dias)"
                 value={settings?.return_warranty_size_days ?? 30}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, return_warranty_size_days: e.target.value }))}
               />
               <input
@@ -475,6 +690,7 @@ export default function ConfigGeneral() {
                 min="1"
                 placeholder="Garantia por roturas (dias)"
                 value={settings?.return_warranty_breakage_days ?? 90}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, return_warranty_breakage_days: e.target.value }))}
               />
               <input
@@ -484,6 +700,7 @@ export default function ConfigGeneral() {
                 step="0.01"
                 placeholder="Margen compras por defecto (%)"
                 value={settings?.purchase_default_markup_pct ?? 100}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, purchase_default_markup_pct: e.target.value }))}
               />
             </div>
@@ -491,10 +708,30 @@ export default function ConfigGeneral() {
 
           <section className="space-y-3 rounded-xl border border-gray-200 bg-white/60 p-3">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-600">Facturacion (ARCA)</h3>
+            <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-3">
+              <h4 className="text-sm font-semibold">Guia de alta ARCA para clientas</h4>
+              <p className="text-xs text-gray-500">
+                Para emitir en modo real hay que completar certificacion, asociacion al WSN y punto de venta fiscal.
+                Usa estos tutoriales oficiales para reunir la informacion antes de cargar los campos en RH.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {ARCA_HELP_LINKS.map((link) => (
+                  <button
+                    key={link.id}
+                    className="btn-secondary"
+                    type="button"
+                    onClick={() => openArcaHelp(link)}
+                  >
+                    {link.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <select
                 className="input"
                 value={settings?.arca_env || 'homologacion'}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, arca_env: e.target.value }))}
               >
                 <option value="homologacion">ARCA homologacion</option>
@@ -504,6 +741,7 @@ export default function ConfigGeneral() {
                 className="input"
                 placeholder="ARCA CUIT"
                 value={settings?.arca_cuit || ''}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, arca_cuit: e.target.value }))}
               />
               <input
@@ -511,6 +749,7 @@ export default function ConfigGeneral() {
                 type="number"
                 placeholder="Pto vta local"
                 value={settings?.arca_pto_vta_store || ''}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, arca_pto_vta_store: e.target.value }))}
               />
               <input
@@ -518,7 +757,24 @@ export default function ConfigGeneral() {
                 type="number"
                 placeholder="Pto vta online"
                 value={settings?.arca_pto_vta_online || ''}
+                disabled={!canEditBusinessSettings}
                 onChange={(e) => setSettings((v) => ({ ...v, arca_pto_vta_online: e.target.value }))}
+              />
+              <input
+                className="input"
+                type="number"
+                placeholder="Cbte tipo local (ej 6)"
+                value={settings?.arca_cbte_tipo_store || ''}
+                disabled={!canEditBusinessSettings}
+                onChange={(e) => setSettings((v) => ({ ...v, arca_cbte_tipo_store: e.target.value }))}
+              />
+              <input
+                className="input"
+                type="number"
+                placeholder="Cbte tipo online (ej 6)"
+                value={settings?.arca_cbte_tipo_online || ''}
+                disabled={!canEditBusinessSettings}
+                onChange={(e) => setSettings((v) => ({ ...v, arca_cbte_tipo_online: e.target.value }))}
               />
               <input
                 className="input"
@@ -528,6 +784,7 @@ export default function ConfigGeneral() {
                     : 'ARCA cert path'
                 }
                 value={settings?.arca_cert_path || ''}
+                disabled={!canEditOnlineCredentials}
                 onChange={(e) => setSettings((v) => ({ ...v, arca_cert_path: e.target.value }))}
               />
               <input
@@ -538,12 +795,14 @@ export default function ConfigGeneral() {
                     : 'ARCA key path'
                 }
                 value={settings?.arca_key_path || ''}
+                disabled={!canEditOnlineCredentials}
                 onChange={(e) => setSettings((v) => ({ ...v, arca_key_path: e.target.value }))}
               />
               <label className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm">
                 <input
                   type="checkbox"
                   checked={toBool(settings?.auto_invoice_online_paid)}
+                  disabled={!canEditBusinessSettings}
                   onChange={(e) => setSettings((v) => ({ ...v, auto_invoice_online_paid: e.target.checked }))}
                 />
                 Facturar online automaticamente
@@ -554,54 +813,118 @@ export default function ConfigGeneral() {
           <section className="space-y-3 rounded-xl border border-gray-200 bg-white/60 p-3">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-600">Integracion Tienda Nube</h3>
             <p className="text-xs text-gray-500">Estos campos son solo para el enlace de tienda online y webhooks.</p>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <input
-                className="input"
-                type="number"
-                placeholder="Tienda Nube store_id"
-                value={settings?.tiendanube_store_id || ''}
-                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_store_id: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder="Tienda Nube client_id"
-                value={settings?.tiendanube_client_id || ''}
-                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_client_id: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder={
-                  settings?.tiendanube_client_secret_configured
-                    ? `Tienda Nube client_secret (actual: ${settings?.tiendanube_client_secret_masked || 'configurado'})`
-                    : 'Tienda Nube client_secret'
-                }
-                value={settings?.tiendanube_client_secret || ''}
-                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_client_secret: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder={
-                  settings?.tiendanube_access_token_configured
-                    ? `Tienda Nube access_token (actual: ${settings?.tiendanube_access_token_masked || 'configurado'})`
-                    : 'Tienda Nube access_token'
-                }
-                value={settings?.tiendanube_access_token || ''}
-                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_access_token: e.target.value }))}
-              />
-              <input
-                className="input md:col-span-2"
-                placeholder={
-                  settings?.tiendanube_webhook_secret_configured
-                    ? `Tienda Nube webhook secret (actual: ${settings?.tiendanube_webhook_secret_masked || 'configurado'})`
-                    : 'Tienda Nube webhook secret (client_secret)'
-                }
-                value={settings?.tiendanube_webhook_secret || ''}
-                onChange={(e) => setSettings((v) => ({ ...v, tiendanube_webhook_secret: e.target.value }))}
-              />
+            <div className="grid grid-cols-1 gap-3 rounded-lg border border-gray-200 bg-white p-3 md:grid-cols-2">
+              <div className="text-sm">
+                <span className="font-semibold">store_id:</span> {settings?.tiendanube_store_id || 'sin configurar'}
+              </div>
+              <div className="text-sm">
+                <span className="font-semibold">client_id:</span> {settings?.tiendanube_client_id || 'sin configurar'}
+              </div>
+              <div className="text-sm">
+                <span className="font-semibold">client_secret:</span>{' '}
+                {settings?.tiendanube_client_secret_configured ? 'configurado' : 'no configurado'}
+              </div>
+              <div className="text-sm">
+                <span className="font-semibold">access_token:</span>{' '}
+                {settings?.tiendanube_access_token_configured ? 'configurado' : 'no configurado'}
+              </div>
+              <div className="text-sm md:col-span-2">
+                <span className="font-semibold">webhook_secret:</span>{' '}
+                {settings?.tiendanube_webhook_secret_configured ? 'configurado' : 'no configurado'}
+              </div>
             </div>
+
+            {canEditOnlineCredentials ? (
+              <>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <input
+                    className="input"
+                    type="number"
+                    placeholder="Tienda Nube store_id"
+                    value={settings?.tiendanube_store_id || ''}
+                    onChange={(e) => setSettings((v) => ({ ...v, tiendanube_store_id: e.target.value }))}
+                  />
+                  <input
+                    className="input"
+                    placeholder="Tienda Nube client_id"
+                    value={settings?.tiendanube_client_id || ''}
+                    onChange={(e) => setSettings((v) => ({ ...v, tiendanube_client_id: e.target.value }))}
+                  />
+                  <input
+                    className="input"
+                    placeholder={
+                      settings?.tiendanube_client_secret_configured
+                        ? `Tienda Nube client_secret (actual: ${settings?.tiendanube_client_secret_masked || 'configurado'})`
+                        : 'Tienda Nube client_secret'
+                    }
+                    value={settings?.tiendanube_client_secret || ''}
+                    onChange={(e) => setSettings((v) => ({ ...v, tiendanube_client_secret: e.target.value }))}
+                  />
+                  <input
+                    className="input"
+                    placeholder={
+                      settings?.tiendanube_webhook_secret_configured
+                        ? `Tienda Nube webhook secret (actual: ${settings?.tiendanube_webhook_secret_masked || 'configurado'})`
+                        : 'Tienda Nube webhook secret (client_secret)'
+                    }
+                    value={settings?.tiendanube_webhook_secret || ''}
+                    onChange={(e) => setSettings((v) => ({ ...v, tiendanube_webhook_secret: e.target.value }))}
+                  />
+                  <input
+                    className="input md:col-span-2"
+                    placeholder={
+                      settings?.tiendanube_access_token_configured
+                        ? `Tienda Nube access_token (actual: ${settings?.tiendanube_access_token_masked || 'configurado'})`
+                        : 'Tienda Nube access_token'
+                    }
+                    value={settings?.tiendanube_access_token || ''}
+                    onChange={(e) => setSettings((v) => ({ ...v, tiendanube_access_token: e.target.value }))}
+                  />
+                </div>
+
+                <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
+                  <h4 className="text-sm font-semibold">Flujo tecnico OAuth</h4>
+                  <p className="text-xs text-gray-500">
+                    1) Reautoriza en Tienda Nube. 2) Pega store_id y access_token del cURL. 3) Aplica token.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="btn-secondary" type="button" onClick={openTiendaNubeReauthorize} disabled={oauthSaving}>
+                      Reautorizar Tienda Nube
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <input
+                      className="input"
+                      placeholder="store_id"
+                      value={oauthForm.store_id}
+                      onChange={(e) => setOauthForm((v) => ({ ...v, store_id: e.target.value }))}
+                    />
+                    <input
+                      className="input md:col-span-2"
+                      placeholder="access_token"
+                      value={oauthForm.access_token}
+                      onChange={(e) => setOauthForm((v) => ({ ...v, access_token: e.target.value }))}
+                    />
+                    <input
+                      className="input md:col-span-2"
+                      placeholder="webhook_secret opcional (si rota)"
+                      value={oauthForm.webhook_secret}
+                      onChange={(e) => setOauthForm((v) => ({ ...v, webhook_secret: e.target.value }))}
+                    />
+                    <button className="btn" type="button" onClick={applyTiendaNubeToken} disabled={oauthSaving}>
+                      Aplicar token
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-amber-700">
+                Este bloque es de solo lectura. Las credenciales online sensibles se gestionan con usuario tecnico.
+              </p>
+            )}
           </section>
 
-          <button className="btn" type="submit" disabled={saving}>
+          <button className="btn" type="submit" disabled={saving || !canSaveSettings}>
             Guardar parametros
           </button>
         </form>
@@ -628,6 +951,7 @@ export default function ConfigGeneral() {
                       <input
                         className="input"
                         value={row.label || ''}
+                        disabled={!canEditBusinessSettings}
                         onChange={(e) => updateAccount(idx, { label: e.target.value })}
                       />
                     </td>
@@ -635,6 +959,7 @@ export default function ConfigGeneral() {
                       <select
                         className="input"
                         value={row.payment_method || ''}
+                        disabled={!canEditBusinessSettings}
                         onChange={(e) => updateAccount(idx, { payment_method: e.target.value || null })}
                       >
                         <option value="">-</option>
@@ -648,6 +973,7 @@ export default function ConfigGeneral() {
                       <input
                         className="input"
                         value={row.provider || ''}
+                        disabled={!canEditBusinessSettings}
                         onChange={(e) => updateAccount(idx, { provider: e.target.value })}
                       />
                     </td>
@@ -656,6 +982,7 @@ export default function ConfigGeneral() {
                         className="input"
                         type="number"
                         value={row.sort_order || 100}
+                        disabled={!canEditBusinessSettings}
                         onChange={(e) => updateAccount(idx, { sort_order: e.target.value })}
                       />
                     </td>
@@ -663,6 +990,7 @@ export default function ConfigGeneral() {
                       <input
                         type="checkbox"
                         checked={!!row.active}
+                        disabled={!canEditBusinessSettings}
                         onChange={(e) => updateAccount(idx, { active: e.target.checked })}
                       />
                     </td>
@@ -676,11 +1004,18 @@ export default function ConfigGeneral() {
               </tbody>
             </table>
           </div>
-          <button className="btn" type="button" onClick={saveAccounts} disabled={saving || !accounts.length}>
+          <button
+            className="btn"
+            type="button"
+            onClick={saveAccounts}
+            disabled={saving || !accounts.length || !canEditBusinessSettings}
+          >
             Guardar cuentas
           </button>
         </div>
 
+        {canEditBusinessSettings ? (
+          <>
         <form className="card space-y-3" onSubmit={createUser}>
           <h2 className="text-lg font-semibold">Nuevo usuario</h2>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -757,64 +1092,11 @@ export default function ConfigGeneral() {
                           className="h-8 w-8 rounded border text-lg leading-none hover:bg-neutral-100"
                           aria-label="Abrir menu de acciones"
                           aria-expanded={Number(actionMenuUserId) === Number(row.id)}
-                          onClick={() =>
-                            setActionMenuUserId((prev) =>
-                              Number(prev) === Number(row.id) ? null : row.id
-                            )
-                          }
+                          onClick={(e) => toggleActionMenu(row.id, e.currentTarget)}
                           disabled={saving}
                         >
                           {'\u22EE'}
                         </button>
-
-                        {Number(actionMenuUserId) === Number(row.id) ? (
-                          <div className="absolute right-0 z-30 mt-1 w-48 rounded-lg border border-neutral-200 bg-white py-1 shadow-lg">
-                            <button
-                              className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-100"
-                              type="button"
-                              onClick={() => {
-                                setActionMenuUserId(null);
-                                toggleActive(row);
-                              }}
-                              disabled={saving}
-                            >
-                              {row.activo ? 'Desactivar' : 'Activar'}
-                            </button>
-                            <button
-                              className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-100"
-                              type="button"
-                              onClick={() => {
-                                setActionMenuUserId(null);
-                                openPermEditor(row);
-                              }}
-                              disabled={saving}
-                            >
-                              Permisos personalizados
-                            </button>
-                            <button
-                              className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-100 disabled:text-neutral-400"
-                              type="button"
-                              onClick={() => {
-                                setActionMenuUserId(null);
-                                resendRecoveryMail(row);
-                              }}
-                              disabled={saving || !row.activo}
-                            >
-                              Reenviar mail
-                            </button>
-                            <button
-                              className="block w-full px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50"
-                              type="button"
-                              onClick={() => {
-                                setActionMenuUserId(null);
-                                deleteUser(row);
-                              }}
-                              disabled={saving}
-                            >
-                              Eliminar
-                            </button>
-                          </div>
-                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -828,11 +1110,74 @@ export default function ConfigGeneral() {
             </table>
           </div>
         </div>
+          </>
+        ) : (
+          <div className="card">
+            <p className="text-sm text-gray-600">
+              La gestion de usuarios y permisos queda reservada para perfiles con edicion de configuracion.
+            </p>
+          </div>
+        )}
 
         {err ? <p className="text-sm text-red-700">{err}</p> : null}
         {msg ? <p className="text-sm text-green-700">{msg}</p> : null}
       </div>
-
+      {actionMenuRow && actionMenuPos
+        ? createPortal(
+            <div
+              className="fixed z-[80] w-48 rounded-lg border border-neutral-200 bg-white py-1 shadow-lg"
+              style={{ top: actionMenuPos.top, left: actionMenuPos.left }}
+              data-user-actions-menu="true"
+            >
+              <button
+                ref={actionMenuFirstButtonRef}
+                className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-100"
+                type="button"
+                onClick={() => {
+                  closeActionMenu();
+                  toggleActive(actionMenuRow);
+                }}
+                disabled={saving}
+              >
+                {actionMenuRow.activo ? 'Desactivar' : 'Activar'}
+              </button>
+              <button
+                className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-100"
+                type="button"
+                onClick={() => {
+                  closeActionMenu();
+                  openPermEditor(actionMenuRow);
+                }}
+                disabled={saving}
+              >
+                Permisos personalizados
+              </button>
+              <button
+                className="block w-full px-3 py-2 text-left text-sm hover:bg-neutral-100 disabled:text-neutral-400"
+                type="button"
+                onClick={() => {
+                  closeActionMenu();
+                  resendRecoveryMail(actionMenuRow);
+                }}
+                disabled={saving || !actionMenuRow.activo}
+              >
+                Reenviar mail
+              </button>
+              <button
+                className="block w-full px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50"
+                type="button"
+                onClick={() => {
+                  closeActionMenu();
+                  deleteUser(actionMenuRow);
+                }}
+                disabled={saving}
+              >
+                Eliminar
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
       {permOpen ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -872,9 +1217,9 @@ export default function ConfigGeneral() {
                       Este usuario no permite edicion granular (rol admin).
                     </div>
                   ) : null}
-                  {modalEditable && permTargetRole !== 'admin' ? (
+                  {modalEditable && roleLockedPermissions.size > 0 ? (
                     <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                      El permiso <code>page.reportes</code> esta bloqueado por politica de rol (solo admin).
+                      {`Hay ${roleLockedPermissions.size} permiso(s) bloqueado(s) por politica de rol para este usuario.`}
                     </div>
                   ) : null}
 

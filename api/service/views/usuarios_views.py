@@ -3,7 +3,6 @@ import hashlib
 import secrets
 
 from django.conf import settings
-from django.core.mail import send_mail
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import permissions
@@ -12,7 +11,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from ..ip_utils import get_client_ip
-from ..permission_catalog import PERMISSION_CODES, get_catalog
+from ..mail_delivery import send_mail_checked
+from ..permission_catalog import PERMISSION_CODES, get_catalog, get_role_locked_permissions
 from ..permissions import (
     EFFECT_ALLOW,
     EFFECT_DENY,
@@ -23,7 +23,7 @@ from ..permissions import (
     resolve_effective_permissions,
 )
 from ..roles import ROLE_CHOICES, ROLE_KEYS
-from .helpers import TOKEN_TTL_MIN, _set_audit_user, q, require_roles_strict
+from .helpers import TOKEN_TTL_MIN, _set_audit_user, exec_void, q, require_roles_strict
 
 
 def _load_user(uid):
@@ -64,15 +64,23 @@ def _load_overrides(uid):
 def _serialize_permissions(uid):
     user_row = _load_user(uid)
     overrides = _load_overrides(uid)
-    effective = resolve_effective_permissions(user_id=uid, role=user_row.get('rol'), overrides=overrides)
+    role_locked_permissions = get_role_locked_permissions(user_row.get('rol'))
+    role_locked_set = set(role_locked_permissions)
+    sanitized_overrides = {}
+    for code, effect in overrides.items():
+        if code in role_locked_set and effect == EFFECT_ALLOW:
+            continue
+        sanitized_overrides[code] = effect
+    effective = resolve_effective_permissions(user_id=uid, role=user_row.get('rol'), overrides=sanitized_overrides)
     merged = {code: EFFECT_INHERIT for code in PERMISSION_CODES}
-    merged.update(overrides)
+    merged.update(sanitized_overrides)
     return {
         'user': user_row,
         'editable': user_row.get('rol') != 'admin',
         'overrides': merged,
         'effective_permissions': effective,
-        'raw_overrides': overrides,
+        'raw_overrides': sanitized_overrides,
+        'role_locked_permissions': role_locked_permissions,
     }
 
 
@@ -89,7 +97,7 @@ def _create_reset_token(user_id, request):
         ''',
         [user_id, token_hash, expires_at, ip, user_agent],
     )
-    return token
+    return {'token': token, 'token_hash': token_hash}
 
 
 def _send_reset_mail(user_row, token):
@@ -114,17 +122,13 @@ def _send_reset_mail(user_row, token):
         f"<p><a href=\"{reset_url}\">{reset_url}</a></p>"
         '<p>Si no fuiste vos, ignora este correo.</p>'
     )
-    try:
-        send_mail(
-            subject,
-            text_body,
-            settings.DEFAULT_FROM_EMAIL,
-            [user_row.get('email', '')],
-            html_message=html_body,
-            fail_silently=True,
-        )
-    except Exception:
-        pass
+    return send_mail_checked(
+        subject,
+        text_body,
+        user_row.get('email', ''),
+        html_body=html_body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+    )
 
 
 class UsuariosView(APIView):
@@ -207,9 +211,31 @@ class UsuarioResetPassView(APIView):
             return Response({'detail': 'Usuario inexistente o inactivo'}, status=404)
 
         _set_audit_user(request)
-        token = _create_reset_token(user_row['id'], request)
-        _send_reset_mail(user_row, token)
-        return Response({'ok': True, 'sent': True})
+        token_data = _create_reset_token(user_row['id'], request)
+        delivery = _send_reset_mail(user_row, token_data['token'])
+        if not delivery.get('ok'):
+            exec_void('DELETE FROM password_reset_tokens WHERE token_hash=%s', [token_data['token_hash']])
+            payload = {
+                'ok': False,
+                'sent': False,
+                'detail': delivery.get('detail') or 'No se pudo enviar el mail de recuperacion.',
+                'error_code': delivery.get('error_code') or 'smtp_send_failed',
+            }
+            hint = (delivery.get('hint') or '').strip()
+            reason = (delivery.get('reason') or '').strip()
+            if hint:
+                payload['hint'] = hint
+            if reason:
+                payload['reason'] = reason
+            return Response(payload, status=int(delivery.get('status') or 502))
+        return Response(
+            {
+                'ok': True,
+                'sent': True,
+                'detail': delivery.get('detail') or 'Mail de recuperacion enviado correctamente.',
+                'delivery': {'delivered': int(delivery.get('delivered') or 1)},
+            }
+        )
 
 
 class UsuarioRolePermView(APIView):
@@ -318,7 +344,7 @@ class UsuarioPermisosView(APIView):
 
         _set_audit_user(request)
         try:
-            apply_overrides(uid, overrides, updated_by=getattr(request.user, 'id', None))
+            apply_overrides(uid, overrides, updated_by=getattr(request.user, 'id', None), role=user_row.get('rol'))
         except ValueError as exc:
             raise ValidationError(str(exc))
         return Response(_serialize_permissions(uid))

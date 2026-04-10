@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   getRetailAtributos,
   getRetailComprasProveedores,
+  getRetailOnlineFailedJobsSummary,
   getRetailProductos,
   getRetailVarianteBarcodeLabelsUrl,
   getRetailVarianteBarcodes,
@@ -14,6 +15,7 @@ import {
   postRetailVarianteBarcodePrimary,
   postRetailVariante,
 } from '../lib/api';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { can, PERMISSION_CODES } from '../lib/permissions';
 
@@ -154,9 +156,23 @@ const EMPTY_BARCODE_MODAL = {
   printLabelHeightMm: DEFAULT_PRINT_PREFS.labelHeightMm,
 };
 
+const EMPTY_ONLINE_SYNC_SUMMARY = {
+  failed_total: 0,
+  by_type: {
+    import_catalogo: 0,
+    sync_catalogo: 0,
+    sync_stock: 0,
+  },
+  loading: false,
+  statusAvailable: false,
+  lastUpdated: '',
+};
+
 export default function ProductosPage() {
   const { user } = useAuth();
   const canEdit = can(user, PERMISSION_CODES.ACTION_CONFIG_EDITAR);
+  const canSeeOnlineSyncStatus = can(user, PERMISSION_CODES.ACTION_ONLINE_SYNC);
+  const canGoOnline = can(user, PERMISSION_CODES.PAGE_ONLINE);
 
   const [productos, setProductos] = useState([]);
   const [atributos, setAtributos] = useState([]);
@@ -179,8 +195,36 @@ export default function ProductosPage() {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
+  const [onlineSyncSummary, setOnlineSyncSummary] = useState({ ...EMPTY_ONLINE_SYNC_SUMMARY });
 
-  async function loadAll() {
+  async function refreshOnlineSyncSummary() {
+    if (!canSeeOnlineSyncStatus) return;
+    setOnlineSyncSummary((prev) => ({ ...prev, loading: true }));
+    try {
+      const row = await getRetailOnlineFailedJobsSummary({ limit: 20 });
+      setOnlineSyncSummary({
+        failed_total: Number(row?.failed_total || 0),
+        by_type: {
+          import_catalogo: Number(row?.by_type?.import_catalogo || 0),
+          sync_catalogo: Number(row?.by_type?.sync_catalogo || 0),
+          sync_stock: Number(row?.by_type?.sync_stock || 0),
+        },
+        loading: false,
+        statusAvailable: true,
+        lastUpdated: new Date().toISOString(),
+      });
+    } catch (_error) {
+      setOnlineSyncSummary((prev) => ({
+        ...prev,
+        loading: false,
+        statusAvailable: false,
+        lastUpdated: new Date().toISOString(),
+      }));
+    }
+  }
+
+  async function loadAll(options = {}) {
+    const refreshSyncStatus = options.refreshSyncStatus ?? canSeeOnlineSyncStatus;
     setLoading(true);
     setErr('');
     try {
@@ -199,11 +243,22 @@ export default function ProductosPage() {
     } finally {
       setLoading(false);
     }
+    if (refreshSyncStatus) {
+      await refreshOnlineSyncSummary();
+    }
   }
 
   useEffect(() => {
     loadAll();
   }, []);
+
+  useEffect(() => {
+    if (!canSeeOnlineSyncStatus) return undefined;
+    const timer = window.setInterval(() => {
+      refreshOnlineSyncSummary();
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [canSeeOnlineSyncStatus]);
 
   function availableAttrsForRow(idx) {
     const rows = Array.isArray(varForm.option_rows) ? varForm.option_rows : [];
@@ -331,6 +386,7 @@ export default function ProductosPage() {
   }
 
   async function applyAdjust(variantId) {
+    if (!canEdit) return;
     const qty = Number(adjustByVariant[variantId] || 0);
     if (!Number.isFinite(qty) || qty === 0) return;
     setSaving(true);
@@ -343,6 +399,27 @@ export default function ProductosPage() {
       });
       setAdjustByVariant((prev) => ({ ...prev, [variantId]: '' }));
       setMsg('Stock ajustado');
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deactivateVariant(row) {
+    if (!canEdit) return;
+    const variantId = Number(row?.id || 0);
+    if (!variantId) return;
+    const label = `${row?.producto || 'Variante'}${row?.option_signature ? ` (${row.option_signature})` : ''}`;
+    if (!window.confirm(`Eliminar variante en RH y Tienda Nube?\n\n${label}`)) return;
+
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      await patchRetailVariante(variantId, { active: false });
+      setMsg('Variante eliminada. La baja en Tienda Nube fue encolada.');
       await loadAll();
     } catch (error) {
       setErr(errMsg(error));
@@ -389,7 +466,9 @@ export default function ProductosPage() {
       variant: row,
     });
     await loadBarcodeRows(row?.id);
-    setTimeout(() => barcodeModalInputRef.current?.focus(), 0);
+    if (canEdit) {
+      setTimeout(() => barcodeModalInputRef.current?.focus(), 0);
+    }
   }
 
   function closeBarcodeModal() {
@@ -409,6 +488,7 @@ export default function ProductosPage() {
   }
 
   async function quickGenerateBarcode(variantId) {
+    if (!canEdit) return;
     if (!variantId) return;
     setSaving(true);
     setErr('');
@@ -428,6 +508,7 @@ export default function ProductosPage() {
   }
 
   async function generateBarcodeFromModal() {
+    if (!canEdit) return;
     const variantId = barcodeModal?.variant?.id;
     if (!variantId) return;
     setBarcodeModal((prev) => ({ ...prev, saving: true, err: '', msg: '' }));
@@ -451,6 +532,7 @@ export default function ProductosPage() {
 
   async function associateBarcodeFromModal(e) {
     e.preventDefault();
+    if (!canEdit) return;
     const variantId = barcodeModal?.variant?.id;
     const code = String(barcodeModal.associateCode || '').trim();
     if (!variantId || !code) return;
@@ -479,6 +561,7 @@ export default function ProductosPage() {
   }
 
   async function setPrimaryBarcodeFromModal(barcodeId) {
+    if (!canEdit) return;
     const variantId = barcodeModal?.variant?.id;
     if (!variantId || !barcodeId) return;
     setBarcodeModal((prev) => ({ ...prev, saving: true, err: '', msg: '' }));
@@ -530,6 +613,11 @@ export default function ProductosPage() {
 
   const usedAttrs = new Set((varForm.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
   const canAddOptionRow = atributos.length === 0 || usedAttrs.size < atributos.length;
+  const totalProductos = productos.length;
+  const totalVariantes = variantes.length;
+  const failedSyncTotal = Number(onlineSyncSummary?.failed_total || 0);
+  const syncStatusAvailable = Boolean(onlineSyncSummary?.statusAvailable);
+  const hasFailedSync = syncStatusAvailable && failedSyncTotal > 0;
 
   return (
     <div className="space-y-4">
@@ -538,6 +626,38 @@ export default function ProductosPage() {
         <p className="text-sm text-gray-600">
           Catalogo retail unificado. Variantes con atributos configurables y stock global por SKU/barcode.
         </p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-neutral-700">
+            Productos activos RH: {totalProductos}
+          </span>
+          <span className="rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-neutral-700">
+            Variantes activas RH: {totalVariantes}
+          </span>
+          {canSeeOnlineSyncStatus ? (
+            <span
+              className={`rounded-full border px-3 py-1 ${
+                hasFailedSync
+                  ? 'border-red-300 bg-red-50 text-red-700 font-semibold'
+                  : 'border-neutral-200 bg-neutral-50 text-neutral-700'
+              }`}
+            >
+              {syncStatusAvailable ? (hasFailedSync ? `Sync TN fallidos: ${failedSyncTotal}` : 'Sync TN: OK') : 'Sync TN: sin estado'}
+            </span>
+          ) : null}
+          {canSeeOnlineSyncStatus && canGoOnline ? (
+            <Link
+              to="/online"
+              className="rounded-full border border-neutral-200 bg-white px-3 py-1 text-neutral-700 hover:bg-neutral-100"
+            >
+              Ver Online
+            </Link>
+          ) : null}
+          {canSeeOnlineSyncStatus && onlineSyncSummary.loading ? (
+            <span className="rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-neutral-500">
+              Sync TN: actualizando...
+            </span>
+          ) : null}
+        </div>
       </div>
 
       {canEdit ? (
@@ -873,6 +993,7 @@ export default function ProductosPage() {
                         placeholder="+/-"
                         value={adjustByVariant[row.id] || ''}
                         onChange={(e) => setAdjustByVariant((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                        disabled={!canEdit}
                       />
                       {canEdit ? (
                         <button type="button" className="px-2 py-1 rounded border" onClick={() => applyAdjust(row.id)} disabled={saving}>
@@ -883,21 +1004,23 @@ export default function ProductosPage() {
                   </td>
                   <td className="py-2 pr-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        className="px-2 py-1 rounded border text-xs"
-                        onClick={() => quickGenerateBarcode(row.id)}
-                        disabled={saving}
-                      >
-                        Generar
-                      </button>
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded border text-xs"
+                          onClick={() => quickGenerateBarcode(row.id)}
+                          disabled={saving}
+                        >
+                          Generar
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="px-2 py-1 rounded border text-xs"
                         onClick={() => openBarcodeModal(row)}
                         disabled={saving}
                       >
-                        Asociar
+                        {canEdit ? 'Asociar' : 'Ver'}
                       </button>
                       <button
                         type="button"
@@ -920,6 +1043,16 @@ export default function ProductosPage() {
                       >
                         Imprimir
                       </button>
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded border text-xs text-red-700 border-red-300 hover:bg-red-50"
+                          onClick={() => deactivateVariant(row)}
+                          disabled={saving}
+                        >
+                          Eliminar
+                        </button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -943,6 +1076,9 @@ export default function ProductosPage() {
                 <p className="text-xs text-gray-500">
                   {barcodeModal?.variant?.producto || 'Variante'} {barcodeModal?.variant?.option_signature ? `(${barcodeModal.variant.option_signature})` : ''}
                 </p>
+                {!canEdit ? (
+                  <p className="text-xs text-amber-700 mt-1">Modo lectura: puedes consultar e imprimir, sin editar codigos.</p>
+                ) : null}
               </div>
               <button type="button" className="px-3 py-2 rounded border" onClick={closeBarcodeModal}>
                 Cerrar
@@ -950,59 +1086,69 @@ export default function ProductosPage() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-              <form className="rounded-xl border border-neutral-200 p-3 space-y-2" onSubmit={associateBarcodeFromModal}>
-                <h4 className="text-sm font-semibold">Asociar barcode (teclado o escaner)</h4>
-                <input
-                  ref={barcodeModalInputRef}
-                  className="input"
-                  placeholder="EAN-13 (13 digitos)"
-                  value={barcodeModal.associateCode}
-                  onChange={(e) => setBarcodeModal((prev) => ({ ...prev, associateCode: e.target.value }))}
-                  required
-                />
-                <select
-                  className="input"
-                  value={barcodeModal.supplierId}
-                  onChange={(e) => setBarcodeModal((prev) => ({ ...prev, supplierId: e.target.value }))}
-                >
-                  <option value="">Sin especificar (codigo proveedor generico)</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}{s.ean_supplier_code ? ` - EAN Prov ${s.ean_supplier_code}` : ' - sin codigo EAN'}
-                    </option>
-                  ))}
-                </select>
-                <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+              {canEdit ? (
+                <form className="rounded-xl border border-neutral-200 p-3 space-y-2" onSubmit={associateBarcodeFromModal}>
+                  <h4 className="text-sm font-semibold">Asociar barcode (teclado o escaner)</h4>
                   <input
-                    type="checkbox"
-                    checked={!!barcodeModal.forceMove}
-                    onChange={(e) => setBarcodeModal((prev) => ({ ...prev, forceMove: e.target.checked }))}
+                    ref={barcodeModalInputRef}
+                    className="input"
+                    placeholder="EAN-13 (13 digitos)"
+                    value={barcodeModal.associateCode}
+                    onChange={(e) => setBarcodeModal((prev) => ({ ...prev, associateCode: e.target.value }))}
+                    required
                   />
-                  Forzar mover si el codigo esta en otra variante
-                </label>
-                <button className="btn" type="submit" disabled={barcodeModal.saving}>
-                  {barcodeModal.saving ? 'Guardando...' : 'Asociar como principal'}
-                </button>
-              </form>
+                  <select
+                    className="input"
+                    value={barcodeModal.supplierId}
+                    onChange={(e) => setBarcodeModal((prev) => ({ ...prev, supplierId: e.target.value }))}
+                  >
+                    <option value="">Sin especificar (codigo proveedor generico)</option>
+                    {suppliers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}{s.ean_supplier_code ? ` - EAN Prov ${s.ean_supplier_code}` : ' - sin codigo EAN'}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+                    <input
+                      type="checkbox"
+                      checked={!!barcodeModal.forceMove}
+                      onChange={(e) => setBarcodeModal((prev) => ({ ...prev, forceMove: e.target.checked }))}
+                    />
+                    Forzar mover si el codigo esta en otra variante
+                  </label>
+                  <button className="btn" type="submit" disabled={barcodeModal.saving}>
+                    {barcodeModal.saving ? 'Guardando...' : 'Asociar como principal'}
+                  </button>
+                </form>
+              ) : (
+                <div className="rounded-xl border border-neutral-200 p-3 text-sm text-neutral-600">
+                  Edicion de barcode deshabilitada para este rol.
+                </div>
+              )}
 
               <div className="rounded-xl border border-neutral-200 p-3 space-y-2">
-                <h4 className="text-sm font-semibold">Generar EAN-13</h4>
-                <select
-                  className="input"
-                  value={barcodeModal.supplierId}
-                  onChange={(e) => setBarcodeModal((prev) => ({ ...prev, supplierId: e.target.value }))}
-                >
-                  <option value="">Sin especificar (codigo proveedor generico)</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}{s.ean_supplier_code ? ` - EAN Prov ${s.ean_supplier_code}` : ' - sin codigo EAN'}
-                    </option>
-                  ))}
-                </select>
-                <button className="btn" type="button" onClick={generateBarcodeFromModal} disabled={barcodeModal.saving}>
-                  {barcodeModal.saving ? 'Generando...' : 'Generar y asignar principal'}
-                </button>
-                <div className="h-px bg-neutral-200 my-1" />
+                {canEdit ? (
+                  <>
+                    <h4 className="text-sm font-semibold">Generar EAN-13</h4>
+                    <select
+                      className="input"
+                      value={barcodeModal.supplierId}
+                      onChange={(e) => setBarcodeModal((prev) => ({ ...prev, supplierId: e.target.value }))}
+                    >
+                      <option value="">Sin especificar (codigo proveedor generico)</option>
+                      {suppliers.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}{s.ean_supplier_code ? ` - EAN Prov ${s.ean_supplier_code}` : ' - sin codigo EAN'}
+                        </option>
+                      ))}
+                    </select>
+                    <button className="btn" type="button" onClick={generateBarcodeFromModal} disabled={barcodeModal.saving}>
+                      {barcodeModal.saving ? 'Generando...' : 'Generar y asignar principal'}
+                    </button>
+                    <div className="h-px bg-neutral-200 my-1" />
+                  </>
+                ) : null}
                 <h4 className="text-sm font-semibold">Impresion</h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
                   <select
@@ -1124,7 +1270,7 @@ export default function ProductosPage() {
                           <td className="py-2 pr-3">{r.source || '-'}</td>
                           <td className="py-2 pr-3">
                             <div className="flex flex-wrap gap-2">
-                              {!r.is_primary ? (
+                              {canEdit && !r.is_primary ? (
                                 <button
                                   type="button"
                                   className="px-2 py-1 rounded border text-xs"

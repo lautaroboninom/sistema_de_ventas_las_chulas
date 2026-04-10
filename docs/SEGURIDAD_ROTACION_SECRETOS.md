@@ -34,13 +34,21 @@ No pisa `.env.prod` automaticamente.
 ## Flujo recomendado de rotacion
 1. Generar archivo rotado con script.
 2. Revisar que solo cambiaron claves esperadas.
-3. Reemplazar `.env.prod` por el archivo rotado.
-4. Reiniciar servicios:
+3. Si la base YA existe, cambiar primero la password del rol en PostgreSQL con el NUEVO `POSTGRES_PASSWORD` del archivo rotado:
+```bash
+docker exec -it retailhub-postgres psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c "ALTER ROLE <POSTGRES_USER> WITH PASSWORD '<NUEVO_POSTGRES_PASSWORD>';"
+```
+Si PostgreSQL corre fuera de Docker:
+```bash
+psql -h <POSTGRES_HOST> -p <POSTGRES_PORT> -U <POSTGRES_USER> -d <POSTGRES_DB> -c "ALTER ROLE <POSTGRES_USER> WITH PASSWORD '<NUEVO_POSTGRES_PASSWORD>';"
+```
+4. Reemplazar `.env.prod` por el archivo rotado.
+5. Reiniciar servicios:
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 ```
-5. Verificar login, webhooks y ARCA.
-6. Eliminar de forma segura copias viejas de `.env.prod` que no se usen.
+6. Verificar login, webhooks y ARCA.
+7. Eliminar de forma segura copias viejas de `.env.prod` que no se usen.
 
 ## Flujo inicial en PC de cliente (recomendado)
 1. Copiar `.env.prod.example` a `.env.prod`.
@@ -56,6 +64,14 @@ docker compose -f docker-compose.prod.yml up -d --build
 - Webhooks Tienda Nube validan firma.
 - Conexion a DB estable.
 - Emision ARCA operativa (si aplica en entorno).
+
+## Nota critica para instalaciones existentes
+- Si cambias `POSTGRES_PASSWORD` en `.env.prod` antes de ejecutar `ALTER ROLE`, la API puede perder acceso a DB al reiniciar.
+- Orden obligatorio cuando la DB ya fue inicializada:
+  1. Generar nuevo secreto.
+  2. `ALTER ROLE` dentro de PostgreSQL.
+  3. Actualizar `.env.prod`.
+  4. Reiniciar stack.
 
 ## Rollback
 Si algo falla:

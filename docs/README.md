@@ -1,47 +1,33 @@
-﻿# Las Chulas Retail - Guía Rápida
+﻿# RetailHub - Indice de Documentacion
 
-## Estado del corte
-- Dominio legacy de dominio anterior eliminado del wiring principal.
-- API pública activa solo para auth, usuarios/permisos y retail.
-- Frontend activo solo con pantallas retail.
-- Base de datos definida en `sql/schema.sql` (arranque desde cero).
-- Deploy con 2 modos: `dev` (`docker-compose.yml`) y `prod` (`docker-compose.prod.yml`).
-- Producción requiere además `tailscale serve/funnel` para publicar `https://<host>.ts.net`.
+## Manual funcional (entrada principal)
+Leer primero:
+- [Manual de Usuario RetailHub](MANUAL_USUARIO_RETAILHUB.md)
 
-## Rutas frontend
-- `/pos`
-- `/productos`
-- `/compras`
-- `/ventas`
-- `/reportes`
-- `/online`
-- `/config`
-- `/config/paginas`
-- `/login`
+Este manual cubre operacion diaria y administracion practica, con criterio estricto de alcance:
+- solo funcionalidades implementadas actualmente
+- dependencias externas marcadas como `No disponible / depende de configuracion externa`
 
-## Endpoints backend principales
-- Auth: `/api/auth/*`
-- Usuarios/permisos: `/api/usuarios/*`, `/api/permisos/catalogo/`
-- Retail: `/api/retail/*`
+## Guias tecnicas y operativas
+- [Instructivo app web PC cliente](INSTRUCTIVO_APPWEB_PC_CLIENTE.md) (login Tailscale + instalar app web)
+- [Instalacion cliente Windows](INSTALACION_CLIENTE_WINDOWS.md) (instalacion automatizada en Windows)
+- [Checklist Tienda Nube](CHECKLIST_TIENDANUBE_PASO_A_PASO.md) (enlace, webhooks y cutover Tienda Nube)
+- [Checklist ARCA](CHECKLIST_ARCA_PASO_A_PASO.md) (alta fiscal ARCA)
+- [Operacion ARCA](ARCA_OPERACION.md) (operacion y reintentos ARCA)
+- [Auditoria ARCA 2026-04-02](AUDITORIA_FLUJO_ARCA_2026-04-02.md) (auditoria tecnica ARCA)
+- [Seguridad y rotacion de secretos](SEGURIDAD_ROTACION_SECRETOS.md) (rotacion de secretos)
+- [Pendientes](PENDIENTES.md) (pendientes de negocio y dependencias externas)
 
-## Configuración de páginas
-- API: `GET/PUT /api/retail/config/page-settings/`
-- UI: `/config/paginas`
-- Permite editar:
-  - nombre de app y subtítulo
-  - labels del sidebar
-  - títulos por página
-  - ruta inicial por defecto
-
-## Integraciones
-- ARCA WSAA/WSFEv1: estado fiscal por venta (`pending`, `authorized`, `rejected`, `retry`, `manual_review`, `not_required`).
-- Tienda Nube: sync catálogo/stock, webhooks `orden-pagada` y `orden-cancelada`, idempotencia por evento.
-
-## Pendientes funcionales/externos
-Ver `docs/PENDIENTES.md`.
-Para enlace y migración de Tienda Nube: `docs/CHECKLIST_TIENDANUBE_PASO_A_PASO.md`.
-Para instalacion automatizada en PC cliente (Windows): `docs/INSTALACION_CLIENTE_WINDOWS.md`.
-
-## Seguridad operativa
-- Rotacion de secretos y checklist post-cambio: `docs/SEGURIDAD_ROTACION_SECRETOS.md`.
-- `.env.prod.example` es la plantilla versionada; `.env.prod` local valida secretos fuertes en `settings_prod`.
+## Mapa rapido por necesidad
+- Operar caja, ventas, postventa, inventario, reportes o online:
+  - [Manual de Usuario RetailHub](MANUAL_USUARIO_RETAILHUB.md)
+- Instalar solo la app web en una PC cliente (no servidor):
+  - [Instructivo app web PC cliente](INSTRUCTIVO_APPWEB_PC_CLIENTE.md)
+- Instalar o reinstalar entorno cliente:
+  - [Instalacion cliente Windows](INSTALACION_CLIENTE_WINDOWS.md)
+- Configurar integracion Tienda Nube:
+  - [Checklist Tienda Nube](CHECKLIST_TIENDANUBE_PASO_A_PASO.md)
+- Configurar facturacion ARCA:
+  - [Checklist ARCA](CHECKLIST_ARCA_PASO_A_PASO.md) y [Operacion ARCA](ARCA_OPERACION.md)
+- Revisar riesgos/puntos no cerrados:
+  - [Pendientes](PENDIENTES.md)

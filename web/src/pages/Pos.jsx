@@ -2,6 +2,8 @@
 import {
   getRetailCajaActual,
   getRetailCajaCuentas,
+  getRetailOperacionPendientes,
+  getRetailStoreCredits,
   getRetailGarantiaTicket,
   getRetailPosDraftDetail,
   getRetailPosDrafts,
@@ -11,6 +13,8 @@ import {
   patchRetailPosDraft,
   postRetailCajaApertura,
   postRetailCajaCierre,
+  postRetailCajaCierreAsistido,
+  postRetailOperacionIncidenciaResolver,
   postRetailPosDraft,
   postRetailPosDraftConfirm,
   postRetailVentaConfirmar,
@@ -24,6 +28,7 @@ const PAYMENT_OPTIONS = [
   { value: 'debit', label: 'Debito (lista)' },
   { value: 'transfer', label: 'Transferencia (lista)' },
   { value: 'credit', label: 'Credito (+10%)' },
+  { value: 'store_credit', label: 'Credito tienda (lista)' },
 ];
 
 const ACCOUNT_BY_METHOD = {
@@ -31,6 +36,7 @@ const ACCOUNT_BY_METHOD = {
   debit: 'payway',
   credit: 'payway',
   transfer: 'transfer_1',
+  store_credit: 'store_credit',
 };
 
 const FALLBACK_ACCOUNTS = [
@@ -40,6 +46,7 @@ const FALLBACK_ACCOUNTS = [
   { code: 'payway', label: 'Payway', payment_method: 'credit', active: true, sort_order: 40 },
   { code: 'transfer_1', label: 'Transferencia Cuenta 1', payment_method: 'transfer', active: true, sort_order: 50 },
   { code: 'transfer_2', label: 'Transferencia Cuenta 2', payment_method: 'transfer', active: true, sort_order: 60 },
+  { code: 'store_credit', label: 'Credito tienda', payment_method: 'store_credit', active: true, sort_order: 70 },
 ];
 
 const moneyFmt = new Intl.NumberFormat('es-AR', {
@@ -73,11 +80,36 @@ function parseCouponCodes(raw) {
   return out;
 }
 
+function normalizeDocDigits(value) {
+  return String(value || '').replace(/\D+/g, '');
+}
+
+function summarizePendingRows(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  return {
+    total: list.length,
+    critical: list.filter((row) => row?.severity === 'critical').length,
+    high: list.filter((row) => row?.severity === 'high').length,
+    medium: list.filter((row) => row?.severity === 'medium').length,
+    low: list.filter((row) => row?.severity === 'low').length,
+  };
+}
+
 function normalizeAccounts(rows) {
   const list = Array.isArray(rows) && rows.length ? rows : FALLBACK_ACCOUNTS;
-  return list
+  const normalized = list
     .filter((row) => !!row && row.active !== false)
     .sort((a, b) => Number(a.sort_order || 100) - Number(b.sort_order || 100));
+  if (!normalized.some((row) => row.code === 'store_credit')) {
+    normalized.push({
+      code: 'store_credit',
+      label: 'Credito tienda',
+      payment_method: 'store_credit',
+      active: true,
+      sort_order: 70,
+    });
+  }
+  return normalized;
 }
 
 function defaultAccountCode(paymentMethod, accounts) {
@@ -138,6 +170,7 @@ function todayIso() {
 export default function PosPage() {
   const { user } = useAuth();
   const canOverridePrice = can(user, PERMISSION_CODES.ACTION_VENTAS_OVERRIDE_PRECIO);
+  const canAssistedClose = can(user, PERMISSION_CODES.ACTION_CAJA_CIERRE_ASISTIDO);
 
   const scanRef = useRef(null);
   const scanBufferRef = useRef('');
@@ -146,6 +179,7 @@ export default function PosPage() {
   const scanFlushTimerRef = useRef(null);
   const busyRef = useRef(false);
   const submitScanRef = useRef(null);
+  const quoteRequestSeqRef = useRef(0);
 
   const [scan, setScan] = useState('');
   const [manualQuery, setManualQuery] = useState('');
@@ -156,11 +190,14 @@ export default function PosPage() {
   const [paymentAccountCode, setPaymentAccountCode] = useState('cash');
   const [splitPaymentsEnabled, setSplitPaymentsEnabled] = useState(false);
   const [splitPayments, setSplitPayments] = useState([
-    { method: 'cash', account_code: 'cash', amount_ars: '' },
+    { method: 'cash', account_code: 'cash', amount_ars: '', store_credit_id: '' },
   ]);
 
   const [customerName, setCustomerName] = useState('');
   const [customerDoc, setCustomerDoc] = useState('');
+  const [storeCredits, setStoreCredits] = useState([]);
+  const [storeCreditsLoading, setStoreCreditsLoading] = useState(false);
+  const [selectedStoreCreditId, setSelectedStoreCreditId] = useState('');
   const [notes, setNotes] = useState('');
   const [couponCodes, setCouponCodes] = useState('');
   const [priceOverrideReason, setPriceOverrideReason] = useState('');
@@ -173,16 +210,24 @@ export default function PosPage() {
   const [accounts, setAccounts] = useState(FALLBACK_ACCOUNTS);
   const [openingCash, setOpeningCash] = useState('0');
   const [closingCash, setClosingCash] = useState('');
+  const [closingDifferenceReason, setClosingDifferenceReason] = useState('');
+  const [closingIncidentTitle, setClosingIncidentTitle] = useState('');
+  const [closingIncidentDetail, setClosingIncidentDetail] = useState('');
+  const [quickMode, setQuickMode] = useState(() => window.localStorage.getItem('retailhub_pos_quick_mode') !== '0');
 
   const [drafts, setDrafts] = useState([]);
   const [selectedDraftId, setSelectedDraftId] = useState(null);
   const [draftName, setDraftName] = useState('');
   const [draftsLoading, setDraftsLoading] = useState(false);
+  const [pendingRows, setPendingRows] = useState([]);
+  const [pendingSummary, setPendingSummary] = useState(null);
+  const [pendingLoading, setPendingLoading] = useState(false);
 
   const [recentSales, setRecentSales] = useState([]);
   const [recentLoading, setRecentLoading] = useState(false);
 
   const [busy, setBusy] = useState(false);
+  const [quoteBusy, setQuoteBusy] = useState(false);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
 
@@ -227,11 +272,36 @@ export default function PosPage() {
     const diff = current - expected;
     return { expected, current, diff };
   }, [splitPayments, quote]);
+  const splitMismatch = splitPaymentsEnabled && Math.round((splitTotals.diff || 0) * 100) !== 0;
+  const storeCreditSelectionMissing = useMemo(() => {
+    if (!splitPaymentsEnabled) {
+      return paymentMethod === 'store_credit' && !selectedStoreCreditId;
+    }
+    return splitPayments.some(
+      (row) => String(row.method || '').trim() === 'store_credit' && !String(row.store_credit_id || '').trim()
+    );
+  }, [splitPaymentsEnabled, paymentMethod, selectedStoreCreditId, splitPayments]);
+  const confirmActionDisabled =
+    !items.length ||
+    busy ||
+    quoteBusy ||
+    !cashSession ||
+    splitMismatch ||
+    storeCreditSelectionMissing;
+  const cashRequiredNotice =
+    'Primero abri la caja para cotizar/confirmar la venta';
 
   const selectedDraft = useMemo(
     () => drafts.find((row) => Number(row.id) === Number(selectedDraftId)) || null,
     [drafts, selectedDraftId]
   );
+  const expectedClosingTotal = Number(cashSession?.summary?.expected_total_ars || 0);
+  const closingCountedValue = closingCash === '' ? null : Number(closingCash);
+  const closingDiffValue =
+    closingCountedValue == null || !Number.isFinite(closingCountedValue)
+      ? null
+      : Math.round((closingCountedValue - expectedClosingTotal) * 100) / 100;
+  const closingNeedsReason = closingDiffValue != null && closingDiffValue !== 0;
 
   function focusScan(force = false) {
     setTimeout(() => {
@@ -242,6 +312,17 @@ export default function PosPage() {
       if (!force && hasOtherFormFocus) return;
       scanRef.current?.focus();
     }, 0);
+  }
+
+  function hasEditableFocus() {
+    const activeEl = document?.activeElement;
+    return isTextEditableTarget(activeEl) || Boolean(activeEl?.isContentEditable);
+  }
+
+  function focusScanIfIdle() {
+    if (!quickMode) return;
+    if (hasEditableFocus()) return;
+    focusScan(true);
   }
 
   function resetMessages() {
@@ -342,30 +423,57 @@ export default function PosPage() {
   }
 
   function buildPaymentsPayload(expectedTotal) {
-    if (!splitPaymentsEnabled) return undefined;
-    if (!quote) {
-      throw new Error('Cotiza antes de confirmar una venta con pago mixto');
+    const expected = Number(expectedTotal || 0);
+
+    if (!splitPaymentsEnabled) {
+      if (paymentMethod !== 'store_credit') return undefined;
+      if (!Number.isFinite(expected)) {
+        throw new Error('No se pudo recalcular la cotizacion para confirmar');
+      }
+      const creditId = Number(selectedStoreCreditId || 0);
+      if (!Number.isFinite(creditId) || creditId <= 0) {
+        throw new Error('Selecciona un credito tienda valido');
+      }
+      return [
+        {
+          method: 'store_credit',
+          account_code: paymentAccountCode || defaultAccountCode('store_credit', accounts),
+          amount_ars: expected,
+          metadata: { store_credit_id: creditId },
+          store_credit_id: creditId,
+        },
+      ];
+    }
+
+    if (!Number.isFinite(expected)) {
+      throw new Error('No se pudo recalcular la cotizacion para confirmar');
     }
     const rows = splitPayments
       .map((row) => ({
         method: String(row.method || '').trim(),
         account_code: String(row.account_code || '').trim(),
         amount_ars: Number(row.amount_ars || 0),
+        store_credit_id: row.store_credit_id ? Number(row.store_credit_id) : undefined,
       }))
       .filter((row) => row.method && row.amount_ars > 0);
     if (!rows.length) {
       throw new Error('Debes cargar al menos un tramo de pago');
     }
     rows.forEach((row, idx) => {
-      if (!['cash', 'debit', 'transfer', 'credit'].includes(row.method)) {
+      if (!['cash', 'debit', 'transfer', 'credit', 'store_credit'].includes(row.method)) {
         throw new Error(`Metodo invalido en pago #${idx + 1}`);
       }
       if (!row.account_code) {
         throw new Error(`Cuenta requerida en pago #${idx + 1}`);
       }
+      if (row.method === 'store_credit') {
+        if (!Number.isFinite(Number(row.store_credit_id || 0)) || Number(row.store_credit_id) <= 0) {
+          throw new Error(`Selecciona credito tienda en pago #${idx + 1}`);
+        }
+        row.metadata = { store_credit_id: Number(row.store_credit_id) };
+      }
     });
     const sum = rows.reduce((acc, row) => acc + Number(row.amount_ars || 0), 0);
-    const expected = Number(expectedTotal || 0);
     const roundedDiff = Math.round((sum - expected) * 100) / 100;
     if (roundedDiff !== 0) {
       throw new Error('La suma de pagos debe coincidir con el total cotizado');
@@ -401,11 +509,24 @@ export default function PosPage() {
       auto_emit_invoice: true,
       items: items.map((it) => ({ ...it })),
     };
+    if (!splitPaymentsEnabled && paymentMethod === 'store_credit' && selectedStoreCreditId) {
+      payload.payments = [
+        {
+          method: 'store_credit',
+          account_code: paymentAccountCode || defaultAccountCode('store_credit', accounts),
+          amount_ars: quote?.total_ars != null ? String(quote.total_ars) : '',
+          store_credit_id: selectedStoreCreditId,
+          metadata: { store_credit_id: Number(selectedStoreCreditId) },
+        },
+      ];
+    }
     if (splitPaymentsEnabled) {
       payload.payments = splitPayments.map((row) => ({
         method: row.method,
         account_code: row.account_code,
         amount_ars: row.amount_ars,
+        store_credit_id: row.store_credit_id || undefined,
+        metadata: row.store_credit_id ? { store_credit_id: Number(row.store_credit_id) } : undefined,
       }));
     }
     return payload;
@@ -442,8 +563,22 @@ export default function PosPage() {
             defaultAccountCode(String(row.method || row.payment_method || nextMethod), accounts)
         ),
         amount_ars: String(row.amount_ars ?? ''),
+        store_credit_id:
+          row.store_credit_id != null
+            ? String(row.store_credit_id)
+            : row?.metadata?.store_credit_id != null
+              ? String(row.metadata.store_credit_id)
+              : '',
       }))
       .filter((row) => row.method);
+    const singleCreditId = mapped.length === 1 ? String(mapped[0].store_credit_id || '') : '';
+    if (nextMethod === 'store_credit') {
+      setSelectedStoreCreditId(singleCreditId);
+    } else if (singleCreditId) {
+      setSelectedStoreCreditId(singleCreditId);
+    } else {
+      setSelectedStoreCreditId('');
+    }
 
     if (mapped.length > 1) {
       setSplitPaymentsEnabled(true);
@@ -455,6 +590,7 @@ export default function PosPage() {
           method: nextMethod,
           account_code: nextAccount,
           amount_ars: quoteSnapshot?.total_ars != null ? String(quoteSnapshot.total_ars) : '',
+          store_credit_id: '',
         },
       ]);
     }
@@ -476,6 +612,39 @@ export default function PosPage() {
       setAccounts(normalized.length ? normalized : FALLBACK_ACCOUNTS);
     } catch {
       setAccounts(FALLBACK_ACCOUNTS);
+    }
+  }
+
+  async function loadStoreCreditsByDoc() {
+    const doc = normalizeDocDigits(customerDoc);
+    if (!doc) {
+      setStoreCredits([]);
+      setSelectedStoreCreditId('');
+      setErr('Ingresa DNI/CUIT del cliente para buscar creditos tienda');
+      return;
+    }
+    setStoreCreditsLoading(true);
+    try {
+      const resp = await getRetailStoreCredits({ customer_doc: doc, status: 'active', limit: 50 });
+      const rows = Array.isArray(resp?.rows) ? resp.rows : [];
+      setStoreCredits(rows);
+      if (!rows.length) {
+        setSelectedStoreCreditId('');
+        setMsg('No hay creditos tienda activos para ese documento');
+        return;
+      }
+      const currentId = Number(selectedStoreCreditId || 0);
+      const stillExists = rows.some((row) => Number(row.id) === currentId);
+      if (!stillExists) {
+        setSelectedStoreCreditId(String(rows[0].id));
+      }
+      setMsg(`Se cargaron ${rows.length} credito(s) disponibles`);
+    } catch (error) {
+      setStoreCredits([]);
+      setSelectedStoreCreditId('');
+      setErr(errMsg(error));
+    } finally {
+      setStoreCreditsLoading(false);
     }
   }
 
@@ -514,16 +683,64 @@ export default function PosPage() {
     }
   }
 
+  async function loadOperationalPending() {
+    setPendingLoading(true);
+    try {
+      const resp = await getRetailOperacionPendientes({ limit: 30 });
+      const allRows = Array.isArray(resp?.rows) ? resp.rows : [];
+      const posRows = allRows.filter((row) => String(row?.source || '').toLowerCase() !== 'online');
+      setPendingRows(posRows);
+      setPendingSummary(summarizePendingRows(posRows));
+    } catch {
+      setPendingRows([]);
+      setPendingSummary(summarizePendingRows([]));
+    } finally {
+      setPendingLoading(false);
+    }
+  }
+
+  async function resolveOperationalIncident(id) {
+    if (!id) return;
+    const incidentId = String(id).startsWith('incident:') ? String(id).split(':')[1] : String(id);
+    const parsed = Number(incidentId);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    resetMessages();
+    setBusy(true);
+    try {
+      await postRetailOperacionIncidenciaResolver(parsed, {
+        resolution_note: 'Resuelto desde POS',
+        status: 'resolved',
+      });
+      setMsg('Incidencia resuelta');
+      await loadOperationalPending();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     loadCashSession();
     loadAccounts();
     loadDrafts();
     loadRecentSales();
+    loadOperationalPending();
   }, []);
 
   useEffect(() => {
     busyRef.current = busy;
   }, [busy]);
+
+  useEffect(() => {
+    window.localStorage.setItem('retailhub_pos_quick_mode', quickMode ? '1' : '0');
+  }, [quickMode]);
+
+  useEffect(() => {
+    if (quickMode) {
+      focusScanIfIdle();
+    }
+  }, [quickMode]);
 
   useEffect(() => {
     submitScanRef.current = submitScanCode;
@@ -545,6 +762,7 @@ export default function PosPage() {
             method: paymentMethod,
             account_code: paymentAccountCode || defaultAccountCode(paymentMethod, accounts),
             amount_ars: quote?.total_ars != null ? String(quote.total_ars) : '',
+            store_credit_id: '',
           },
         ];
       }
@@ -560,6 +778,14 @@ export default function PosPage() {
       });
     });
   }, [splitPaymentsEnabled, paymentMethod, paymentAccountCode, accounts, quote]);
+
+  useEffect(() => {
+    const doc = normalizeDocDigits(customerDoc);
+    if (!doc) {
+      setStoreCredits([]);
+      setSelectedStoreCreditId('');
+    }
+  }, [customerDoc]);
 
   useEffect(() => {
     const timer = setTimeout(async () => {
@@ -581,6 +807,20 @@ export default function PosPage() {
     }, 260);
     return () => clearTimeout(timer);
   }, [manualQuery]);
+
+  useEffect(() => {
+    if (!items.length || !cashSession) {
+      quoteRequestSeqRef.current += 1;
+      setQuoteBusy(false);
+      setQuote(null);
+      return;
+    }
+    if (busy) return;
+    const timer = setTimeout(() => {
+      void requestQuote({ showError: true });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [items, paymentMethod, paymentAccountCode, couponCodes, cashSession, busy]);
 
   useEffect(() => {
     const SCAN_RESET_GAP_MS = 90;
@@ -632,11 +872,6 @@ export default function PosPage() {
       if (event.key === 'F2') {
         event.preventDefault();
         focusScan(true);
-        return;
-      }
-      if (event.key === 'F4') {
-        event.preventDefault();
-        void handleQuote();
         return;
       }
       if (event.key === 'F8') {
@@ -731,7 +966,7 @@ export default function PosPage() {
       busyRef.current = false;
       setBusy(false);
       if (restoreFocus) {
-        focusScan(true);
+        focusScanIfIdle();
       }
     }
   }
@@ -741,10 +976,11 @@ export default function PosPage() {
     await submitScanCode(scan, { restoreFocus: true });
   }
 
-  async function handleQuote() {
-    if (!items.length) return;
-    resetMessages();
-    setBusy(true);
+  async function requestQuote(options = {}) {
+    const showError = options.showError !== false;
+    if (!items.length || !cashSession) return null;
+    const requestId = ++quoteRequestSeqRef.current;
+    setQuoteBusy(true);
     try {
       const resp = await postRetailVentaCotizar({
         channel: 'local',
@@ -753,6 +989,7 @@ export default function PosPage() {
         coupon_codes: parseCouponCodes(couponCodes),
         items: buildItemsPayload(),
       });
+      if (requestId !== quoteRequestSeqRef.current) return null;
       setQuote(resp);
       if (splitPaymentsEnabled && splitPayments.length === 1) {
         setSplitPayments((prev) =>
@@ -761,11 +998,18 @@ export default function PosPage() {
           )
         );
       }
+      return resp;
     } catch (error) {
-      setErr(errMsg(error));
+      if (requestId !== quoteRequestSeqRef.current) return null;
+      if (showError) {
+        setMsg('');
+        setErr(errMsg(error));
+      }
+      return null;
     } finally {
-      setBusy(false);
-      focusScan(true);
+      if (requestId === quoteRequestSeqRef.current) {
+        setQuoteBusy(false);
+      }
     }
   }
 
@@ -778,16 +1022,36 @@ export default function PosPage() {
   }
 
   async function handleConfirm() {
-    if (!items.length) return;
+    if (busy) return;
+    if (!items.length) {
+      setMsg('');
+      setErr('Agrega al menos un producto para confirmar la venta');
+      return;
+    }
+    if (!cashSession) {
+      setMsg('');
+      setErr(cashRequiredNotice);
+      return;
+    }
+    if (storeCreditSelectionMissing) {
+      setMsg('');
+      setErr('Falta seleccionar credito tienda para uno o mas tramos de pago');
+      return;
+    }
     if (anyOverride && !String(priceOverrideReason || '').trim()) {
+      setMsg('');
       setErr('Debes indicar motivo de override de precio');
       return;
     }
     resetMessages();
     setBusy(true);
     try {
+      const refreshedQuote = await requestQuote({ showError: false });
+      if (!refreshedQuote) {
+        throw new Error('No se pudo recalcular la cotizacion antes de confirmar');
+      }
       const basePayload = buildBaseSalePayload();
-      const expectedTotal = quote?.total_ars;
+      const expectedTotal = refreshedQuote?.total_ars;
       const paymentsPayload = buildPaymentsPayload(expectedTotal);
       if (paymentsPayload?.length) {
         basePayload.payments = paymentsPayload;
@@ -813,18 +1077,20 @@ export default function PosPage() {
       setPriceOverrideReason('');
       setCustomerName('');
       setCustomerDoc('');
+      setStoreCredits([]);
+      setSelectedStoreCreditId('');
       setNotes('');
       setSplitPaymentsEnabled(false);
       setSplitPayments([
-        { method: paymentMethod, account_code: paymentAccountCode, amount_ars: '' },
+        { method: paymentMethod, account_code: paymentAccountCode, amount_ars: '', store_credit_id: '' },
       ]);
       setMsg('Venta confirmada');
-      await Promise.all([loadCashSession(), loadDrafts(), loadRecentSales()]);
+      await Promise.all([loadCashSession(), loadDrafts(), loadRecentSales(), loadOperationalPending()]);
     } catch (error) {
       setErr(errMsg(error));
     } finally {
       setBusy(false);
-      focusScan(true);
+      focusScanIfIdle();
     }
   }
 
@@ -834,30 +1100,60 @@ export default function PosPage() {
     try {
       await postRetailCajaApertura({ opening_amount_cash_ars: Number(openingCash || 0) });
       setMsg('Caja abierta');
-      await loadCashSession();
+      await Promise.all([loadCashSession(), loadOperationalPending()]);
     } catch (error) {
       setErr(errMsg(error));
     } finally {
       setBusy(false);
-      focusScan(true);
+      focusScanIfIdle();
     }
   }
 
   async function closeCashSession() {
+    if (canAssistedClose && closingCash === '') {
+      setErr('Ingresa el contado de cierre para ejecutar cierre asistido');
+      return;
+    }
+    if (canAssistedClose && closingNeedsReason && !String(closingDifferenceReason || '').trim()) {
+      setErr('Debes indicar motivo de diferencia de caja');
+      return;
+    }
     resetMessages();
     setBusy(true);
     try {
-      await postRetailCajaCierre({
-        closing_counted_total_ars: closingCash === '' ? undefined : Number(closingCash),
-      });
+      if (canAssistedClose) {
+        const incidents = [];
+        if (String(closingIncidentTitle || '').trim()) {
+          incidents.push({
+            title: String(closingIncidentTitle || '').trim(),
+            detail: String(closingIncidentDetail || '').trim() || undefined,
+            severity: 'medium',
+            action_required: 'Revisar incidencia de cierre',
+            sla_minutes: 180,
+          });
+        }
+        await postRetailCajaCierreAsistido({
+          closing_counted_total_ars: Number(closingCash),
+          difference_reason: closingNeedsReason ? String(closingDifferenceReason || '').trim() : undefined,
+          closing_note: 'Cierre asistido POS',
+          incidents,
+        });
+      } else {
+        await postRetailCajaCierre({
+          closing_counted_total_ars: closingCash === '' ? undefined : Number(closingCash),
+        });
+      }
       setClosingCash('');
+      setClosingDifferenceReason('');
+      setClosingIncidentTitle('');
+      setClosingIncidentDetail('');
       setMsg('Caja cerrada');
-      await loadCashSession();
+      await Promise.all([loadCashSession(), loadOperationalPending()]);
     } catch (error) {
       setErr(errMsg(error));
     } finally {
       setBusy(false);
-      focusScan(true);
+      focusScanIfIdle();
     }
   }
 
@@ -912,7 +1208,7 @@ export default function PosPage() {
       setSelectedDraftId(Number(row?.id));
       setDraftName(row?.name || '');
       setMsg(`Draft ${row?.draft_number || `#${draftId}`} cargado`);
-      focusScan(true);
+      focusScanIfIdle();
     } catch (error) {
       setErr(errMsg(error));
     } finally {
@@ -933,6 +1229,9 @@ export default function PosPage() {
         if (patch.method && !patch.account_code) {
           next.account_code = defaultAccountCode(String(patch.method), accounts);
         }
+        if (patch.method && patch.method !== row.method) {
+          next.store_credit_id = patch.method === 'store_credit' ? String(next.store_credit_id || '') : '';
+        }
         return next;
       })
     );
@@ -945,6 +1244,7 @@ export default function PosPage() {
         method: paymentMethod,
         account_code: defaultAccountCode(paymentMethod, accounts),
         amount_ars: '',
+        store_credit_id: '',
       },
     ]);
   }
@@ -954,7 +1254,7 @@ export default function PosPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-6 xl:pb-32">
       <div className="card">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -964,6 +1264,17 @@ export default function PosPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
+            <button
+              type="button"
+              className={`rounded-full border px-2.5 py-1 font-semibold ${
+                quickMode
+                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                  : 'border-neutral-300 bg-white text-neutral-700'
+              }`}
+              onClick={() => setQuickMode((prev) => !prev)}
+            >
+              Venta rapida: {quickMode ? 'ON' : 'OFF'}
+            </button>
             <span
               className={`rounded-full border px-2.5 py-1 font-semibold ${
                 cashSession
@@ -979,11 +1290,17 @@ export default function PosPage() {
             <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2.5 py-1 font-semibold text-neutral-700">
               Draft: {selectedDraft ? selectedDraft.draft_number : 'ninguno'}
             </span>
+            <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-700">
+              Pendientes: {pendingSummary?.total || 0}
+              {pendingSummary?.critical ? ` (${pendingSummary.critical} crit)` : ''}
+            </span>
           </div>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-neutral-600 md:grid-cols-5">
+          <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">
+            Modo rapido {quickMode ? 'activo' : 'inactivo'}
+          </span>
           <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">F2 foco escaner</span>
-          <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">F4 cotizar</span>
           <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">F8 guardar draft</span>
           <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">F9 confirmar</span>
           <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">Ctrl+Backspace limpia carrito</span>
@@ -997,7 +1314,7 @@ export default function PosPage() {
                 <label className="label">Escanear barcode interno o SKU</label>
                 <input
                   ref={scanRef}
-                  className="input"
+                  className={`input ${quickMode ? 'ring-2 ring-indigo-200' : ''}`}
                   value={scan}
                   onChange={(e) => setScan(e.target.value)}
                   placeholder="Ej: CHU-001-NEG-M"
@@ -1137,9 +1454,223 @@ export default function PosPage() {
               </div>
             )}
           </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <div className="card space-y-3">
+              <h2 className="text-lg font-semibold">Cobro</h2>
+              <div>
+                <label className="label">Medio de pago base (pricing)</label>
+                <select
+                  className="input"
+                  value={paymentMethod}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setPaymentMethod(next);
+                    setPaymentAccountCode(defaultAccountCode(next, accounts));
+                    if (next !== 'store_credit') {
+                      setSelectedStoreCreditId('');
+                    }
+                    setQuote(null);
+                  }}
+                >
+                  {PAYMENT_OPTIONS.map((op) => (
+                    <option key={op.value} value={op.value}>
+                      {op.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Cuenta / caja base</label>
+                <select
+                  className="input"
+                  value={paymentAccountCode}
+                  onChange={(e) => setPaymentAccountCode(e.target.value)}
+                >
+                  {filteredAccounts.map((op) => (
+                    <option key={op.code} value={op.code}>
+                      {op.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {paymentMethod === 'store_credit' ? (
+                <div className="space-y-2 rounded-lg border border-neutral-200 p-2">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <button
+                      type="button"
+                      className="btn-secondary !py-2"
+                      onClick={loadStoreCreditsByDoc}
+                      disabled={storeCreditsLoading}
+                    >
+                      {storeCreditsLoading ? 'Buscando...' : 'Buscar creditos por DNI/CUIT'}
+                    </button>
+                    <span className="text-xs text-neutral-500">
+                      Doc cliente: <strong>{normalizeDocDigits(customerDoc) || '-'}</strong>
+                    </span>
+                  </div>
+                  <select
+                    className="input"
+                    value={selectedStoreCreditId}
+                    onChange={(e) => setSelectedStoreCreditId(e.target.value)}
+                  >
+                    <option value="">Seleccionar credito tienda</option>
+                    {storeCredits.map((row) => (
+                      <option key={`base-credit-${row.id}`} value={String(row.id)}>
+                        #{row.id} | saldo {money(row.amount_balance_ars)} | {row.customer_name || row.customer_doc || 'cliente'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+
+              <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={splitPaymentsEnabled}
+                  onChange={(e) => setSplitPaymentsEnabled(e.target.checked)}
+                />
+                Pago mixto (split tender)
+              </label>
+
+              {splitPaymentsEnabled ? (
+                <div className="space-y-2 rounded-lg border border-neutral-200 p-2">
+                  {splitPayments.map((row, idx) => {
+                    const scopedAccounts = accountsByMethod(row.method || paymentMethod);
+                    return (
+                      <div key={`split-${idx}`} className="grid grid-cols-1 gap-2 md:grid-cols-7">
+                        <select
+                          className="input md:col-span-2"
+                          value={row.method}
+                          onChange={(e) =>
+                            changeSplitRow(idx, {
+                              method: e.target.value,
+                              account_code: defaultAccountCode(e.target.value, accounts),
+                            })
+                          }
+                        >
+                          {PAYMENT_OPTIONS.map((op) => (
+                            <option key={op.value} value={op.value}>
+                              {op.label}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          className="input md:col-span-2"
+                          value={row.account_code}
+                          onChange={(e) => changeSplitRow(idx, { account_code: e.target.value })}
+                        >
+                          {scopedAccounts.map((acc) => (
+                            <option key={`${idx}-${acc.code}`} value={acc.code}>
+                              {acc.label}
+                            </option>
+                          ))}
+                        </select>
+                        {row.method === 'store_credit' ? (
+                          <select
+                            className="input md:col-span-2"
+                            value={row.store_credit_id || ''}
+                            onChange={(e) => changeSplitRow(idx, { store_credit_id: e.target.value })}
+                          >
+                            <option value="">Seleccionar credito</option>
+                            {storeCredits.map((credit) => (
+                              <option key={`split-credit-${idx}-${credit.id}`} value={String(credit.id)}>
+                                #{credit.id} | saldo {money(credit.amount_balance_ars)}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <input
+                          className="input"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="Monto"
+                          value={row.amount_ars}
+                          onChange={(e) => changeSplitRow(idx, { amount_ars: e.target.value })}
+                        />
+                        <button
+                          type="button"
+                          className="rounded border border-neutral-300 px-2 py-1 text-xs"
+                          onClick={() => removeSplitRow(idx)}
+                          disabled={splitPayments.length <= 1}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    );
+                  })}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-secondary !py-2"
+                      onClick={loadStoreCreditsByDoc}
+                      disabled={storeCreditsLoading}
+                    >
+                      {storeCreditsLoading ? 'Buscando...' : 'Actualizar creditos por DNI/CUIT'}
+                    </button>
+                    <span className="text-xs text-neutral-500">
+                      Disponibles: <strong>{storeCredits.length}</strong>
+                    </span>
+                  </div>
+                  <button type="button" className="btn-secondary !py-2" onClick={addSplitRow}>
+                    Agregar tramo
+                  </button>
+                  <div className="rounded border border-dashed px-2 py-1 text-xs">
+                    <div>
+                      Suma tramos: <strong>{money(splitTotals.current)}</strong>
+                    </div>
+                    <div>
+                      Total cotizado: <strong>{money(splitTotals.expected)}</strong>
+                    </div>
+                    <div className={splitTotals.diff === 0 ? 'text-emerald-700' : 'text-rose-700'}>
+                      Diferencia: <strong>{money(splitTotals.diff)}</strong>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="card space-y-3">
+              <h2 className="text-lg font-semibold">Cliente y notas</h2>
+              {anyOverride ? (
+                <input
+                  className="input"
+                  value={priceOverrideReason}
+                  onChange={(e) => setPriceOverrideReason(e.target.value)}
+                  placeholder="Motivo override precio (obligatorio)"
+                />
+              ) : null}
+              <input
+                className="input"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder="Cliente (opcional)"
+              />
+              <input
+                className="input"
+                value={customerDoc}
+                onChange={(e) => setCustomerDoc(e.target.value)}
+                placeholder="Documento (opcional)"
+              />
+              <input
+                className="input"
+                value={couponCodes}
+                onChange={(e) => setCouponCodes(e.target.value)}
+                placeholder="Cupon(es), separados por coma"
+              />
+              <textarea
+                className="input"
+                rows={2}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Notas"
+              />
+            </div>
+          </div>
         </div>
-        <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
-          <div className="card space-y-3">
+        <div className="space-y-4">
+          <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
+            <div className="card space-y-3">
             <h2 className="text-lg font-semibold">Caja</h2>
             <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-2 text-sm">
               {cashSession ? (
@@ -1148,7 +1679,10 @@ export default function PosPage() {
                     Estado: <strong className="text-emerald-700">Abierta #{cashSession.id}</strong>
                   </div>
                   <div>
-                    Esperado: <strong>{money(cashSession?.summary?.expected_total_ars)}</strong>
+                    Esperado efectivo: <strong>{money(cashSession?.summary?.expected_total_ars)}</strong>
+                  </div>
+                  <div>
+                    Neto no-cash: <strong>{money(cashSession?.summary?.net_non_cash_ars)}</strong>
                   </div>
                 </div>
               ) : (
@@ -1181,15 +1715,47 @@ export default function PosPage() {
                   step="0.01"
                   value={closingCash}
                   onChange={(e) => setClosingCash(e.target.value)}
-                  placeholder="Conteo al cierre (opcional)"
+                  placeholder={canAssistedClose ? 'Conteo al cierre (requerido)' : 'Conteo al cierre (opcional)'}
                 />
+                {closingDiffValue != null ? (
+                  <p className={`text-xs ${closingDiffValue === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    Diferencia estimada: <strong>{money(closingDiffValue)}</strong>
+                  </p>
+                ) : null}
+                {canAssistedClose && closingNeedsReason ? (
+                  <input
+                    className="input"
+                    value={closingDifferenceReason}
+                    onChange={(e) => setClosingDifferenceReason(e.target.value)}
+                    placeholder="Motivo de diferencia (obligatorio)"
+                  />
+                ) : null}
+                {canAssistedClose ? (
+                  <>
+                    <input
+                      className="input"
+                      value={closingIncidentTitle}
+                      onChange={(e) => setClosingIncidentTitle(e.target.value)}
+                      placeholder="Incidencia de cierre (opcional)"
+                    />
+                    {closingIncidentTitle.trim() ? (
+                      <textarea
+                        className="input"
+                        rows={2}
+                        value={closingIncidentDetail}
+                        onChange={(e) => setClosingIncidentDetail(e.target.value)}
+                        placeholder="Detalle de incidencia"
+                      />
+                    ) : null}
+                  </>
+                ) : null}
                 <button
                   type="button"
                   className="btn-secondary"
                   onClick={closeCashSession}
                   disabled={busy || items.length > 0}
                 >
-                  Cerrar caja
+                  {canAssistedClose ? 'Cerrar caja (asistido)' : 'Cerrar caja'}
                 </button>
               </div>
             )}
@@ -1218,160 +1784,7 @@ export default function PosPage() {
             </div>
           </div>
 
-          <div className="card space-y-3">
-            <h2 className="text-lg font-semibold">Cobro</h2>
-            <div>
-              <label className="label">Medio de pago base (pricing)</label>
-              <select
-                className="input"
-                value={paymentMethod}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setPaymentMethod(next);
-                  setPaymentAccountCode(defaultAccountCode(next, accounts));
-                  setQuote(null);
-                }}
-              >
-                {PAYMENT_OPTIONS.map((op) => (
-                  <option key={op.value} value={op.value}>
-                    {op.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">Cuenta / caja base</label>
-              <select
-                className="input"
-                value={paymentAccountCode}
-                onChange={(e) => setPaymentAccountCode(e.target.value)}
-              >
-                {filteredAccounts.map((op) => (
-                  <option key={op.code} value={op.code}>
-                    {op.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
-              <input
-                type="checkbox"
-                checked={splitPaymentsEnabled}
-                onChange={(e) => setSplitPaymentsEnabled(e.target.checked)}
-              />
-              Pago mixto (split tender)
-            </label>
-
-            {splitPaymentsEnabled ? (
-              <div className="space-y-2 rounded-lg border border-neutral-200 p-2">
-                {splitPayments.map((row, idx) => {
-                  const scopedAccounts = accountsByMethod(row.method || paymentMethod);
-                  return (
-                    <div key={`split-${idx}`} className="grid grid-cols-1 gap-2 md:grid-cols-6">
-                      <select
-                        className="input md:col-span-2"
-                        value={row.method}
-                        onChange={(e) =>
-                          changeSplitRow(idx, {
-                            method: e.target.value,
-                            account_code: defaultAccountCode(e.target.value, accounts),
-                          })
-                        }
-                      >
-                        {PAYMENT_OPTIONS.map((op) => (
-                          <option key={op.value} value={op.value}>
-                            {op.label}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        className="input md:col-span-2"
-                        value={row.account_code}
-                        onChange={(e) => changeSplitRow(idx, { account_code: e.target.value })}
-                      >
-                        {scopedAccounts.map((acc) => (
-                          <option key={`${idx}-${acc.code}`} value={acc.code}>
-                            {acc.label}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        className="input"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="Monto"
-                        value={row.amount_ars}
-                        onChange={(e) => changeSplitRow(idx, { amount_ars: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        className="rounded border border-neutral-300 px-2 py-1 text-xs"
-                        onClick={() => removeSplitRow(idx)}
-                        disabled={splitPayments.length <= 1}
-                      >
-                        Quitar
-                      </button>
-                    </div>
-                  );
-                })}
-                <button type="button" className="btn-secondary !py-2" onClick={addSplitRow}>
-                  Agregar tramo
-                </button>
-                <div className="rounded border border-dashed px-2 py-1 text-xs">
-                  <div>
-                    Suma tramos: <strong>{money(splitTotals.current)}</strong>
-                  </div>
-                  <div>
-                    Total cotizado: <strong>{money(splitTotals.expected)}</strong>
-                  </div>
-                  <div className={splitTotals.diff === 0 ? 'text-emerald-700' : 'text-rose-700'}>
-                    Diferencia: <strong>{money(splitTotals.diff)}</strong>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="card space-y-3">
-            <h2 className="text-lg font-semibold">Cliente y notas</h2>
-            {anyOverride ? (
-              <input
-                className="input"
-                value={priceOverrideReason}
-                onChange={(e) => setPriceOverrideReason(e.target.value)}
-                placeholder="Motivo override precio (obligatorio)"
-              />
-            ) : null}
-            <input
-              className="input"
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              placeholder="Cliente (opcional)"
-            />
-            <input
-              className="input"
-              value={customerDoc}
-              onChange={(e) => setCustomerDoc(e.target.value)}
-              placeholder="Documento (opcional)"
-            />
-            <input
-              className="input"
-              value={couponCodes}
-              onChange={(e) => setCouponCodes(e.target.value)}
-              placeholder="Cupon(es), separados por coma"
-            />
-            <textarea
-              className="input"
-              rows={2}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Notas"
-            />
-          </div>
-
-          <div className="card space-y-3">
+            <div className="card space-y-3">
             <h2 className="text-lg font-semibold">Totales y cierre de venta</h2>
             {quote ? (
               <div className="space-y-1 text-sm">
@@ -1398,28 +1811,40 @@ export default function PosPage() {
               </div>
             ) : (
               <p className="text-sm text-gray-500">
-                Cotiza para revisar totales antes de confirmar.
+                {quoteBusy && items.length && cashSession
+                  ? 'Calculando cotizacion...'
+                  : 'Sin cotizacion activa.'}
               </p>
             )}
+            {quoteBusy && items.length && cashSession ? (
+              <p className="text-xs text-neutral-500">Recalculando cotizacion en segundo plano...</p>
+            ) : null}
+            {!cashSession ? (
+              <p className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+                {cashRequiredNotice}
+              </p>
+            ) : null}
 
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleQuote}
-                disabled={!items.length || busy || !cashSession}
-              >
-                Cotizar
-              </button>
+            <div className="grid grid-cols-1 gap-2">
               <button
                 type="button"
                 className="btn"
                 onClick={handleConfirm}
-                disabled={!items.length || busy || !cashSession}
+                disabled={confirmActionDisabled}
               >
                 Confirmar venta
               </button>
             </div>
+            {splitMismatch ? (
+              <p className="text-xs text-rose-700">
+                La suma de pagos mixtos no coincide con el total cotizado.
+              </p>
+            ) : null}
+            {storeCreditSelectionMissing ? (
+              <p className="text-xs text-rose-700">
+                Falta seleccionar credito tienda para uno o mas tramos de pago.
+              </p>
+            ) : null}
 
             {err ? <p className="rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-700">{err}</p> : null}
             {msg ? <p className="rounded border border-emerald-300 bg-emerald-50 p-2 text-sm text-emerald-700">{msg}</p> : null}
@@ -1430,6 +1855,7 @@ export default function PosPage() {
                 <strong>{lastSale?.invoice?.status || 'sin generar'}</strong>.
               </div>
             ) : null}
+            </div>
           </div>
 
           <div className="card space-y-3">
@@ -1515,6 +1941,80 @@ export default function PosPage() {
             )}
           </div>
         </div>
+      </div>
+      <div
+        className={`relative z-20 mt-4 rounded-xl border p-3 shadow-lg backdrop-blur xl:fixed xl:bottom-3 xl:left-64 xl:right-3 ${
+          quickMode
+            ? 'border-indigo-200 bg-indigo-50/95'
+            : 'border-neutral-200 bg-white/95'
+        }`}
+      >
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-center">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {quickMode ? (
+                <span className="rounded-full border border-indigo-300 bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-700">
+                  Venta rapida ON
+                </span>
+              ) : null}
+              <span className="text-neutral-600">
+                {quoteBusy
+                  ? 'Calculando cotizacion...'
+                  : quote
+                    ? 'Totales listos para cerrar venta'
+                    : 'Sin cotizacion activa'}
+              </span>
+            </div>
+            {!cashSession ? (
+              <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900 sm:text-sm">
+                {cashRequiredNotice}
+              </p>
+            ) : null}
+            {quote ? (
+              <div className="grid grid-cols-3 gap-2 text-xs sm:text-sm">
+                <div className="rounded-lg border border-neutral-200 bg-white px-2 py-1">
+                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">Subtotal</div>
+                  <strong>{money(quote.subtotal_ars)}</strong>
+                </div>
+                <div className="rounded-lg border border-neutral-200 bg-white px-2 py-1">
+                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">Promociones</div>
+                  <strong>{money(quote.promotion_discount_total_ars)}</strong>
+                </div>
+                <div className="rounded-lg border border-neutral-200 bg-white px-2 py-1">
+                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">Total</div>
+                  <strong>{money(quote.total_ars)}</strong>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-neutral-600 sm:text-sm">
+                {quoteBusy && items.length && cashSession
+                  ? 'Calculando cotizacion para actualizar total...'
+                  : 'Sin cotizacion activa.'}
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-2">
+            <button
+              type="button"
+              className="btn !py-2"
+              onClick={handleConfirm}
+              disabled={confirmActionDisabled}
+            >
+              F9 Confirmar
+            </button>
+          </div>
+        </div>
+        {quickMode ? (
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button type="button" className="btn-secondary !py-2" onClick={() => focusScan(true)} disabled={busy}>
+              F2 Scanner
+            </button>
+            <button type="button" className="btn-secondary !py-2" onClick={quickSaveDraft} disabled={busy || !items.length}>
+              F8 Draft
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

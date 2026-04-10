@@ -7,7 +7,12 @@ from django.db import connection
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
-from .permission_catalog import PERMISSION_CODES_SET, get_role_defaults, normalize_role
+from .permission_catalog import (
+    PERMISSION_CODES_SET,
+    get_role_defaults,
+    get_role_locked_permissions,
+    normalize_role,
+)
 from .permission_policy import VIEW_PERMISSION_MATRIX
 
 
@@ -43,6 +48,21 @@ def _fetch_overrides(user_id):
     return out
 
 
+def _apply_role_locks(role_key, effective):
+    for code in get_role_locked_permissions(role_key):
+        if code in effective:
+            effective[code] = False
+    return effective
+
+
+def validate_overrides_for_role(role, overrides):
+    role_key = normalize_role(role)
+    locked = set(get_role_locked_permissions(role_key))
+    for code, effect in (overrides or {}).items():
+        if code in locked and effect == EFFECT_ALLOW:
+            raise ValueError(f"permission_code bloqueado por politica de rol: {code}")
+
+
 def resolve_effective_permissions(user_id=None, role=None, overrides=None):
     role_key = normalize_role(role)
 
@@ -56,10 +76,7 @@ def resolve_effective_permissions(user_id=None, role=None, overrides=None):
             effective[code] = True
         elif effect == EFFECT_DENY:
             effective[code] = False
-    # Reportes es una pagina exclusiva de admin y no se puede habilitar via overrides.
-    if role_key != "admin":
-        effective["page.reportes"] = False
-    return effective
+    return _apply_role_locks(role_key, effective)
 
 
 def get_request_effective_permissions(request):
@@ -119,7 +136,7 @@ def require_any_permission(request, permission_codes, message="No autorizado"):
         raise PermissionDenied(message)
 
 
-def apply_overrides(user_id, raw_overrides, updated_by=None):
+def apply_overrides(user_id, raw_overrides, updated_by=None, role=None):
     if not user_id:
         raise ValueError("user_id requerido")
 
@@ -132,6 +149,17 @@ def apply_overrides(user_id, raw_overrides, updated_by=None):
         if e not in VALID_EFFECTS:
             raise ValueError(f"effect invalido para {c}: {effect}")
         normalized[c] = e
+
+    role_key = normalize_role(role)
+    if not role_key:
+        with connection.cursor() as cur:
+            cur.execute("SELECT rol FROM users WHERE id=%s", [user_id])
+            row = cur.fetchone()
+        if not row:
+            raise ValueError("Usuario no encontrado")
+        role_key = normalize_role(row[0])
+
+    validate_overrides_for_role(role_key, normalized)
 
     with connection.cursor() as cur:
         for code, effect in normalized.items():

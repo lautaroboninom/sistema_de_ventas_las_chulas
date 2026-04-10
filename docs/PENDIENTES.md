@@ -12,7 +12,7 @@
 - Credenciales productivas de Tienda Nube y configuración de webhooks.
 - Servidor público con HTTPS estable para recepción de webhooks Tienda Nube.
 - Certificados ARCA (CRT/KEY) custodiados por responsable técnico.
-- Implementación final SOAP WSAA/WSFEv1 (firma CMS + TA cache + FECompUltimoAutorizado/FECAESolicitar) para pasar de fallback a emisión fiscal real.
+- Validación homologación/prod de WSAA/WSFEv1 nativo (certificados, relaciones, puntos de venta y smoke fiscal end-to-end).
 
 ## Datos fiscales/ARCA faltantes
 - CUIT emisor definitivo.
@@ -25,7 +25,8 @@
 ## Datos Tienda Nube faltantes
 - `client_id` y `client_secret`.
 - `store_id`.
-- `access_token` con scopes de productos, variantes, stock, órdenes y webhooks.
+- `access_token` con scopes de productos, variantes, stock y órdenes.
+- Confirmar suscripción de webhooks por recurso (no existe scope `webhooks`).
 - Secret de firma webhook (header `x-linkedstore-hmac-sha256`, usa el `client_secret` de la app).
 - Confirmación de mapeo SKU definitivo por variante (sin duplicados históricos).
 
@@ -34,6 +35,7 @@
 - USD solo habilitado en ingreso de compra para trazabilidad de costo.
 - Stock único sin separación depósito/local.
 - Catálogo local como fuente de verdad para variantes y stock.
+- RetailHub opera como panel externo; no se implementa app embebida en el admin de Tienda Nube.
 - Facturación automática solo para tarjeta/transferencia; efectivo con comprobante interno.
 - Webhooks duplicados se descartan por idempotencia (`event_id`/`order_id`).
 - Emisión ARCA en MVP funcionando en modo mock si no hay certificados/credenciales configuradas.
@@ -55,7 +57,8 @@
 - [ ] Confirmar que todas las tablas retail existen y tienen índices/triggers.
 - [ ] Cargar medios de pago y validar cuentas reales (`cash`, `bbva`, `pbs`, `payway`, `transfer_1`, `transfer_2`).
 - [ ] Configurar variables de entorno ARCA y validar emisión homologación end-to-end.
-- [ ] Configurar variables de Tienda Nube y probar `sync/catalog`, `sync/stock` y webhooks.
+- [ ] Configurar variables de Tienda Nube y probar sync saliente (`sync/catalogo`, `sync/stock`) + webhooks + consulta de órdenes por API.
+- [ ] Completar estrategia para variantes sin mapeo remoto por SKU (alta manual o creación automática en Tienda Nube).
 - [ ] Validar permisos por rol (`admin`, `empleado`) y ocultamiento de costos.
 - [ ] Ejecutar pruebas de concurrencia POS con misma variante (sin stock negativo).
 - [ ] Validar flujo de anulación de venta y estado fiscal (`manual_review` cuando aplique).

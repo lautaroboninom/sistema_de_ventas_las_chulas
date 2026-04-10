@@ -4,8 +4,12 @@ import {
   getRetailReporteAnalisisProveedores,
   getRetailReporteBajoStock,
   getRetailReporteCierreCaja,
+  getRetailDashboardOperativo,
+  getRetailAlertas,
+  getRetailReposicionSugerida,
   getRetailReporteDevoluciones,
   getRetailReporteResumenComercial,
+  postRetailAlertaAck,
 } from '../lib/api';
 
 function errMsg(error) {
@@ -119,6 +123,9 @@ export default function ReportesPage() {
   const [lowStockSection, setLowStockSection] = useState(emptyRowsSection());
   const [cashCloseSection, setCashCloseSection] = useState(emptyRowsSection());
   const [returnsSection, setReturnsSection] = useState(emptyRowsSection());
+  const [dashboardSection, setDashboardSection] = useState({ status: 'idle', data: null, error: '' });
+  const [alertSection, setAlertSection] = useState(emptyRowsSection());
+  const [replenishSection, setReplenishSection] = useState(emptyRowsSection());
 
   const [productSort, setProductSort] = useState({ key: 'margen_ars', dir: 'desc' });
   const [supplierSort, setSupplierSort] = useState({ key: 'ganancia_potencial_ars', dir: 'desc' });
@@ -215,6 +222,9 @@ export default function ReportesPage() {
     setLowStockSection({ status: 'loading', rows: [], error: '' });
     setCashCloseSection({ status: 'loading', rows: [], error: '' });
     setReturnsSection({ status: 'loading', rows: [], error: '' });
+    setDashboardSection({ status: 'loading', data: null, error: '' });
+    setAlertSection({ status: 'loading', rows: [], error: '' });
+    setReplenishSection({ status: 'loading', rows: [], error: '' });
 
     const loaders = [
       { key: 'summary', request: () => getRetailReporteResumenComercial({ desde, hasta }) },
@@ -223,6 +233,9 @@ export default function ReportesPage() {
       { key: 'lowStock', request: () => getRetailReporteBajoStock() },
       { key: 'cashClose', request: () => getRetailReporteCierreCaja({ desde, hasta }) },
       { key: 'returns', request: () => getRetailReporteDevoluciones({ desde, hasta }) },
+      { key: 'dashboard', request: () => getRetailDashboardOperativo() },
+      { key: 'alerts', request: () => getRetailAlertas({ status: 'open' }) },
+      { key: 'replenish', request: () => getRetailReposicionSugerida({ days: 30, limit: 25 }) },
     ];
 
     try {
@@ -238,6 +251,9 @@ export default function ReportesPage() {
           if (key === 'lowStock') setLowStockSection({ status: 'error', rows: [], error: msg });
           if (key === 'cashClose') setCashCloseSection({ status: 'error', rows: [], error: msg });
           if (key === 'returns') setReturnsSection({ status: 'error', rows: [], error: msg });
+          if (key === 'dashboard') setDashboardSection({ status: 'error', data: null, error: msg });
+          if (key === 'alerts') setAlertSection({ status: 'error', rows: [], error: msg });
+          if (key === 'replenish') setReplenishSection({ status: 'error', rows: [], error: msg });
           return;
         }
 
@@ -266,6 +282,18 @@ export default function ReportesPage() {
           const rows = Array.isArray(data?.rows) ? data.rows : [];
           setReturnsSection({ status: rows.length ? 'success' : 'empty', rows, error: '' });
         }
+        if (key === 'dashboard') {
+          const row = data && typeof data === 'object' ? data : null;
+          setDashboardSection({ status: row ? 'success' : 'empty', data: row, error: '' });
+        }
+        if (key === 'alerts') {
+          const rows = Array.isArray(data?.rows) ? data.rows : [];
+          setAlertSection({ status: rows.length ? 'success' : 'empty', rows, error: '' });
+        }
+        if (key === 'replenish') {
+          const rows = Array.isArray(data?.rows) ? data.rows : [];
+          setReplenishSection({ status: rows.length ? 'success' : 'empty', rows, error: '' });
+        }
       });
 
       setLastUpdatedAt(new Date().toISOString());
@@ -273,6 +301,21 @@ export default function ReportesPage() {
       setErr(errMsg(error) || 'No se pudieron cargar los reportes.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function ackAlert(alertId) {
+    const raw = String(alertId || '');
+    const idPart = raw.startsWith('alert:') ? raw.split(':')[1] : raw;
+    const id = Number(idPart);
+    if (!Number.isFinite(id) || id <= 0) return;
+    try {
+      await postRetailAlertaAck(id, { status: 'acknowledged' });
+      const refreshed = await getRetailAlertas({ status: 'open' });
+      const rows = Array.isArray(refreshed?.rows) ? refreshed.rows : [];
+      setAlertSection({ status: rows.length ? 'success' : 'empty', rows, error: '' });
+    } catch (error) {
+      setErr(errMsg(error));
     }
   }
 
@@ -306,6 +349,120 @@ export default function ReportesPage() {
         <div className="md:col-span-3 text-xs text-gray-500">
           Ultima actualizacion: <strong>{dateTimeLabel(lastUpdatedAt)}</strong>
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+        <div className="card space-y-2 xl:col-span-2">
+          <h2 className="text-lg font-semibold">Operacion diaria</h2>
+          {dashboardSection.status === 'success' ? (
+            <>
+              <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
+                <div className="rounded border p-2">
+                  <p className="text-xs text-gray-500">Ventas hoy</p>
+                  <strong>{intVal(dashboardSection.data?.kpis?.sales_count)}</strong>
+                </div>
+                <div className="rounded border p-2">
+                  <p className="text-xs text-gray-500">Facturacion hoy</p>
+                  <strong>{money(dashboardSection.data?.kpis?.sales_total_ars)}</strong>
+                </div>
+                <div className="rounded border p-2">
+                  <p className="text-xs text-gray-500">Margen hoy</p>
+                  <strong>{money(dashboardSection.data?.kpis?.margin_ars)}</strong>
+                </div>
+                <div className="rounded border p-2">
+                  <p className="text-xs text-gray-500">Dif. caja hoy</p>
+                  <strong>{money(dashboardSection.data?.kpis?.cash_difference_total_ars)}</strong>
+                </div>
+              </div>
+              <div className="max-h-48 overflow-auto rounded border">
+                <table className="min-w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-left">
+                      <th className="px-2 py-1">Hora</th>
+                      <th className="px-2 py-1">Ventas</th>
+                      <th className="px-2 py-1">Total</th>
+                      <th className="px-2 py-1">Margen</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(dashboardSection.data?.sales_by_hour || []).map((row) => (
+                      <tr key={`hour-${row.hour_slot}`} className="border-b last:border-b-0">
+                        <td className="px-2 py-1">{String(row.hour_slot).padStart(2, '0')}:00</td>
+                        <td className="px-2 py-1">{intVal(row.sales_count)}</td>
+                        <td className="px-2 py-1">{money(row.total_ars)}</td>
+                        <td className="px-2 py-1">{money(row.margin_ars)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            sectionMessage(dashboardSection, 'Sin datos operativos de hoy.')
+          )}
+        </div>
+        <div className="card space-y-2">
+          <h2 className="text-lg font-semibold">Alertas accionables</h2>
+          {sectionMessage(alertSection, 'Sin alertas abiertas.')}
+          {alertSection.status === 'success' ? (
+            <div className="max-h-80 space-y-2 overflow-auto">
+              {alertSection.rows.map((row) => (
+                <div key={row.id} className="rounded border p-2 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <strong className="truncate">{row.title}</strong>
+                    <span className="text-[11px] uppercase text-gray-500">{row.severity}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-600">{row.action_required}</p>
+                  {row.detail ? <p className="mt-1 text-xs text-gray-500">{row.detail}</p> : null}
+                  <button
+                    type="button"
+                    className="btn-secondary mt-2 !px-2.5 !py-1 !text-xs"
+                    onClick={() => ackAlert(row.id)}
+                  >
+                    Ack
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Reposicion sugerida (30 dias)</h2>
+          <span className="text-xs text-gray-500">{intVal(replenishSection.rows?.length || 0)} items</span>
+        </div>
+        {sectionMessage(replenishSection, 'Sin sugerencias de reposicion.')}
+        {replenishSection.status === 'success' ? (
+          <div className="mt-2 max-h-56 overflow-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b text-left">
+                  <th className="py-2 pr-3">Producto</th>
+                  <th className="py-2 pr-3">SKU</th>
+                  <th className="py-2 pr-3">Stock</th>
+                  <th className="py-2 pr-3">Sug.</th>
+                  <th className="py-2 pr-3">Proveedor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {replenishSection.rows.map((row) => (
+                  <tr key={row.variant_id} className="border-b last:border-b-0">
+                    <td className="py-2 pr-3">
+                      {row.producto}
+                      <div className="text-xs text-gray-500">{row.option_signature || '-'}</div>
+                    </td>
+                    <td className="py-2 pr-3">{row.sku || '-'}</td>
+                    <td className="py-2 pr-3">{intVal(row.stock_on_hand)} / {intVal(row.target_stock)}</td>
+                    <td className="py-2 pr-3">{intVal(row.suggested_qty)}</td>
+                    <td className="py-2 pr-3">{row.supplier_name || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
       </div>
 
       <div className="space-y-3">

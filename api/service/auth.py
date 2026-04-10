@@ -9,7 +9,11 @@ from django.db import connection
 from .models import User
 
 # Usá la misma clave en todos los contenedores; para dev vale el default
-JWT_SECRET = os.getenv("DJANGO_SECRET_KEY", "change-me")
+JWT_SECRET = os.getenv("DJANGO_SECRET_KEY") or getattr(
+    settings,
+    "SECRET_KEY",
+    "dev-only-jwt-secret-retailhub-local-2026-not-for-prod",
+)
 JWT_ALG = "HS256"
 JWT_TTL_MIN = 60 * 4  # 4 horas
 # Overrides por entorno (si están presentes)

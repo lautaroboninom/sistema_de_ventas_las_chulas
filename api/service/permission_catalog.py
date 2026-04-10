@@ -18,11 +18,21 @@ PERMISSION_CATALOG = [
     {'code': 'action.ventas.devolver', 'label': 'Registrar devolucion', 'type': 'action', 'group': 'Ventas'},
     {'code': 'action.ventas.cambiar', 'label': 'Registrar cambio 1:1', 'type': 'action', 'group': 'Ventas'},
     {'code': 'action.ventas.devolver.override_garantia', 'label': 'Override devolucion fuera de garantia', 'type': 'action', 'group': 'Ventas'},
+    {'code': 'action.postventa.credito_tienda', 'label': 'Emitir credito tienda en postventa', 'type': 'action', 'group': 'Ventas'},
+    {'code': 'action.caja.cierre_asistido', 'label': 'Ejecutar cierre asistido de caja', 'type': 'action', 'group': 'Caja'},
+    {'code': 'action.inventario.conteo', 'label': 'Gestionar conteo ciclico de inventario', 'type': 'action', 'group': 'Inventario'},
+    {'code': 'action.alertas.gestionar', 'label': 'Gestionar alertas operativas', 'type': 'action', 'group': 'Alertas'},
     {'code': 'action.facturacion.emitir', 'label': 'Emitir factura', 'type': 'action', 'group': 'Facturacion'},
     {'code': 'action.facturacion.nota_credito', 'label': 'Emitir nota de credito', 'type': 'action', 'group': 'Facturacion'},
     {'code': 'action.online.sync', 'label': 'Sincronizar Tienda Nube', 'type': 'action', 'group': 'Online'},
     {'code': 'action.reportes.ver_costos', 'label': 'Ver costos y rentabilidad', 'type': 'action', 'group': 'Reportes'},
     {'code': 'action.config.editar', 'label': 'Editar configuracion y permisos', 'type': 'action', 'group': 'Configuracion'},
+    {
+        'code': 'action.config.online_credentials',
+        'label': 'Gestionar credenciales online sensibles',
+        'type': 'action',
+        'group': 'Configuracion',
+    },
 ]
 
 PERMISSION_CODES = [item['code'] for item in PERMISSION_CATALOG]
@@ -30,7 +40,10 @@ PERMISSION_CODES_SET = set(PERMISSION_CODES)
 
 
 ROLE_DEFAULTS = {
-    'admin': {code: True for code in PERMISSION_CODES},
+    'admin': {
+        **{code: True for code in PERMISSION_CODES},
+        'action.config.online_credentials': False,
+    },
     'empleado': {
         'page.pos': True,
         'page.productos': True,
@@ -42,17 +55,40 @@ ROLE_DEFAULTS = {
         'page.config': False,
         'action.promociones.editar': False,
         'action.ventas.override_precio': False,
-        'action.ventas.anular': True,
-        'action.ventas.devolver': True,
+        'action.ventas.anular': False,
+        'action.ventas.devolver': False,
         'action.ventas.cambiar': True,
         'action.ventas.devolver.override_garantia': False,
+        'action.postventa.credito_tienda': False,
+        'action.caja.cierre_asistido': True,
+        'action.inventario.conteo': False,
+        'action.alertas.gestionar': False,
         'action.facturacion.emitir': True,
         'action.facturacion.nota_credito': False,
         'action.online.sync': False,
         'action.reportes.ver_costos': False,
         'action.config.editar': False,
+        'action.config.online_credentials': False,
     },
 }
+
+ROLE_HARD_LOCKED_PERMISSIONS = {
+    'empleado': {
+        # Configuracion y credenciales sensibles
+        'page.config',
+        'page.online',
+        'action.config.editar',
+        'action.config.online_credentials',
+        # Catalogo/barcodes en modo lectura para empleado
+        'action.promociones.editar',
+        # Postventa bloqueada para empleado
+        'action.ventas.anular',
+        'action.ventas.devolver',
+    },
+}
+
+# Regla global: reportes completos solo admin.
+NON_ADMIN_LOCKED_PERMISSIONS = {'page.reportes'}
 
 
 def normalize_role(role):
@@ -69,3 +105,11 @@ def get_role_defaults(role):
     if base is None:
         return {code: False for code in PERMISSION_CODES}
     return deepcopy(base)
+
+
+def get_role_locked_permissions(role):
+    role_key = normalize_role(role)
+    locked = set(ROLE_HARD_LOCKED_PERMISSIONS.get(role_key, set()))
+    if role_key != 'admin':
+        locked.update(NON_ADMIN_LOCKED_PERMISSIONS)
+    return sorted(locked)

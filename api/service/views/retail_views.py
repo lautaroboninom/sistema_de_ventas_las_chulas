@@ -9,9 +9,13 @@ import math
 import mimetypes
 import os
 import random
+import re
 import string
+import time
+import unicodedata
 import uuid
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from urllib.parse import quote, urlencode, urlparse
 
 import requests
 from django.conf import settings
@@ -32,7 +36,19 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from ..permissions import user_has_permission
+from ..arca_ws import (
+    ArcaConfigError,
+    ArcaError,
+    ArcaRetryableError,
+    ArcaRuntimeConfig,
+    normalize_env as _arca_normalize_env,
+    wsaa_get_ta,
+    wsfe_cae_solicitar,
+    wsfe_comp_consultar,
+    wsfe_comp_ultimo_autorizado,
+)
+from ..mail_delivery import send_mail_checked
+from ..permissions import require_permission, user_has_permission
 from .helpers import _set_audit_user, exec_returning, exec_void, q, require_roles
 
 security_logger = logging.getLogger("security.integrations")
@@ -46,6 +62,7 @@ PAYMENT_MODIFIERS = {
     'debit': Decimal('0.00'),
     'transfer': Decimal('0.00'),
     'credit': Decimal('10.00'),
+    'store_credit': Decimal('0.00'),
 }
 INVOICE_REQUIRED_METHODS = {'debit', 'transfer', 'credit'}
 DEFAULT_ACCOUNT_BY_METHOD = {
@@ -53,6 +70,7 @@ DEFAULT_ACCOUNT_BY_METHOD = {
     'debit': 'payway',
     'credit': 'payway',
     'transfer': 'transfer_1',
+    'store_credit': 'store_credit',
 }
 DEFAULT_PRODUCT_BRAND = 'Las Chulas'
 PRODUCT_IMAGE_MAX_BYTES = 5 * 1024 * 1024
@@ -71,6 +89,18 @@ PROMO_CHANNELS = {'local', 'online', 'both'}
 PROMO_ACTIVATION_MODES = {'automatic', 'coupon', 'both'}
 PROMO_BOGO_MODES = {'sku', 'mix'}
 PRICING_SOURCES = {'local_engine', 'tiendanube'}
+DOC_DIGITS_RE = re.compile(r'^\d+$')
+DOC_TIPO_DNI = 96
+DOC_TIPO_CUIT = 80
+DOC_CONDICION_IVA_RECEPTOR_DEFAULT = 5  # Consumidor final
+CBTE_TIPO_NC_BY_FACTURA = {
+    1: 3,    # Factura A -> NC A
+    6: 8,    # Factura B -> NC B
+    11: 13,  # Factura C -> NC C
+    201: 203,
+    206: 208,
+    211: 213,
+}
 
 DEFAULT_UI_PAGE_SETTINGS = {
     'app_name': 'Las Chulas',
@@ -85,6 +115,7 @@ DEFAULT_UI_PAGE_SETTINGS = {
         'ventas': 'Ventas',
         'promociones': 'Promociones',
         'garantias': 'Cambios y devoluciones',
+        'inventario': 'Inventario ciclico',
         'reportes': 'Reportes',
         'online': 'Online',
         'config_general': 'Config general',
@@ -97,13 +128,39 @@ DEFAULT_UI_PAGE_SETTINGS = {
         'ventas': 'Ventas, devoluciones y facturacion',
         'promociones': 'Promociones',
         'garantias': 'Cambios y devoluciones vigentes',
+        'inventario': 'Inventario ciclico',
         'reportes': 'Reportes retail',
         'online': 'Online (Tienda Nube)',
         'config': 'Configuracion',
         'config_paginas': 'Configuracion de paginas',
     },
 }
-VALID_DEFAULT_ROUTES = {'/pos', '/productos', '/compras', '/ventas', '/promociones', '/garantias', '/online', '/config'}
+VALID_DEFAULT_ROUTES = {
+    '/pos',
+    '/productos',
+    '/compras',
+    '/ventas',
+    '/promociones',
+    '/garantias',
+    '/inventario',
+    '/online',
+    '/config',
+}
+OPERATION_REQUEST_CODES = {
+    'cancel_sale': {
+        'label': 'Anulacion de venta',
+        'permission_code': 'action.ventas.anular',
+    },
+    'money_return': {
+        'label': 'Devolucion monetaria',
+        'permission_code': 'action.ventas.devolver',
+    },
+}
+PENDING_SEVERITIES = {'low', 'medium', 'high', 'critical'}
+PENDING_SOURCES = {'arca', 'online', 'pos', 'caja', 'inventario', 'alertas', 'postventa'}
+PENDING_STATUSES = {'open', 'in_progress', 'acknowledged', 'resolved', 'dismissed'}
+REFUND_MODES = {'cash_return', 'store_credit'}
+EXCHANGE_SETTLEMENTS = {'even', 'customer_owes', 'store_owes', 'store_credit'}
 
 
 def _default_ui_page_settings():
@@ -287,6 +344,140 @@ def _json(raw):
         return {}
 
 
+def _json_any(raw):
+    if raw in (None, ''):
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode('utf-8', errors='ignore')
+    try:
+        return json.loads(str(raw))
+    except Exception:
+        return None
+
+
+def _safe_int(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip() == '':
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt_compact_date(value):
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if re.fullmatch(r'^\d{8}$', raw):
+        return raw
+    try:
+        return dt.datetime.fromisoformat(raw.replace('Z', '+00:00')).strftime('%Y%m%d')
+    except ValueError:
+        pass
+    try:
+        return dt.date.fromisoformat(raw[:10]).strftime('%Y%m%d')
+    except ValueError:
+        return None
+
+
+def _normalize_customer_doc(raw):
+    value = _clean_text(raw)
+    if not value:
+        return None
+    digits = ''.join(ch for ch in value if ch.isdigit())
+    if not digits or not DOC_DIGITS_RE.match(digits):
+        return None
+    if len(digits) == 8:
+        return {'doc_tipo': DOC_TIPO_DNI, 'doc_nro': int(digits), 'label': 'DNI', 'digits': digits}
+    if len(digits) == 11:
+        return {'doc_tipo': DOC_TIPO_CUIT, 'doc_nro': int(digits), 'label': 'CUIT', 'digits': digits}
+    return None
+
+
+def _doc_digits(value):
+    txt = _clean_text(value)
+    if not txt:
+        return None
+    digits = ''.join(ch for ch in str(txt) if ch.isdigit())
+    return digits or None
+
+
+def _cbte_tipo_for_channel(cfg, channel):
+    channel_key = (channel or '').strip().lower()
+    if channel_key == 'online':
+        return int(cfg.get('arca_cbte_tipo_online') or cfg.get('arca_cbte_tipo_store') or 6)
+    return int(cfg.get('arca_cbte_tipo_store') or cfg.get('arca_cbte_tipo_online') or 6)
+
+
+def _pto_vta_for_channel(cfg, channel):
+    channel_key = (channel or '').strip().lower()
+    if channel_key == 'online':
+        return int(cfg.get('arca_pto_vta_online') or cfg.get('arca_pto_vta_store') or 1)
+    return int(cfg.get('arca_pto_vta_store') or cfg.get('arca_pto_vta_online') or 1)
+
+
+def _credit_note_cbte_tipo_from_invoice(invoice_row, cfg):
+    base_tipo = _safe_int((invoice_row or {}).get('cbte_tipo')) or _cbte_tipo_for_channel(cfg, (invoice_row or {}).get('channel'))
+    mapped = CBTE_TIPO_NC_BY_FACTURA.get(int(base_tipo or 0))
+    if mapped:
+        return mapped
+    # Fallback conservador para evitar bloquear por mapeos no comunes.
+    return int(base_tipo or 6) + 2
+
+
+def _arca_runtime_config(cfg):
+    env = _arca_normalize_env(_clean_text(cfg.get('arca_env')) or getattr(settings, 'ARCA_WS_ENV', 'homologacion'))
+    cuit = _clean_text(cfg.get('arca_cuit')) or _clean_text(getattr(settings, 'ARCA_CUIT', ''))
+    cert_path = _clean_text(cfg.get('arca_cert_path')) or _clean_text(getattr(settings, 'ARCA_CERT_PATH', ''))
+    key_path = _clean_text(cfg.get('arca_key_path')) or _clean_text(getattr(settings, 'ARCA_KEY_PATH', ''))
+    wsaa_service = _clean_text(cfg.get('arca_wsaa_service')) or _clean_text(getattr(settings, 'ARCA_WSAA_SERVICE', 'wsfe')) or 'wsfe'
+
+    wsaa_url_homo = _clean_text(getattr(settings, 'ARCA_WSAA_URL_HOMO', ''))
+    wsaa_url_prod = _clean_text(getattr(settings, 'ARCA_WSAA_URL_PROD', ''))
+    wsfe_url_homo = _clean_text(getattr(settings, 'ARCA_WSFE_URL_HOMO', ''))
+    wsfe_url_prod = _clean_text(getattr(settings, 'ARCA_WSFE_URL_PROD', ''))
+    wsfe_url_legacy = _clean_text(getattr(settings, 'ARCA_WSFE_URL', ''))
+
+    wsaa_url = wsaa_url_prod if env == 'produccion' else wsaa_url_homo
+    wsfe_url = wsfe_url_prod if env == 'produccion' else wsfe_url_homo
+    if wsfe_url_legacy:
+        wsfe_url = wsfe_url_legacy
+
+    return ArcaRuntimeConfig(
+        env=env,
+        cuit=cuit or '',
+        cert_path=cert_path or '',
+        key_path=key_path or '',
+        wsaa_service=wsaa_service,
+        wsaa_url=wsaa_url or '',
+        wsfe_url=wsfe_url or '',
+        timeout_secs=int(getattr(settings, 'ARCA_WS_TIMEOUT_SECS', 25)),
+        ta_cache_skew_secs=int(getattr(settings, 'ARCA_TA_CACHE_SKEW_SECS', 180)),
+    ).with_defaults()
+
+
+def _advisory_lock_sequence(pto_vta, cbte_tipo):
+    exec_void('SELECT pg_advisory_xact_lock(%s,%s)', [int(pto_vta), int(cbte_tipo)])
+
+
+def _to_arca_error_message(exc):
+    if isinstance(exc, ArcaError):
+        return _clean_text(str(exc)) or 'Error ARCA'
+    return _clean_text(str(exc)) or 'Error ARCA'
+
+
+def _to_arca_error_code(exc):
+    if isinstance(exc, ArcaError):
+        return _clean_text(getattr(exc, 'code', None))
+    return None
+
+
 def _user_role(request):
     return (getattr(getattr(request, 'user', None), 'rol', '') or '').strip().lower()
 
@@ -349,6 +540,11 @@ def _load_settings():
         'arca_cuit': row.get('arca_cuit') or '',
         'arca_pto_vta_store': row.get('arca_pto_vta_store') or 1,
         'arca_pto_vta_online': row.get('arca_pto_vta_online') or (row.get('arca_pto_vta_store') or 1),
+        'arca_cbte_tipo_store': row.get('arca_cbte_tipo_store') or getattr(settings, 'ARCA_DEFAULT_TIPO_CBTE', 6) or 6,
+        'arca_cbte_tipo_online': row.get('arca_cbte_tipo_online') or (row.get('arca_cbte_tipo_store') or getattr(settings, 'ARCA_DEFAULT_TIPO_CBTE', 6) or 6),
+        'arca_cert_path': row.get('arca_cert_path') or '',
+        'arca_key_path': row.get('arca_key_path') or '',
+        'arca_wsaa_service': row.get('arca_wsaa_service') or getattr(settings, 'ARCA_WSAA_SERVICE', 'wsfe') or 'wsfe',
         'tiendanube_store_id': row.get('tiendanube_store_id'),
         'tiendanube_access_token': row.get('tiendanube_access_token') or '',
         'tiendanube_webhook_secret': row.get('tiendanube_webhook_secret') or '',
@@ -370,6 +566,16 @@ _SENSITIVE_SETTINGS_FIELDS = (
     'arca_cert_path',
 )
 
+_TECHNICAL_ONLY_SETTINGS_FIELDS = {
+    'tiendanube_store_id',
+    'tiendanube_client_id',
+    'tiendanube_client_secret',
+    'tiendanube_access_token',
+    'tiendanube_webhook_secret',
+    'arca_cert_path',
+    'arca_key_path',
+}
+
 
 def _mask_secret_value(value):
     raw = _clean_text(value)
@@ -390,6 +596,18 @@ def _sanitize_retail_settings_response(row):
     return out
 
 
+def _require_settings_write_permissions(request, requested_fields):
+    requested = {f for f in (requested_fields or set()) if isinstance(f, str) and f}
+    if not requested:
+        raise ValidationError('Sin cambios para guardar')
+    needs_business = any(field not in _TECHNICAL_ONLY_SETTINGS_FIELDS for field in requested)
+    needs_online_credentials = any(field in _TECHNICAL_ONLY_SETTINGS_FIELDS for field in requested)
+    if needs_business:
+        require_permission(request, 'action.config.editar')
+    if needs_online_credentials:
+        require_permission(request, 'action.config.online_credentials')
+
+
 def _create_job(provider, job_type, payload, status='pending', last_error=None):
     return exec_returning(
         '''
@@ -399,6 +617,190 @@ def _create_job(provider, job_type, payload, status='pending', last_error=None):
         ''',
         [provider, job_type, status, json.dumps(payload or {}), last_error, timezone.now() if status in ('pending', 'failed') else None],
     )
+
+
+def _ensure_arca_job(job_type, payload, last_error=None):
+    data = payload or {}
+    existing = q(
+        '''
+        SELECT id
+        FROM integration_jobs
+        WHERE provider='arca'
+          AND job_type=%s
+          AND status IN ('pending','running','failed')
+          AND payload @> %s::jsonb
+        ORDER BY id DESC
+        LIMIT 1
+        ''',
+        [job_type, json.dumps(data)],
+        one=True,
+    )
+    if existing:
+        return existing.get('id')
+    return _create_job('arca', job_type, data, status='pending', last_error=last_error)
+
+
+def _job_set_running(job_id, locked_by='api_online_sync'):
+    if not job_id:
+        return
+    exec_void(
+        '''
+        UPDATE integration_jobs
+        SET status='running',
+            attempts=attempts+1,
+            locked_at=NOW(),
+            locked_by=%s,
+            next_retry_at=NULL
+        WHERE id=%s
+        ''',
+        [locked_by, job_id],
+    )
+
+
+def _job_set_done(job_id):
+    if not job_id:
+        return
+    exec_void(
+        '''
+        UPDATE integration_jobs
+        SET status='done',
+            last_error=NULL,
+            locked_at=NULL,
+            locked_by=NULL,
+            next_retry_at=NULL
+        WHERE id=%s
+        ''',
+        [job_id],
+    )
+
+
+def _job_set_failed(job_id, error_message):
+    if not job_id:
+        return
+    msg = _clean_text(error_message) or 'sync_failed'
+    exec_void(
+        '''
+        UPDATE integration_jobs
+        SET status='failed',
+            last_error=%s,
+            locked_at=NULL,
+            locked_by=NULL,
+            next_retry_at=%s
+        WHERE id=%s
+        ''',
+        [msg[:1000], timezone.now(), job_id],
+    )
+
+
+def _job_set_dead_letter(job_id, error_message):
+    if not job_id:
+        return
+    msg = _clean_text(error_message) or 'dead_letter'
+    exec_void(
+        '''
+        UPDATE integration_jobs
+        SET status='dead_letter',
+            last_error=%s,
+            locked_at=NULL,
+            locked_by=NULL,
+            next_retry_at=NULL
+        WHERE id=%s
+        ''',
+        [msg[:1000], job_id],
+    )
+
+
+def _job_set_failed_with_backoff(job_id, error_message, attempts_count):
+    if not job_id:
+        return
+    msg = _clean_text(error_message) or 'sync_failed'
+    tries = max(1, int(attempts_count or 1))
+    delay_secs = min(3600, 15 * (2 ** min(tries, 6)))
+    next_retry = timezone.now() + dt.timedelta(seconds=delay_secs)
+    exec_void(
+        '''
+        UPDATE integration_jobs
+        SET status='failed',
+            last_error=%s,
+            locked_at=NULL,
+            locked_by=NULL,
+            next_retry_at=%s
+        WHERE id=%s
+        ''',
+        [msg[:1000], next_retry, job_id],
+    )
+
+
+def process_arca_jobs(limit=20, max_attempts=8):
+    processed = 0
+    done = 0
+    failed = 0
+    dead = 0
+    skipped = 0
+    max_attempts = max(1, int(max_attempts or 8))
+    while processed < int(limit or 20):
+        with transaction.atomic():
+            row = q(
+                '''
+                SELECT id, job_type, attempts, payload
+                FROM integration_jobs
+                WHERE provider='arca'
+                  AND status IN ('pending','failed')
+                  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+                ORDER BY priority DESC, created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+                ''',
+                one=True,
+            )
+            if not row:
+                break
+
+            job_id = row['id']
+            payload = _json_any(row.get('payload')) or {}
+            _job_set_running(job_id, 'arca_job_processor')
+            attempts_count = int(row.get('attempts') or 0) + 1
+            processed += 1
+            try:
+                if row.get('job_type') == 'invoice_issue':
+                    sale_id = _to_int(payload.get('sale_id'), 'sale_id')
+                    _emitir_factura_core(sale_id, missing_doc_policy='manual_review')
+                    invoice = q('SELECT status FROM retail_invoices WHERE sale_id=%s', [sale_id], one=True) or {}
+                    inv_status = _clean_text(invoice.get('status')) or ''
+                    if inv_status in ('authorized', 'not_required', 'manual_review', 'rejected'):
+                        _job_set_done(job_id)
+                        done += 1
+                    else:
+                        raise RuntimeError(f'Estado factura no final: {inv_status or "retry"}')
+                elif row.get('job_type') == 'credit_note_issue':
+                    credit_note_id = _to_int(payload.get('credit_note_id'), 'credit_note_id')
+                    _emitir_nota_credito_core(credit_note_id=credit_note_id, missing_doc_policy='manual_review')
+                    note = q('SELECT status FROM retail_invoice_credit_notes WHERE id=%s', [credit_note_id], one=True) or {}
+                    note_status = _clean_text(note.get('status')) or ''
+                    if note_status in ('authorized', 'manual_review', 'rejected'):
+                        _job_set_done(job_id)
+                        done += 1
+                    else:
+                        raise RuntimeError(f'Estado nota de credito no final: {note_status or "retry"}')
+                else:
+                    _job_set_done(job_id)
+                    skipped += 1
+            except Exception as exc:
+                message = _clean_text(str(exc)) or 'job_failed'
+                if attempts_count >= max_attempts:
+                    _job_set_dead_letter(job_id, message)
+                    dead += 1
+                else:
+                    _job_set_failed_with_backoff(job_id, message, attempts_count)
+                    failed += 1
+
+    return {
+        'processed': processed,
+        'done': done,
+        'failed': failed,
+        'dead_letter': dead,
+        'skipped': skipped,
+    }
 
 
 def _random_suffix(size=4):
@@ -583,6 +985,8 @@ def _normalize_payments(payload, quote):
         if amount <= 0:
             raise ValidationError(f'payments[{idx}].amount_ars debe ser mayor a 0')
         metadata = _json(item.get('metadata')) or {}
+        if method == 'store_credit' and item.get('store_credit_id') is not None and 'store_credit_id' not in metadata:
+            metadata['store_credit_id'] = item.get('store_credit_id')
         row = {
             'method': method,
             'account_id': account['id'],
@@ -590,6 +994,7 @@ def _normalize_payments(payload, quote):
             'account_label': account['label'],
             'amount_ars': amount.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
             'metadata': metadata if isinstance(metadata, dict) else {},
+            'store_credit_id': item.get('store_credit_id'),
         }
         rows.append(row)
         total += row['amount_ars']
@@ -657,6 +1062,129 @@ def _split_amount_across_payments(payments, total_amount):
             continue
         rows.append({'payment': row, 'amount_ars': part})
     return rows
+
+
+def _extract_store_credit_id_from_payment(payment_row):
+    row = payment_row if isinstance(payment_row, dict) else {}
+    metadata = _json(row.get('metadata')) or {}
+    raw_id = row.get('store_credit_id')
+    if raw_id is None:
+        raw_id = metadata.get('store_credit_id')
+    return _to_int(raw_id, 'store_credit_id', allow_none=True)
+
+
+def _consume_store_credit_balance(
+    *,
+    credit_id,
+    amount_ars,
+    sale_id=None,
+    note=None,
+    created_by=None,
+    sale_customer_doc=None,
+):
+    cid = _to_int(credit_id, 'store_credit_id')
+    amount = _to_decimal(amount_ars, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if amount <= 0:
+        raise ValidationError('amount_ars debe ser mayor a 0')
+
+    row = q(
+        '''
+        SELECT sc.*,
+               COALESCE(c.doc_number,'') AS customer_doc,
+               COALESCE(s.customer_snapshot->>'doc','') AS source_customer_doc
+        FROM retail_store_credits sc
+        LEFT JOIN retail_customers c ON c.id=sc.customer_id
+        LEFT JOIN retail_sales s ON s.id=sc.source_sale_id
+        WHERE sc.id=%s
+        FOR UPDATE
+        ''',
+        [cid],
+        one=True,
+    )
+    if not row:
+        raise ValidationError('store_credit_id inexistente')
+
+    status = (_clean_text(row.get('status')) or 'active').lower()
+    if status == 'void':
+        raise ValidationError(f'Credito tienda #{cid} anulado')
+
+    balance_before = _to_decimal(row.get('amount_balance_ars') or 0, 'amount_balance_ars').quantize(
+        TWO_DEC, rounding=ROUND_HALF_UP
+    )
+    if balance_before <= 0:
+        raise ValidationError(f'Credito tienda #{cid} sin saldo disponible')
+    if balance_before < amount:
+        raise ValidationError(f'Saldo insuficiente en credito tienda #{cid}')
+
+    expected_doc = _doc_digits(sale_customer_doc)
+    credit_doc = _doc_digits(row.get('customer_doc') or row.get('source_customer_doc'))
+    if expected_doc and credit_doc and expected_doc != credit_doc:
+        raise ValidationError(f'El credito tienda #{cid} pertenece a otro documento')
+
+    balance_after = (balance_before - amount).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    next_status = 'consumed' if balance_after <= Decimal('0.00') else 'active'
+    exec_void(
+        '''
+        UPDATE retail_store_credits
+        SET amount_balance_ars=%s,
+            status=%s,
+            updated_at=NOW()
+        WHERE id=%s
+        ''',
+        [balance_after, next_status, cid],
+    )
+    exec_void(
+        '''
+        INSERT INTO retail_store_credit_movements(
+          credit_id, movement_type, amount_ars, sale_id, return_id, note, created_by
+        )
+        VALUES (%s,'consume',%s,%s,NULL,%s,%s)
+        ''',
+        [
+            cid,
+            amount,
+            _to_int(sale_id, 'sale_id', allow_none=True),
+            _clean_text(note) or 'Consumo de credito tienda',
+            _to_int(created_by, 'created_by', allow_none=True),
+        ],
+    )
+    return {
+        'credit_id': cid,
+        'consumed_amount_ars': amount,
+        'balance_before_ars': balance_before,
+        'balance_after_ars': balance_after,
+        'status': next_status,
+        'customer_doc': row.get('customer_doc') or row.get('source_customer_doc'),
+    }
+
+
+def _consume_store_credits_for_sale(*, sale_id, payments, sale_customer_doc, created_by):
+    grouped = {}
+    for idx, row in enumerate(payments or [], start=1):
+        method = (_clean_text((row or {}).get('method') or (row or {}).get('payment_method')) or '').lower()
+        if method != 'store_credit':
+            continue
+        credit_id = _extract_store_credit_id_from_payment(row or {})
+        if not credit_id:
+            raise ValidationError(f'payments[{idx}].store_credit_id requerido para metodo store_credit')
+        amount = _to_decimal((row or {}).get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if amount <= 0:
+            raise ValidationError(f'payments[{idx}].amount_ars debe ser mayor a 0')
+        grouped[credit_id] = (grouped.get(credit_id) or Decimal('0.00')) + amount
+
+    consumptions = []
+    for credit_id, amount in sorted(grouped.items(), key=lambda item: int(item[0])):
+        consumptions.append(
+            _consume_store_credit_balance(
+                credit_id=credit_id,
+                amount_ars=amount,
+                sale_id=sale_id,
+                note=f'Consumo por venta #{sale_id}',
+                created_by=created_by,
+                sale_customer_doc=sale_customer_doc,
+            )
+        )
+    return consumptions
 
 
 def _open_cash_session(lock=False):
@@ -815,6 +1343,7 @@ class RetailProductoDetailView(APIView):
             return Response({'detail': 'Producto no encontrado'}, status=404)
 
         data = request.data or {}
+        deactivate_product = 'active' in data and not bool(data.get('active'))
         updates = []
         params = []
         old_image_path = _clean_text(producto.get('image_path'))
@@ -873,6 +1402,48 @@ class RetailProductoDetailView(APIView):
 
         if old_image_path and old_image_path != next_image_path:
             _delete_product_image(old_image_path)
+
+        if deactivate_product:
+            variant_ids_to_deactivate = [
+                int(row['id'])
+                for row in (
+                    q(
+                        '''
+                        SELECT id
+                        FROM retail_product_variants
+                        WHERE product_id=%s
+                          AND active=TRUE
+                        ''',
+                        [producto_id],
+                    )
+                    or []
+                )
+                if _safe_int(row.get('id'))
+            ]
+            if variant_ids_to_deactivate:
+                exec_void('UPDATE retail_product_variants SET active=FALSE WHERE id = ANY(%s)', [variant_ids_to_deactivate])
+
+            variant_ids_to_delete_remote = [
+                int(row['id'])
+                for row in (
+                    q(
+                        '''
+                        SELECT id
+                        FROM retail_product_variants
+                        WHERE product_id=%s
+                          AND (tiendanube_product_id IS NOT NULL OR tiendanube_variant_id IS NOT NULL)
+                        ''',
+                        [producto_id],
+                    )
+                    or []
+                )
+                if _safe_int(row.get('id'))
+            ]
+            if variant_ids_to_delete_remote:
+                _tiendanube_schedule_local_variants_delete(
+                    variant_ids_to_delete_remote,
+                    reason='product_deactivate',
+                )
 
         row = _load_producto(producto_id, request=request)
         return Response(row)
@@ -1470,6 +2041,13 @@ class RetailVariantesView(APIView):
                 [vid, stock_on_hand, stock_on_hand, cost_avg, vid, getattr(request.user, 'id', None)],
             )
 
+        _tiendanube_schedule_local_variants_sync(
+            [vid],
+            sync_price=True,
+            sync_stock=True,
+            reason='variant_create',
+        )
+
         return Response(_load_variante(vid, include_costs=True), status=201)
 
 
@@ -1481,6 +2059,7 @@ class RetailVarianteDetailView(APIView):
         _require_staff(request)
         _set_audit_user(request)
         data = request.data or {}
+        deactivate_variant = 'active' in data and not bool(data.get('active'))
         existing = _load_variante(variante_id, include_costs=True)
         if not existing:
             return Response({'detail': 'Variante no encontrada'}, status=404)
@@ -1583,6 +2162,24 @@ class RetailVarianteDetailView(APIView):
                 )
             except BarcodeConflictError as exc:
                 return Response(exc.payload, status=409)
+
+        if deactivate_variant:
+            _tiendanube_schedule_local_variants_delete(
+                [variante_id],
+                reason='variant_deactivate',
+            )
+        else:
+            sync_price = 'price_online_ars' in data
+            sync_stock = stock_adjust is not None and stock_adjust != 0
+            sync_catalog = any(key in data for key in ('option_values', 'opciones', 'sku', 'active'))
+            if sync_price or sync_stock or sync_catalog:
+                _tiendanube_schedule_local_variants_sync(
+                    [variante_id],
+                    # Con sync_catalog forzamos ensure-mapping aunque no haya cambio de precio.
+                    sync_price=(sync_price or sync_catalog),
+                    sync_stock=sync_stock,
+                    reason='variant_patch',
+                )
 
         return Response(_load_variante(variante_id, include_costs=True))
 
@@ -2186,6 +2783,7 @@ class RetailComprasView(APIView):
                 getattr(request.user, 'id', None),
             ],
         )
+        touched_variant_ids = []
 
         for item in items:
             if not isinstance(item, dict):
@@ -2265,6 +2863,15 @@ class RetailComprasView(APIView):
                 ''',
                 [variant_id, qty, new_stock, unit_cost_ars, purchase_id, getattr(request.user, 'id', None)],
             )
+            touched_variant_ids.append(variant_id)
+
+        if touched_variant_ids:
+            _tiendanube_schedule_local_variants_sync(
+                touched_variant_ids,
+                sync_price=False,
+                sync_stock=True,
+                reason='purchase_post',
+            )
 
         return Response(_load_compra(purchase_id, include_costs=True), status=201)
 
@@ -2297,15 +2904,29 @@ def _cash_summary(session_id):
 
     total_in = Decimal('0')
     total_out = Decimal('0')
+    cash_in = Decimal('0')
+    cash_out = Decimal('0')
     for row in rows:
         amount = _to_decimal(row.get('total_ars') or 0, 'total_ars')
+        is_cash = (_clean_text(row.get('payment_method')) or '').lower() == 'cash'
         if row.get('direction') == 'out':
             total_out += amount
+            if is_cash:
+                cash_out += amount
         else:
             total_in += amount
+            if is_cash:
+                cash_in += amount
+    net_total = (total_in - total_out).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    expected_cash = (cash_in - cash_out).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    net_non_cash = (net_total - expected_cash).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
     return {
         'rows': rows,
-        'expected_total_ars': (total_in - total_out).quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+        # Backward-compatible key used by cierres y POS: esperado contado (solo efectivo).
+        'expected_total_ars': expected_cash,
+        'expected_cash_total_ars': expected_cash,
+        'net_non_cash_ars': net_non_cash,
+        'net_total_ars': net_total,
     }
 
 
@@ -2327,6 +2948,341 @@ def _load_caja(caja_id):
         return None
     row['summary'] = _cash_summary(caja_id)
     return row
+
+
+def _normalize_pending_severity(value, default='medium'):
+    normalized = (_clean_text(value) or default or 'medium').lower()
+    return normalized if normalized in PENDING_SEVERITIES else (default if default in PENDING_SEVERITIES else 'medium')
+
+
+def _normalize_pending_source(value, default='pos'):
+    normalized = (_clean_text(value) or default or 'pos').lower()
+    return normalized if normalized in PENDING_SOURCES else (default if default in PENDING_SOURCES else 'pos')
+
+
+def _normalize_pending_status(value, default='open'):
+    normalized = (_clean_text(value) or default or 'open').lower()
+    return normalized if normalized in PENDING_STATUSES else (default if default in PENDING_STATUSES else 'open')
+
+
+def _to_sla_minutes(value, default=120):
+    try:
+        mins = int(value)
+    except (TypeError, ValueError):
+        mins = int(default or 120)
+    return max(0, mins)
+
+
+def _pending_item(
+    *,
+    pid,
+    source,
+    severity='medium',
+    action_required='Revisar pendiente',
+    sla_minutes=120,
+    status='open',
+    title='Pendiente operativo',
+    detail=None,
+    created_at=None,
+    payload=None,
+):
+    return {
+        'id': str(pid),
+        'source': _normalize_pending_source(source, default='pos'),
+        'severity': _normalize_pending_severity(severity, default='medium'),
+        'action_required': _clean_text(action_required) or 'Revisar pendiente',
+        'sla_minutes': _to_sla_minutes(sla_minutes, default=120),
+        'status': _normalize_pending_status(status, default='open'),
+        'title': _clean_text(title) or 'Pendiente operativo',
+        'detail': _clean_text(detail),
+        'created_at': created_at,
+        'payload': payload if isinstance(payload, dict) else {},
+    }
+
+
+def _serialize_operational_incident(row):
+    if not row:
+        return None
+    payload = _json_any(row.get('payload')) or {}
+    payload.update(
+        {
+            'incident_id': row.get('id'),
+            'related_entity_type': row.get('related_entity_type'),
+            'related_entity_id': row.get('related_entity_id'),
+            'resolved_at': row.get('resolved_at'),
+            'resolution_note': row.get('resolution_note'),
+            'resolved_by': row.get('resolved_by'),
+        }
+    )
+    return _pending_item(
+        pid=f"incident:{row.get('id')}",
+        source=row.get('source') or 'caja',
+        severity=row.get('severity') or 'medium',
+        action_required=row.get('action_required') or 'Resolver incidencia operativa',
+        sla_minutes=row.get('sla_minutes') or 120,
+        status=row.get('status') or 'open',
+        title=row.get('title') or f"Incidencia #{row.get('id')}",
+        detail=row.get('detail'),
+        created_at=row.get('created_at'),
+        payload=payload,
+    )
+
+
+def _create_operational_incident(
+    *,
+    source='caja',
+    severity='medium',
+    action_required='Resolver incidencia operativa',
+    sla_minutes=120,
+    status='open',
+    title='Incidencia operativa',
+    detail=None,
+    related_entity_type=None,
+    related_entity_id=None,
+    payload=None,
+    created_by=None,
+):
+    incident_id = exec_returning(
+        '''
+        INSERT INTO retail_operation_incidents(
+          source, severity, action_required, sla_minutes, status, title, detail,
+          related_entity_type, related_entity_id, payload, created_by
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
+        RETURNING id
+        ''',
+        [
+            _normalize_pending_source(source, default='caja'),
+            _normalize_pending_severity(severity, default='medium'),
+            _clean_text(action_required) or 'Resolver incidencia operativa',
+            _to_sla_minutes(sla_minutes, default=120),
+            _normalize_pending_status(status, default='open'),
+            _clean_text(title) or 'Incidencia operativa',
+            _clean_text(detail),
+            _clean_text(related_entity_type),
+            _to_int(related_entity_id, 'related_entity_id', allow_none=True),
+            json.dumps(payload if isinstance(payload, dict) else {}),
+            _to_int(created_by, 'created_by', allow_none=True),
+        ],
+    )
+    return _to_int(incident_id, 'incident_id')
+
+
+def _register_cash_session_movement(
+    *,
+    cash_session_id,
+    movement_type,
+    direction,
+    payment_method,
+    payment_account_id,
+    amount_ars,
+    reference_type,
+    reference_id,
+    note,
+    created_by,
+):
+    amount = _to_decimal(amount_ars, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if amount <= 0:
+        return
+    exec_void(
+        '''
+        INSERT INTO retail_cash_session_movements(
+          cash_session_id, movement_type, direction, payment_method,
+          payment_account_id, amount_ars, reference_type, reference_id, notes, created_by
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ''',
+        [
+            _to_int(cash_session_id, 'cash_session_id'),
+            _clean_text(movement_type) or 'manual_adjustment',
+            'out' if str(direction).lower() == 'out' else 'in',
+            _normalize_payment_method(payment_method),
+            _to_int(payment_account_id, 'payment_account_id'),
+            amount,
+            _clean_text(reference_type) or 'other',
+            _to_int(reference_id, 'reference_id', allow_none=True),
+            _clean_text(note),
+            _to_int(created_by, 'created_by', allow_none=True),
+        ],
+    )
+
+
+def _list_operational_pending_rows(limit_items=60):
+    lim = max(1, min(int(limit_items or 60), 300))
+    rows = []
+
+    invoice_rows = q(
+        '''
+        SELECT i.id, i.sale_id, i.status, i.error_message, i.updated_at,
+               s.sale_number, s.channel
+        FROM retail_invoices i
+        JOIN retail_sales s ON s.id=i.sale_id
+        WHERE i.status IN ('manual_review','retry')
+        ORDER BY i.updated_at DESC NULLS LAST, i.id DESC
+        LIMIT %s
+        ''',
+        [lim],
+    ) or []
+    for row in invoice_rows:
+        status = _clean_text(row.get('status')) or 'retry'
+        sale_label = row.get('sale_number') or f"VENTA-{row.get('sale_id')}"
+        rows.append(
+            _pending_item(
+                pid=f"invoice:{row.get('id')}",
+                source='arca',
+                severity='high' if status == 'manual_review' else 'medium',
+                action_required='Revisar factura ARCA y reintentar emision',
+                sla_minutes=60 if status == 'manual_review' else 180,
+                status='open',
+                title=f"Factura {status} - {sale_label}",
+                detail=row.get('error_message') or 'Factura pendiente de resolucion operativa.',
+                created_at=row.get('updated_at'),
+                payload={
+                    'invoice_id': row.get('id'),
+                    'sale_id': row.get('sale_id'),
+                    'sale_number': row.get('sale_number'),
+                    'channel': row.get('channel'),
+                    'invoice_status': status,
+                },
+            )
+        )
+
+    job_rows = q(
+        '''
+        SELECT id, provider, job_type, status, attempts, last_error, updated_at, next_retry_at
+        FROM integration_jobs
+        WHERE provider='tiendanube'
+          AND status IN ('failed','dead_letter')
+        ORDER BY id DESC
+        LIMIT %s
+        ''',
+        [lim],
+    ) or []
+    for row in job_rows:
+        status = _clean_text(row.get('status')) or 'failed'
+        rows.append(
+            _pending_item(
+                pid=f"job:{row.get('id')}",
+                source='online',
+                severity='critical' if status == 'dead_letter' else 'high',
+                action_required='Reprocesar job de Tienda Nube',
+                sla_minutes=30 if status == 'dead_letter' else 90,
+                status='open',
+                title=f"Job online {status}: {row.get('job_type') or 'sync'}",
+                detail=row.get('last_error') or 'Job fallido en integracion online.',
+                created_at=row.get('updated_at'),
+                payload={
+                    'job_id': row.get('id'),
+                    'job_type': row.get('job_type'),
+                    'provider': row.get('provider'),
+                    'job_status': status,
+                    'attempts': row.get('attempts'),
+                    'next_retry_at': row.get('next_retry_at'),
+                },
+            )
+        )
+
+    stale_drafts = q(
+        '''
+        SELECT id, draft_number, name, item_count, total_ars, last_activity_at
+        FROM retail_pos_drafts
+        WHERE status='open'
+          AND last_activity_at <= (NOW() - INTERVAL '4 hours')
+        ORDER BY last_activity_at ASC
+        LIMIT %s
+        ''',
+        [lim],
+    ) or []
+    for row in stale_drafts:
+        rows.append(
+            _pending_item(
+                pid=f"draft:{row.get('id')}",
+                source='pos',
+                severity='low',
+                action_required='Revisar y cerrar draft antiguo',
+                sla_minutes=240,
+                status='open',
+                title=f"Draft abierto sin actividad: {row.get('draft_number') or f'#{row.get('id')}'}",
+                detail=f"{int(row.get('item_count') or 0)} item(s), total {row.get('total_ars') or 0}",
+                created_at=row.get('last_activity_at'),
+                payload={
+                    'draft_id': row.get('id'),
+                    'draft_number': row.get('draft_number'),
+                    'name': row.get('name'),
+                    'item_count': row.get('item_count'),
+                    'total_ars': row.get('total_ars'),
+                },
+            )
+        )
+
+    incidents = q(
+        '''
+        SELECT *
+        FROM retail_operation_incidents
+        WHERE status IN ('open','in_progress')
+        ORDER BY
+          CASE severity
+            WHEN 'critical' THEN 1
+            WHEN 'high' THEN 2
+            WHEN 'medium' THEN 3
+            ELSE 4
+          END,
+          created_at DESC
+        LIMIT %s
+        ''',
+        [lim],
+    ) or []
+    for incident in incidents:
+        serialized = _serialize_operational_incident(incident)
+        if serialized:
+            rows.append(serialized)
+
+    alerts = q(
+        '''
+        SELECT *
+        FROM retail_operation_alerts
+        WHERE status IN ('open','acknowledged')
+        ORDER BY
+          CASE severity
+            WHEN 'critical' THEN 1
+            WHEN 'high' THEN 2
+            WHEN 'medium' THEN 3
+            ELSE 4
+          END,
+          created_at DESC
+        LIMIT %s
+        ''',
+        [lim],
+    ) or []
+    for alert in alerts:
+        rows.append(_serialize_alert_row(alert))
+
+    severity_rank = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+    rows.sort(key=lambda item: severity_rank.get(item.get('severity'), 99))
+    return rows[:lim]
+
+
+class RetailOperacionPendientesView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        limit_items = _to_int((request.query_params or {}).get('limit') or 60, 'limit', allow_none=True)
+        rows = _list_operational_pending_rows(limit_items=limit_items or 60)
+        summary = {
+            'total': len(rows),
+            'critical': sum(1 for row in rows if row.get('severity') == 'critical'),
+            'high': sum(1 for row in rows if row.get('severity') == 'high'),
+            'medium': sum(1 for row in rows if row.get('severity') == 'medium'),
+            'low': sum(1 for row in rows if row.get('severity') == 'low'),
+        }
+        return Response(
+            {
+                'generated_at': timezone.now().isoformat(),
+                'summary': summary,
+                'rows': rows,
+            }
+        )
 
 
 class RetailCajaAperturaView(APIView):
@@ -2406,6 +3362,163 @@ class RetailCajaCierreView(APIView):
         return Response(_load_caja(session['id']))
 
 
+class RetailCajaCierreAsistidoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        _require_staff(request)
+        _set_audit_user(request)
+        session = _open_cash_session(lock=True)
+        if not session:
+            raise ValidationError('No hay caja abierta')
+
+        data = request.data or {}
+        counted_total = _to_decimal(data.get('closing_counted_total_ars'), 'closing_counted_total_ars')
+        closing_note = _clean_text(data.get('closing_note'))
+        difference_reason = _clean_text(data.get('difference_reason'))
+        extra_incidents = data.get('incidents') if isinstance(data.get('incidents'), list) else []
+
+        summary = _cash_summary(session['id'])
+        expected_total = summary['expected_total_ars']
+        diff = (counted_total - expected_total).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if diff != 0 and not difference_reason:
+            raise ValidationError('difference_reason requerido cuando hay diferencia de caja')
+
+        exec_void(
+            '''
+            UPDATE retail_cash_sessions
+            SET status='closed',
+                closed_at=NOW(),
+                closed_by=%s,
+                closing_note=%s,
+                closing_expected_total_ars=%s,
+                closing_counted_total_ars=%s,
+                difference_total_ars=%s
+            WHERE id=%s
+            ''',
+            [
+                getattr(request.user, 'id', None),
+                closing_note,
+                expected_total,
+                counted_total,
+                diff,
+                session['id'],
+            ],
+        )
+
+        created_incident_ids = []
+        if diff != 0:
+            severity = 'high' if abs(diff) >= Decimal('10000.00') else 'medium'
+            incident_id = _create_operational_incident(
+                source='caja',
+                severity=severity,
+                action_required='Revisar diferencia de cierre y conciliar caja',
+                sla_minutes=30,
+                status='open',
+                title=f"Diferencia de caja #{session['id']}",
+                detail=difference_reason or 'Diferencia detectada en cierre asistido.',
+                related_entity_type='cash_session',
+                related_entity_id=session['id'],
+                payload={
+                    'cash_session_id': session['id'],
+                    'expected_total_ars': str(expected_total),
+                    'counted_total_ars': str(counted_total),
+                    'difference_total_ars': str(diff),
+                    'closing_note': closing_note,
+                    'difference_reason': difference_reason,
+                },
+                created_by=getattr(request.user, 'id', None),
+            )
+            created_incident_ids.append(incident_id)
+
+        for item in extra_incidents:
+            if not isinstance(item, dict):
+                continue
+            title = _clean_text(item.get('title'))
+            if not title:
+                continue
+            incident_id = _create_operational_incident(
+                source='caja',
+                severity=_normalize_pending_severity(item.get('severity'), default='low'),
+                action_required=_clean_text(item.get('action_required')) or 'Resolver incidencia de cierre de caja',
+                sla_minutes=_to_sla_minutes(item.get('sla_minutes'), default=120),
+                status='open',
+                title=title,
+                detail=_clean_text(item.get('detail')),
+                related_entity_type='cash_session',
+                related_entity_id=session['id'],
+                payload={
+                    'cash_session_id': session['id'],
+                    'origin': 'cierre_asistido',
+                    'kind': _clean_text(item.get('kind')),
+                },
+                created_by=getattr(request.user, 'id', None),
+            )
+            created_incident_ids.append(incident_id)
+
+        return Response(
+            {
+                'cash_session': _load_caja(session['id']),
+                'assistant': {
+                    'expected_total_ars': expected_total,
+                    'counted_total_ars': counted_total,
+                    'difference_total_ars': diff,
+                    'difference_reason': difference_reason,
+                    'incidents_created': created_incident_ids,
+                    'requires_followup': bool(diff != 0 or created_incident_ids),
+                },
+            }
+        )
+
+
+class RetailOperacionIncidenciaResolverView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, incidencia_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        incident = q(
+            'SELECT * FROM retail_operation_incidents WHERE id=%s FOR UPDATE',
+            [incidencia_id],
+            one=True,
+        )
+        if not incident:
+            return Response({'detail': 'Incidencia no encontrada'}, status=404)
+
+        data = request.data or {}
+        resolution_note = _clean_text(data.get('resolution_note') or data.get('note'))
+        if not resolution_note:
+            raise ValidationError('resolution_note requerido')
+
+        status = _normalize_pending_status(data.get('status'), default='resolved')
+        if status not in ('resolved', 'dismissed', 'acknowledged'):
+            raise ValidationError('status invalido (resolved|dismissed|acknowledged)')
+        resolved_at = timezone.now() if status in ('resolved', 'dismissed') else None
+
+        exec_void(
+            '''
+            UPDATE retail_operation_incidents
+            SET status=%s,
+                resolution_note=%s,
+                resolved_by=%s,
+                resolved_at=%s,
+                updated_at=NOW()
+            WHERE id=%s
+            ''',
+            [
+                status,
+                resolution_note,
+                getattr(request.user, 'id', None),
+                resolved_at,
+                incidencia_id,
+            ],
+        )
+        updated = q('SELECT * FROM retail_operation_incidents WHERE id=%s', [incidencia_id], one=True)
+        return Response({'ok': True, 'incident': _serialize_operational_incident(updated)})
+
+
 class RetailCajaActualView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2456,8 +3569,8 @@ def _parse_sales_query(request):
     payment_method = _clean_text(request.query_params.get('payment_method'))
     if payment_method:
         payment_method = payment_method.lower()
-        if payment_method not in ('cash', 'debit', 'transfer', 'credit'):
-            raise ValidationError('payment_method invalido (cash|debit|transfer|credit)')
+        if payment_method not in ('cash', 'debit', 'transfer', 'credit', 'store_credit'):
+            raise ValidationError('payment_method invalido (cash|debit|transfer|credit|store_credit)')
 
     statuses = []
     status_raw = _clean_text(request.query_params.get('status'))
@@ -2712,6 +3825,96 @@ class RetailGarantiasActivasView(APIView):
         )
 
 
+def _normalize_store_credit_status(raw, allow_all=False):
+    value = (_clean_text(raw) or '').lower()
+    if allow_all and value == 'all':
+        return 'all'
+    if not value:
+        value = 'active'
+    if value not in ('active', 'consumed', 'void'):
+        raise ValidationError('status invalido (active|consumed|void)')
+    return value
+
+
+class RetailStoreCreditsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        status = _normalize_store_credit_status((request.query_params or {}).get('status'), allow_all=True)
+        customer_doc = _doc_digits((request.query_params or {}).get('customer_doc') or (request.query_params or {}).get('doc'))
+        limit = _to_int((request.query_params or {}).get('limit') or 40, 'limit')
+        limit = max(1, min(limit, 200))
+
+        where = ['1=1']
+        params = []
+        if status != 'all':
+            where.append('sc.status=%s')
+            params.append(status)
+        if status in ('all', 'active'):
+            where.append('COALESCE(sc.amount_balance_ars,0) > 0')
+        if customer_doc:
+            where.append(
+                "regexp_replace(COALESCE(c.doc_number, s.customer_snapshot->>'doc', ''), '[^0-9]', '', 'g')=%s"
+            )
+            params.append(customer_doc)
+        where_sql = ' AND '.join(where)
+
+        rows = q(
+            f'''
+            SELECT sc.id, sc.status, sc.amount_total_ars, sc.amount_balance_ars,
+                   sc.note, sc.source_sale_id, sc.source_return_id,
+                   sc.created_at, sc.updated_at,
+                   COALESCE(c.full_name, COALESCE(s.customer_snapshot->>'name','')) AS customer_name,
+                   COALESCE(c.doc_number, COALESCE(s.customer_snapshot->>'doc','')) AS customer_doc
+            FROM retail_store_credits sc
+            LEFT JOIN retail_customers c ON c.id=sc.customer_id
+            LEFT JOIN retail_sales s ON s.id=sc.source_sale_id
+            WHERE {where_sql}
+            ORDER BY sc.created_at DESC, sc.id DESC
+            LIMIT %s
+            ''',
+            [*params, limit],
+        ) or []
+        for row in rows:
+            row['customer_doc_digits'] = _doc_digits(row.get('customer_doc'))
+            balance = _to_decimal(row.get('amount_balance_ars') or 0, 'amount_balance_ars', allow_none=True) or Decimal('0.00')
+            row['can_use'] = (_clean_text(row.get('status')) or 'active').lower() == 'active' and balance > 0
+        return Response({'rows': rows})
+
+
+class RetailStoreCreditConsumeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, credit_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        data = request.data or {}
+        sale_id = _to_int(data.get('sale_id'), 'sale_id', allow_none=True)
+        if sale_id is None and not user_has_permission(request, 'action.postventa.credito_tienda'):
+            raise PermissionDenied('No autorizado para consumir credito sin venta asociada')
+
+        sale_customer_doc = None
+        if sale_id is not None:
+            sale = q('SELECT id, customer_snapshot FROM retail_sales WHERE id=%s', [sale_id], one=True)
+            if not sale:
+                return Response({'detail': 'Venta no encontrada'}, status=404)
+            snapshot = _json_any(sale.get('customer_snapshot')) or {}
+            sale_customer_doc = snapshot.get('doc')
+
+        result = _consume_store_credit_balance(
+            credit_id=credit_id,
+            amount_ars=_money(data.get('amount_ars')),
+            sale_id=sale_id,
+            note=_clean_text(data.get('note')) or 'Consumo credito tienda',
+            created_by=getattr(request.user, 'id', None),
+            sale_customer_doc=sale_customer_doc,
+        )
+        credit = q('SELECT * FROM retail_store_credits WHERE id=%s', [result.get('credit_id')], one=True)
+        return Response({'ok': True, 'consumption': result, 'credit': credit})
+
+
 def _normalize_channel(raw):
     value = (_clean_text(raw) or 'local').lower()
     if value not in ('local', 'online'):
@@ -2722,7 +3925,7 @@ def _normalize_channel(raw):
 def _normalize_payment_method(raw):
     value = (_clean_text(raw) or '').lower()
     if value not in PAYMENT_MODIFIERS:
-        raise ValidationError('payment_method invalido (cash|debit|transfer|credit)')
+        raise ValidationError('payment_method invalido (cash|debit|transfer|credit|store_credit)')
     return value
 
 
@@ -3847,8 +5050,22 @@ def _confirm_sale_from_payload(request, payload):
             ],
         )
 
+    if channel == 'local':
+        _tiendanube_schedule_local_variants_sync(
+            [line.get('variant_id') for line in quote.get('items') or []],
+            sync_price=False,
+            sync_stock=True,
+            reason='sale_confirm_local',
+        )
+
     _persist_sale_promotions(sale_id, quote, persisted_items)
     _persist_sale_payments(sale_id, payments)
+    store_credit_consumptions = _consume_store_credits_for_sale(
+        sale_id=sale_id,
+        payments=payments,
+        sale_customer_doc=customer_snapshot.get('doc'),
+        created_by=getattr(request.user, 'id', None),
+    )
 
     if quote['invoice_required']:
         exec_void(
@@ -3875,9 +5092,12 @@ def _confirm_sale_from_payload(request, payload):
 
     auto_emit = bool(data.get('auto_emit_invoice'))
     if auto_emit and quote['invoice_required']:
-        _emitir_factura(sale_id, request)
+        _emitir_factura(sale_id, request, missing_doc_policy='manual_review')
 
-    return _load_venta(sale_id, include_costs=_can_view_costs(request))
+    out = _load_venta(sale_id, include_costs=_can_view_costs(request))
+    if store_credit_consumptions:
+        out['store_credit_consumptions'] = store_credit_consumptions
+    return out
 
 
 class RetailVentasCotizarView(APIView):
@@ -4349,10 +5569,162 @@ class RetailVentaAnularView(APIView):
             elif invoice['status'] in ('pending', 'retry', 'rejected'):
                 exec_void("UPDATE retail_invoices SET status='retry', updated_at=NOW() WHERE id=%s", [invoice['id']])
 
+        if sale['channel'] == 'local':
+            _tiendanube_schedule_local_variants_sync(
+                [item.get('variant_id') for item in items],
+                sync_price=False,
+                sync_stock=True,
+                reason='sale_cancel_local',
+            )
+
         if sale['channel'] == 'local' and sale.get('cash_session_id'):
             _register_cash_out(sale['cash_session_id'], sale, getattr(request.user, 'id', None), movement_type='manual_adjustment', note='Anulacion de venta')
 
         return Response(_load_venta(venta_id, include_costs=_can_view_costs(request)))
+
+def _normalize_refund_mode(value, default='cash_return'):
+    mode = (_clean_text(value) or default or 'cash_return').lower()
+    if mode not in REFUND_MODES:
+        raise ValidationError('refund_mode invalido (cash_return|store_credit)')
+    return mode
+
+
+def _issue_store_credit(*, sale, return_id, amount_ars, user_id, note=None):
+    amount = _to_decimal(amount_ars, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if amount <= 0:
+        raise ValidationError('Monto invalido para credito tienda')
+    credit_id = exec_returning(
+        '''
+        INSERT INTO retail_store_credits(
+          customer_id, source_sale_id, source_return_id, status,
+          amount_total_ars, amount_balance_ars, note, issued_by
+        )
+        VALUES (%s,%s,%s,'active',%s,%s,%s,%s)
+        RETURNING id
+        ''',
+        [
+            _to_int(sale.get('customer_id'), 'customer_id', allow_none=True),
+            _to_int(sale.get('id'), 'sale_id'),
+            _to_int(return_id, 'return_id', allow_none=True),
+            amount,
+            amount,
+            _clean_text(note),
+            _to_int(user_id, 'user_id', allow_none=True),
+        ],
+    )
+    exec_void(
+        '''
+        INSERT INTO retail_store_credit_movements(
+          credit_id, movement_type, amount_ars, sale_id, return_id, note, created_by
+        )
+        VALUES (%s,'issue',%s,%s,%s,%s,%s)
+        ''',
+        [
+            credit_id,
+            amount,
+            _to_int(sale.get('id'), 'sale_id'),
+            _to_int(return_id, 'return_id', allow_none=True),
+            _clean_text(note) or 'Emision de credito tienda por postventa',
+            _to_int(user_id, 'user_id', allow_none=True),
+        ],
+    )
+    return q('SELECT * FROM retail_store_credits WHERE id=%s', [credit_id], one=True)
+
+
+def _normalize_exchange_settlement(raw):
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValidationError('settlement debe ser objeto')
+    mode = (_clean_text(raw.get('mode')) or 'even').lower()
+    if mode not in EXCHANGE_SETTLEMENTS:
+        raise ValidationError('settlement.mode invalido (even|customer_owes|store_owes|store_credit)')
+    amount = _to_decimal(raw.get('amount_ars') or 0, 'settlement.amount_ars', allow_none=True) or Decimal('0')
+    amount = amount.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if amount < 0:
+        raise ValidationError('settlement.amount_ars invalido')
+    method = _normalize_payment_method(raw.get('payment_method') or 'cash')
+    account = _ensure_payment_account(
+        {
+            'payment_account_code': raw.get('payment_account_code'),
+            'payment_account_id': raw.get('payment_account_id'),
+        },
+        method,
+    )
+    if mode == 'even':
+        amount = Decimal('0.00')
+    if mode in ('customer_owes', 'store_owes', 'store_credit') and amount <= 0:
+        raise ValidationError('settlement.amount_ars requerido para settlement con diferencia')
+    return {
+        'mode': mode,
+        'amount_ars': amount,
+        'payment_method': method,
+        'payment_account_id': account.get('id'),
+        'payment_account_code': account.get('code'),
+        'note': _clean_text(raw.get('note')),
+    }
+
+
+def _apply_exchange_settlement(*, request, sale, exchange_id, settlement):
+    data = settlement or {'mode': 'even', 'amount_ars': Decimal('0.00')}
+    mode = data.get('mode') or 'even'
+    amount = _to_decimal(data.get('amount_ars') or 0, 'settlement.amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if mode == 'even' or amount <= 0:
+        return {'mode': 'even', 'amount_ars': '0.00'}
+
+    user_id = getattr(request.user, 'id', None)
+    if sale.get('channel') == 'local' and sale.get('cash_session_id'):
+        if mode == 'customer_owes':
+            _register_cash_session_movement(
+                cash_session_id=sale.get('cash_session_id'),
+                movement_type='exchange_settlement',
+                direction='in',
+                payment_method=data.get('payment_method') or sale.get('payment_method') or 'cash',
+                payment_account_id=data.get('payment_account_id') or sale.get('payment_account_id'),
+                amount_ars=amount,
+                reference_type='exchange',
+                reference_id=exchange_id,
+                note=data.get('note') or 'Diferencia cobrada en cambio',
+                created_by=user_id,
+            )
+        elif mode == 'store_owes':
+            _register_cash_session_movement(
+                cash_session_id=sale.get('cash_session_id'),
+                movement_type='exchange_settlement',
+                direction='out',
+                payment_method=data.get('payment_method') or sale.get('payment_method') or 'cash',
+                payment_account_id=data.get('payment_account_id') or sale.get('payment_account_id'),
+                amount_ars=amount,
+                reference_type='exchange',
+                reference_id=exchange_id,
+                note=data.get('note') or 'Diferencia pagada por cambio',
+                created_by=user_id,
+            )
+
+    credit_row = None
+    if mode == 'store_credit':
+        if not user_has_permission(request, 'action.postventa.credito_tienda'):
+            raise PermissionDenied('No autorizado para emitir credito tienda')
+        credit_row = _issue_store_credit(
+            sale=sale,
+            return_id=None,
+            amount_ars=amount,
+            user_id=user_id,
+            note=data.get('note') or f'Credito por diferencia de cambio #{exchange_id}',
+        )
+        exec_void(
+            'UPDATE retail_exchanges SET store_credit_id=%s WHERE id=%s',
+            [_to_int(credit_row.get('id'), 'store_credit_id'), exchange_id],
+        )
+
+    return {
+        'mode': mode,
+        'amount_ars': str(amount),
+        'payment_method': data.get('payment_method'),
+        'payment_account_code': data.get('payment_account_code'),
+        'store_credit_id': credit_row.get('id') if credit_row else None,
+    }
+
 
 class RetailVentaDevolverView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -4384,6 +5756,9 @@ class RetailVentaDevolverView(APIView):
         data = request.data or {}
         return_items = data.get('items')
         parsed = []
+        refund_mode = _normalize_refund_mode(data.get('refund_mode'), default='cash_return')
+        if refund_mode == 'store_credit' and not user_has_permission(request, 'action.postventa.credito_tienda'):
+            raise PermissionDenied('No autorizado para emitir credito tienda')
         warranty_type = _normalize_warranty_type(data.get('warranty_type'), default='none')
         override_out_of_warranty = bool(data.get('override_out_of_warranty'))
         override_reason = _clean_text(data.get('override_reason'))
@@ -4439,9 +5814,9 @@ class RetailVentaDevolverView(APIView):
             INSERT INTO retail_returns(
               sale_id, status, reason, processed_by,
               total_refund_ars, requires_credit_note, credit_note_status,
-              warranty_type, warranty_override, warranty_snapshot
+              warranty_type, warranty_override, warranty_snapshot, refund_mode
             )
-            VALUES (%s,'confirmed',%s,%s,0,%s,%s,%s,%s,%s::jsonb)
+            VALUES (%s,'confirmed',%s,%s,0,%s,%s,%s,%s,%s::jsonb,%s)
             RETURNING id
             ''',
             [
@@ -4453,11 +5828,13 @@ class RetailVentaDevolverView(APIView):
                 warranty_type,
                 bool(override_out_of_warranty and (not warranty_in_window)),
                 json.dumps(warranty_snapshot),
+                refund_mode,
             ],
         )
 
         total_refund = Decimal('0.00')
         all_returned = True
+        touched_variant_ids = []
 
         for item in parsed:
             sale_item = by_item[item['sale_item_id']]
@@ -4510,6 +5887,7 @@ class RetailVentaDevolverView(APIView):
                 ],
             )
 
+            touched_variant_ids.append(sale_item['variant_id'])
             pending_after = available - qty
             if pending_after > 0:
                 all_returned = False
@@ -4523,9 +5901,31 @@ class RetailVentaDevolverView(APIView):
         all_returned = int(remaining.get('cnt') or 0) == 0
         sale_status = 'returned' if all_returned else 'partial_return'
         exec_void('UPDATE retail_sales SET status=%s WHERE id=%s', [sale_status, venta_id])
-        exec_void('UPDATE retail_returns SET total_refund_ars=%s WHERE id=%s', [total_refund, rid])
+        exec_void('UPDATE retail_returns SET total_refund_ars=%s, refund_mode=%s WHERE id=%s', [total_refund, refund_mode, rid])
 
-        if sale['channel'] == 'local' and sale.get('cash_session_id'):
+        store_credit = None
+        if refund_mode == 'store_credit' and total_refund > 0:
+            store_credit = _issue_store_credit(
+                sale=sale,
+                return_id=rid,
+                amount_ars=total_refund,
+                user_id=getattr(request.user, 'id', None),
+                note=_clean_text(data.get('reason')) or f'Credito por devolucion #{rid}',
+            )
+            exec_void(
+                'UPDATE retail_returns SET store_credit_id=%s WHERE id=%s',
+                [_to_int(store_credit.get('id'), 'store_credit_id'), rid],
+            )
+
+        if sale['channel'] == 'local':
+            _tiendanube_schedule_local_variants_sync(
+                touched_variant_ids,
+                sync_price=False,
+                sync_stock=True,
+                reason='sale_return_local',
+            )
+
+        if refund_mode == 'cash_return' and sale['channel'] == 'local' and sale.get('cash_session_id'):
             _register_cash_out(
                 sale['cash_session_id'],
                 sale,
@@ -4538,14 +5938,15 @@ class RetailVentaDevolverView(APIView):
             )
 
         if requires_credit_note:
+            invoice_row = q('SELECT id FROM retail_invoices WHERE sale_id=%s', [venta_id], one=True) or {}
             exec_void(
                 '''
                 INSERT INTO retail_invoice_credit_notes(
-                  sale_id, return_id, status, amount_total_ars, created_by
+                  sale_id, return_id, invoice_id, status, amount_total_ars, created_by
                 )
-                VALUES (%s,%s,'pending',%s,%s)
+                VALUES (%s,%s,%s,'pending',%s,%s)
                 ''',
-                [venta_id, rid, total_refund, getattr(request.user, 'id', None)],
+                [venta_id, rid, invoice_row.get('id'), total_refund, getattr(request.user, 'id', None)],
             )
 
         ret = q(
@@ -4560,8 +5961,158 @@ class RetailVentaDevolverView(APIView):
         )
         ret_items = q('SELECT * FROM retail_return_items WHERE return_id=%s ORDER BY id', [rid]) or []
         ret['items'] = ret_items
+        ret['store_credit'] = store_credit
         ret['sale'] = _load_venta(venta_id, include_costs=_can_view_costs(request))
         return Response(ret, status=201)
+
+
+class RetailVentaOperacionSolicitudView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, venta_id):
+        _require_staff(request)
+        data = request.data or {}
+        operation_code = (_clean_text(data.get('operation_code')) or '').lower()
+        operation = OPERATION_REQUEST_CODES.get(operation_code)
+        if not operation:
+            raise ValidationError('operation_code invalido (cancel_sale|money_return)')
+
+        reason = _clean_text(data.get('reason'))
+        if not reason:
+            raise ValidationError('reason requerido')
+
+        sale = q(
+            '''
+            SELECT id, sale_number, status, channel, total_ars, created_at, customer_snapshot
+            FROM retail_sales
+            WHERE id=%s
+            ''',
+            [venta_id],
+            one=True,
+        )
+        if not sale:
+            return Response({'detail': 'Venta no encontrada'}, status=404)
+
+        if user_has_permission(request, operation['permission_code']):
+            raise ValidationError('Tu usuario ya tiene permisos para ejecutar esta operacion sin solicitud.')
+
+        admins = q(
+            '''
+            SELECT id, nombre, email
+            FROM users
+            WHERE rol='admin'
+              AND activo=TRUE
+              AND COALESCE(TRIM(email),'') <> ''
+            ORDER BY id
+            '''
+        ) or []
+        if not admins:
+            return Response(
+                {
+                    'ok': False,
+                    'code': 'no_admin_recipients',
+                    'detail': 'No hay administradores activos con email configurado para recibir solicitudes.',
+                },
+                status=409,
+            )
+
+        requester = getattr(request, 'user', None)
+        requester_id = getattr(requester, 'id', None)
+        requester_name = _clean_text(getattr(requester, 'nombre', None)) or f'Usuario #{requester_id or "s/n"}'
+        requester_role = _clean_text(getattr(requester, 'rol', None)) or 'desconocido'
+        requested_at = timezone.now().isoformat()
+        company = (getattr(settings, 'COMPANY_NAME', '') or 'Las Chulas').strip()
+        sale_number = _clean_text(sale.get('sale_number')) or f"#{sale.get('id')}"
+        customer_snapshot = _json_any(sale.get('customer_snapshot')) or {}
+        sale_customer_name = _clean_text(customer_snapshot.get('name'))
+        sale_total = _to_decimal(sale.get('total_ars') or 0, 'total_ars', allow_none=True) or Decimal('0')
+        sale_total_txt = str(sale_total.quantize(TWO_DEC, rounding=ROUND_HALF_UP))
+        subject = f"{company} - Solicitud: {operation['label']} ({sale_number})"
+        text_body = (
+            f"Se registro una solicitud operativa.\n\n"
+            f"Operacion: {operation['label']} ({operation_code})\n"
+            f"Venta: {sale_number} (id={sale.get('id')})\n"
+            f"Estado venta: {sale.get('status')}\n"
+            f"Canal: {sale.get('channel')}\n"
+            f"Cliente: {sale_customer_name or '-'}\n"
+            f"Total ARS: {sale_total_txt}\n"
+            f"Solicitante: {requester_name} (id={requester_id}, rol={requester_role})\n"
+            f"Fecha solicitud: {requested_at}\n"
+            f"Motivo:\n{reason}\n"
+        )
+        html_body = (
+            '<p>Se registro una solicitud operativa.</p>'
+            f"<p><strong>Operacion:</strong> {operation['label']} (<code>{operation_code}</code>)</p>"
+            f"<p><strong>Venta:</strong> {sale_number} (id={sale.get('id')})<br>"
+            f"<strong>Estado:</strong> {sale.get('status')}<br>"
+            f"<strong>Canal:</strong> {sale.get('channel')}<br>"
+            f"<strong>Cliente:</strong> {sale_customer_name or '-'}<br>"
+            f"<strong>Total ARS:</strong> {sale_total_txt}</p>"
+            f"<p><strong>Solicitante:</strong> {requester_name} (id={requester_id}, rol={requester_role})<br>"
+            f"<strong>Fecha solicitud:</strong> {requested_at}</p>"
+            f"<p><strong>Motivo:</strong><br>{reason}</p>"
+        )
+
+        deliveries = []
+        for admin in admins:
+            email = _clean_text(admin.get('email'))
+            if not email:
+                continue
+            result = send_mail_checked(
+                subject,
+                text_body,
+                email,
+                html_body=html_body,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+            )
+            item = {
+                'admin_id': admin.get('id'),
+                'admin_name': admin.get('nombre') or '',
+                'email': email,
+                'ok': bool(result.get('ok')),
+                'status': int(result.get('status') or 0),
+                'detail': result.get('detail') or '',
+            }
+            if result.get('error_code'):
+                item['error_code'] = result.get('error_code')
+            if result.get('reason'):
+                item['reason'] = result.get('reason')
+            deliveries.append(item)
+
+        sent_count = sum(1 for item in deliveries if item.get('ok'))
+        failed_count = max(0, len(deliveries) - sent_count)
+        payload = {
+            'ok': sent_count > 0,
+            'operation_code': operation_code,
+            'operation_label': operation['label'],
+            'sale': {
+                'id': sale.get('id'),
+                'sale_number': sale_number,
+                'status': sale.get('status'),
+                'channel': sale.get('channel'),
+                'total_ars': sale_total_txt,
+            },
+            'requested_by': {
+                'id': requester_id,
+                'nombre': requester_name,
+                'rol': requester_role,
+            },
+            'requested_at': requested_at,
+            'delivery_summary': {
+                'total': len(deliveries),
+                'sent': sent_count,
+                'failed': failed_count,
+            },
+            'deliveries': deliveries,
+        }
+        if sent_count < 1:
+            payload['detail'] = 'No se pudo enviar la solicitud por mail a ningun administrador.'
+            return Response(payload, status=502)
+        if failed_count > 0:
+            payload['detail'] = 'Solicitud enviada parcialmente. Revisa destinatarios fallidos.'
+            return Response(payload, status=201)
+        payload['detail'] = 'Solicitud enviada correctamente a administradores.'
+        return Response(payload, status=201)
 
 
 class RetailVentaCambiarView(APIView):
@@ -4599,6 +6150,7 @@ class RetailVentaCambiarView(APIView):
         raw_items = data.get('items')
         if not isinstance(raw_items, list) or not raw_items:
             raise ValidationError('items debe ser una lista no vacia')
+        settlement = _normalize_exchange_settlement(data.get('settlement'))
 
         parsed = []
         for row in raw_items:
@@ -4638,9 +6190,10 @@ class RetailVentaCambiarView(APIView):
         exchange_id = exec_returning(
             '''
             INSERT INTO retail_exchanges(
-              sale_id, status, reason, processed_by, warranty_type, warranty_override, warranty_snapshot
+              sale_id, status, reason, processed_by, warranty_type, warranty_override, warranty_snapshot,
+              settlement_mode, settlement_amount_ars
             )
-            VALUES (%s,'confirmed',%s,%s,%s,%s,%s::jsonb)
+            VALUES (%s,'confirmed',%s,%s,%s,%s,%s::jsonb,%s,%s)
             RETURNING id
             ''',
             [
@@ -4650,8 +6203,11 @@ class RetailVentaCambiarView(APIView):
                 warranty_type,
                 bool(override_out_of_warranty and (not warranty_in_window)),
                 json.dumps(warranty_snapshot),
+                settlement.get('mode'),
+                settlement.get('amount_ars'),
             ],
         )
+        touched_variant_ids = []
 
         for item in parsed:
             sale_item = by_item[item['sale_item_id']]
@@ -4756,6 +6312,23 @@ class RetailVentaCambiarView(APIView):
                     _to_decimal(sale_item.get('unit_price_final_ars') or 0, 'unit_price_final_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
                 ],
             )
+            touched_variant_ids.append(variant_from['id'])
+            touched_variant_ids.append(variant_to['id'])
+
+        if sale['channel'] == 'local':
+            _tiendanube_schedule_local_variants_sync(
+                touched_variant_ids,
+                sync_price=False,
+                sync_stock=True,
+                reason='sale_exchange_local',
+            )
+
+        settlement_result = _apply_exchange_settlement(
+            request=request,
+            sale=sale,
+            exchange_id=exchange_id,
+            settlement=settlement,
+        )
 
         exchange = q(
             '''
@@ -4781,6 +6354,11 @@ class RetailVentaCambiarView(APIView):
             ''',
             [exchange_id],
         ) or []
+        if exchange.get('store_credit_id'):
+            exchange['store_credit'] = q('SELECT * FROM retail_store_credits WHERE id=%s', [exchange.get('store_credit_id')], one=True)
+        else:
+            exchange['store_credit'] = None
+        exchange['settlement'] = settlement_result
         exchange['sale'] = _load_venta(venta_id, include_costs=_can_view_costs(request))
         return Response(exchange, status=201)
 
@@ -4790,7 +6368,224 @@ def _mock_enabled():
     return val in ('1', 'true', 'yes', 'on')
 
 
-def _emitir_factura(venta_id, request):
+def _arca_messages_to_error(messages):
+    rows = messages or []
+    if not rows:
+        return None, None
+    first = rows[0] or {}
+    code = _clean_text(first.get('code'))
+    parts = []
+    for row in rows[:3]:
+        msg = _clean_text((row or {}).get('message'))
+        if msg:
+            parts.append(msg)
+    return code, (' | '.join(parts)[:1000] if parts else None)
+
+
+def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
+    pto_vta = _pto_vta_for_channel(cfg, sale.get('channel'))
+    cbte_tipo = _cbte_tipo_for_channel(cfg, sale.get('channel'))
+    customer_snapshot = _json_any(sale.get('customer_snapshot')) or {}
+    customer_doc = _normalize_customer_doc(customer_snapshot.get('doc'))
+    total_ars = _to_decimal(sale.get('total_ars') or 0, 'total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    request_payload = {
+        'sale_id': int(sale['id']),
+        'channel': sale.get('channel'),
+        'payment_method': sale.get('payment_method'),
+        'arca_env': cfg.get('arca_env'),
+        'pto_vta': pto_vta,
+        'cbte_tipo': cbte_tipo,
+        'total_ars': str(total_ars),
+        'issued_at': timezone.now().isoformat(),
+        'customer_doc': customer_snapshot.get('doc'),
+    }
+
+    if total_ars <= 0:
+        return {
+            'status': 'rejected',
+            'error_message': 'Monto de factura invalido',
+            'error_code': 'INVALID_AMOUNT',
+            'response': {'ok': False, 'reason': 'invalid_amount'},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': invoice.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+        }
+
+    if not customer_doc:
+        missing_doc_message = 'Factura ARCA requiere DNI/CUIT valido en customer_doc'
+        if missing_doc_policy == 'manual_review':
+            return {
+                'status': 'manual_review',
+                'error_message': missing_doc_message,
+                'error_code': 'MISSING_CUSTOMER_DOC',
+                'response': {'ok': False, 'reason': 'missing_customer_doc'},
+                'request_payload': request_payload,
+                'pto_vta': pto_vta,
+                'cbte_tipo': cbte_tipo,
+                'cbte_nro': invoice.get('cbte_nro'),
+                'cae': None,
+                'cae_due_date': None,
+            }
+        raise ValidationError(missing_doc_message)
+
+    request_payload['customer_doc'] = customer_doc
+    if _mock_enabled():
+        cae = f"{random.randint(10000000000000, 99999999999999)}"
+        cbte_nro = (_safe_int(invoice.get('cbte_nro')) or 0) + 1
+        return {
+            'status': 'authorized',
+            'error_message': None,
+            'error_code': None,
+            'response': {'mock': True, 'cae': cae, 'cbte_nro': cbte_nro},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': cbte_nro,
+            'cae': cae,
+            'cae_due_date': (timezone.localdate() + dt.timedelta(days=10)).isoformat(),
+        }
+
+    runtime_cfg = _arca_runtime_config(cfg)
+    auth = wsaa_get_ta(runtime_cfg)
+    auth_req = {'token': auth.get('token'), 'sign': auth.get('sign'), 'cuit': runtime_cfg.cuit}
+    _advisory_lock_sequence(pto_vta, cbte_tipo)
+    last = wsfe_comp_ultimo_autorizado(runtime_cfg, auth_req, pto_vta=pto_vta, cbte_tipo=cbte_tipo)
+    messages = list(last.get('errors') or [])
+    next_cbte = int(last.get('cbte_nro') or 0) + 1
+
+    wsfe_req = {
+        'pto_vta': pto_vta,
+        'cbte_tipo': cbte_tipo,
+        'cbte_nro': next_cbte,
+        'doc_tipo': customer_doc['doc_tipo'],
+        'doc_nro': customer_doc['doc_nro'],
+        'concepto': 1,
+        'cbte_fch': timezone.localdate().strftime('%Y%m%d'),
+        'imp_total': str(total_ars),
+        'imp_tot_conc': '0.00',
+        'imp_neto': str(total_ars),
+        'imp_op_ex': '0.00',
+        'imp_iva': '0.00',
+        'imp_trib': '0.00',
+        'mon_id': 'PES',
+        'mon_cotiz': '1',
+        'condicion_iva_receptor_id': DOC_CONDICION_IVA_RECEPTOR_DEFAULT,
+    }
+    request_payload['wsfe_request'] = wsfe_req
+
+    try:
+        fe_out = wsfe_cae_solicitar(runtime_cfg, auth_req, wsfe_req)
+    except ArcaRetryableError as exc:
+        consult = wsfe_comp_consultar(runtime_cfg, auth_req, pto_vta=pto_vta, cbte_tipo=cbte_tipo, cbte_nro=next_cbte)
+        consult_cae = _clean_text(consult.get('cae'))
+        if consult.get('found') and consult_cae:
+            response_payload = {'recovered_by_consulta': True, 'consulta': consult, 'error': str(exc)}
+            return {
+                'status': 'authorized',
+                'error_message': None,
+                'error_code': None,
+                'response': response_payload,
+                'request_payload': request_payload,
+                'pto_vta': pto_vta,
+                'cbte_tipo': cbte_tipo,
+                'cbte_nro': consult.get('cbte_nro') or next_cbte,
+                'cae': consult_cae,
+                'cae_due_date': _fmt_compact_date(consult.get('cae_due_date')),
+            }
+        return {
+            'status': 'retry',
+            'error_message': _to_arca_error_message(exc),
+            'error_code': _to_arca_error_code(exc),
+            'response': {'ok': False, 'exception': str(exc), 'consulta': consult},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': next_cbte,
+            'cae': None,
+            'cae_due_date': None,
+        }
+    except ArcaConfigError as exc:
+        return {
+            'status': 'manual_review',
+            'error_message': _to_arca_error_message(exc),
+            'error_code': _to_arca_error_code(exc),
+            'response': {'ok': False, 'exception': str(exc), 'payload': getattr(exc, 'payload', {})},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': next_cbte,
+            'cae': None,
+            'cae_due_date': None,
+        }
+    except ArcaError as exc:
+        return {
+            'status': 'rejected',
+            'error_message': _to_arca_error_message(exc),
+            'error_code': _to_arca_error_code(exc),
+            'response': {'ok': False, 'exception': str(exc), 'payload': getattr(exc, 'payload', {})},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': next_cbte,
+            'cae': None,
+            'cae_due_date': None,
+        }
+
+    messages.extend(fe_out.get('messages') or [])
+    outcome_code, outcome_message = _arca_messages_to_error(messages)
+    result_code = (_clean_text(fe_out.get('resultado')) or '').upper()
+    cae = _clean_text(fe_out.get('cae'))
+    due = _fmt_compact_date(fe_out.get('cae_due_date'))
+    response_payload = {
+        'resultado': result_code,
+        'messages': messages,
+        'raw': fe_out.get('raw_response'),
+    }
+
+    if result_code == 'A' and cae:
+        return {
+            'status': 'authorized',
+            'error_message': None,
+            'error_code': None,
+            'response': response_payload,
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
+            'cae': cae,
+            'cae_due_date': due,
+        }
+    if result_code == 'R':
+        return {
+            'status': 'rejected',
+            'error_message': outcome_message or 'Comprobante rechazado por ARCA',
+            'error_code': outcome_code,
+            'response': response_payload,
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
+            'cae': None,
+            'cae_due_date': None,
+        }
+    return {
+        'status': 'manual_review',
+        'error_message': outcome_message or 'Respuesta ARCA en estado no concluyente',
+        'error_code': outcome_code,
+        'response': response_payload,
+        'request_payload': request_payload,
+        'pto_vta': pto_vta,
+        'cbte_tipo': cbte_tipo,
+        'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
+        'cae': cae,
+        'cae_due_date': due,
+    }
+
+
+def _emitir_factura_core(venta_id, missing_doc_policy='raise'):
     with transaction.atomic():
         sale = q('SELECT * FROM retail_sales WHERE id=%s FOR UPDATE', [venta_id], one=True)
         if not sale:
@@ -4811,82 +6606,28 @@ def _emitir_factura(venta_id, request):
             invoice = q('SELECT * FROM retail_invoices WHERE id=%s FOR UPDATE', [iid], one=True)
 
         if invoice['invoice_mode'] == 'internal' or invoice['status'] == 'not_required':
-            return _load_venta(venta_id, include_costs=_can_view_costs(request))
+            return {'invoice': invoice, 'sale': sale}
 
         if invoice['status'] == 'authorized':
-            return _load_venta(venta_id, include_costs=_can_view_costs(request))
+            return {'invoice': invoice, 'sale': sale}
 
         cfg = _load_settings()
-        payload = {
-            'sale_id': venta_id,
-            'total_ars': str(sale.get('total_ars') or 0),
-            'payment_method': sale.get('payment_method'),
-            'channel': sale.get('channel'),
-            'arca_env': cfg['arca_env'],
-            'issued_at': timezone.now().isoformat(),
-        }
-
         attempts = int(invoice.get('attempts') or 0) + 1
-        if _mock_enabled():
-            cae = f"{random.randint(10000000000000, 99999999999999)}"
-            out = {
-                'status': 'authorized',
-                'cae': cae,
-                'cbte_nro': (invoice.get('cbte_nro') or 0) + 1,
-                'response': {'mock': True, 'cae': cae},
-            }
-        else:
-            ws_url = _clean_text(getattr(settings, 'ARCA_WSFE_URL', ''))
-            if not ws_url:
-                out = {
-                    'status': 'retry',
-                    'error_message': 'ARCA_WSFE_URL no configurado para modo real',
-                    'response': {'ok': False, 'reason': 'missing_ws_url'},
-                }
-            else:
-                try:
-                    resp = requests.post(ws_url, json=payload, timeout=25)
-                    status_code = int(resp.status_code)
-                    body = resp.text
-                    if 200 <= status_code < 300:
-                        parsed = _json(body)
-                        cae = _clean_text(parsed.get('cae'))
-                        if cae:
-                            out = {
-                                'status': 'authorized',
-                                'cae': cae,
-                                'cbte_nro': parsed.get('cbte_nro') or (invoice.get('cbte_nro') or 0) + 1,
-                                'response': parsed,
-                            }
-                        else:
-                            out = {
-                                'status': 'retry',
-                                'error_message': 'Respuesta ARCA sin CAE',
-                                'response': {'raw': body[:2000]},
-                            }
-                    else:
-                        out = {
-                            'status': 'retry',
-                            'error_message': f'ARCA HTTP {status_code}',
-                            'response': {'raw': body[:2000]},
-                        }
-                except Exception as exc:
-                    out = {
-                        'status': 'retry',
-                        'error_message': str(exc),
-                        'response': {'exception': str(exc)},
-                    }
+        outcome = _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy=missing_doc_policy)
 
         exec_void(
             '''
             UPDATE retail_invoices
             SET status=%s,
                 cae=%s,
+                cae_due_date=%s,
+                cbte_tipo=%s,
                 cbte_nro=%s,
                 pto_vta=%s,
                 amount_total_ars=%s,
                 request_payload=%s,
                 response_payload=%s,
+                error_code=%s,
                 error_message=%s,
                 attempts=%s,
                 last_attempt_at=NOW(),
@@ -4894,82 +6635,384 @@ def _emitir_factura(venta_id, request):
             WHERE id=%s
             ''',
             [
-                out.get('status') or 'retry',
-                out.get('cae'),
-                out.get('cbte_nro'),
-                cfg['arca_pto_vta_online'] if sale.get('channel') == 'online' else cfg['arca_pto_vta_store'],
+                outcome.get('status') or 'retry',
+                outcome.get('cae'),
+                _fmt_compact_date(outcome.get('cae_due_date')),
+                outcome.get('cbte_tipo'),
+                outcome.get('cbte_nro'),
+                outcome.get('pto_vta'),
                 sale.get('total_ars') or 0,
-                json.dumps(payload),
-                json.dumps(out.get('response') or {}),
-                out.get('error_message'),
+                json.dumps(outcome.get('request_payload') or {}),
+                json.dumps(outcome.get('response') or {}),
+                outcome.get('error_code'),
+                outcome.get('error_message'),
                 attempts,
                 invoice['id'],
             ],
         )
 
-        if out.get('status') in ('retry', 'rejected'):
-            _create_job('arca', 'invoice_issue', {'sale_id': venta_id}, status='pending', last_error=out.get('error_message'))
+        if outcome.get('status') == 'retry':
+            _ensure_arca_job('invoice_issue', {'sale_id': venta_id}, last_error=outcome.get('error_message'))
 
+        invoice = q('SELECT * FROM retail_invoices WHERE id=%s', [invoice['id']], one=True) or invoice
+        return {'invoice': invoice, 'sale': sale, 'outcome': outcome}
+
+
+def _emitir_factura(venta_id, request, missing_doc_policy='raise'):
+    _emitir_factura_core(venta_id, missing_doc_policy=missing_doc_policy)
     return _load_venta(venta_id, include_costs=_can_view_costs(request))
 
 
 def _emitir_nota_credito(venta_id, request):
-    with transaction.atomic():
-        sale = q('SELECT * FROM retail_sales WHERE id=%s FOR UPDATE', [venta_id], one=True)
-        if not sale:
-            raise ValidationError('Venta no encontrada')
+    _emitir_nota_credito_core(venta_id=venta_id)
+    return q(
+        'SELECT * FROM retail_invoice_credit_notes WHERE sale_id=%s ORDER BY id DESC',
+        [venta_id],
+    ) or []
 
+
+def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='manual_review'):
+    request_payload = {
+        'sale_id': int(sale['id']),
+        'credit_note_id': int(note['id']),
+        'issued_at': timezone.now().isoformat(),
+    }
+    base_invoice_tipo = _safe_int(invoice.get('cbte_tipo'))
+    base_invoice_nro = _safe_int(invoice.get('cbte_nro'))
+    base_invoice_pto = _safe_int(invoice.get('pto_vta'))
+
+    if not base_invoice_tipo or not base_invoice_nro or base_invoice_pto is None:
+        return {
+            'status': 'manual_review',
+            'error_message': 'Factura origen sin datos de comprobante para asociar nota de credito',
+            'error_code': 'MISSING_BASE_INVOICE',
+            'response': {'ok': False, 'reason': 'missing_base_invoice'},
+            'request_payload': request_payload,
+            'pto_vta': _pto_vta_for_channel(cfg, sale.get('channel')),
+            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, cfg),
+            'cbte_nro': note.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+        }
+
+    amount = _to_decimal(note.get('amount_total_ars') or 0, 'amount_total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    if amount <= 0:
+        return {
+            'status': 'rejected',
+            'error_message': 'Monto de nota de credito invalido',
+            'error_code': 'INVALID_AMOUNT',
+            'response': {'ok': False, 'reason': 'invalid_amount'},
+            'request_payload': request_payload,
+            'pto_vta': int(base_invoice_pto),
+            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, cfg),
+            'cbte_nro': note.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+        }
+
+    customer_snapshot = _json_any(sale.get('customer_snapshot')) or {}
+    customer_doc = _normalize_customer_doc(customer_snapshot.get('doc'))
+    if not customer_doc:
+        msg = 'Nota de credito ARCA requiere DNI/CUIT valido en customer_doc'
+        if missing_doc_policy != 'raise':
+            return {
+                'status': 'manual_review',
+                'error_message': msg,
+                'error_code': 'MISSING_CUSTOMER_DOC',
+                'response': {'ok': False, 'reason': 'missing_customer_doc'},
+                'request_payload': request_payload,
+                'pto_vta': int(base_invoice_pto),
+                'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, cfg),
+                'cbte_nro': note.get('cbte_nro'),
+                'cae': None,
+                'cae_due_date': None,
+            }
+        raise ValidationError(msg)
+
+    cbte_tipo = _credit_note_cbte_tipo_from_invoice(invoice, cfg)
+    pto_vta = int(base_invoice_pto)
+    request_payload.update(
+        {
+            'base_invoice': {
+                'cbte_tipo': int(base_invoice_tipo),
+                'cbte_nro': int(base_invoice_nro),
+                'pto_vta': int(base_invoice_pto),
+            },
+            'amount_total_ars': str(amount),
+            'customer_doc': customer_doc,
+            'cbte_tipo': cbte_tipo,
+            'pto_vta': pto_vta,
+        }
+    )
+
+    if _mock_enabled():
+        cae = f"{random.randint(10000000000000, 99999999999999)}"
+        cbte_nro = (_safe_int(note.get('cbte_nro')) or 0) + 1
+        return {
+            'status': 'authorized',
+            'error_message': None,
+            'error_code': None,
+            'response': {'mock': True, 'cae': cae, 'cbte_nro': cbte_nro},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': cbte_nro,
+            'cae': cae,
+            'cae_due_date': (timezone.localdate() + dt.timedelta(days=10)).isoformat(),
+        }
+
+    runtime_cfg = _arca_runtime_config(cfg)
+    auth = wsaa_get_ta(runtime_cfg)
+    auth_req = {'token': auth.get('token'), 'sign': auth.get('sign'), 'cuit': runtime_cfg.cuit}
+    _advisory_lock_sequence(pto_vta, cbte_tipo)
+    last = wsfe_comp_ultimo_autorizado(runtime_cfg, auth_req, pto_vta=pto_vta, cbte_tipo=cbte_tipo)
+    messages = list(last.get('errors') or [])
+    next_cbte = int(last.get('cbte_nro') or 0) + 1
+    wsfe_req = {
+        'pto_vta': pto_vta,
+        'cbte_tipo': cbte_tipo,
+        'cbte_nro': next_cbte,
+        'doc_tipo': customer_doc['doc_tipo'],
+        'doc_nro': customer_doc['doc_nro'],
+        'concepto': 1,
+        'cbte_fch': timezone.localdate().strftime('%Y%m%d'),
+        'imp_total': str(amount),
+        'imp_tot_conc': '0.00',
+        'imp_neto': str(amount),
+        'imp_op_ex': '0.00',
+        'imp_iva': '0.00',
+        'imp_trib': '0.00',
+        'mon_id': 'PES',
+        'mon_cotiz': '1',
+        'condicion_iva_receptor_id': DOC_CONDICION_IVA_RECEPTOR_DEFAULT,
+        'cbtes_asoc': [{'tipo': int(base_invoice_tipo), 'pto_vta': int(base_invoice_pto), 'nro': int(base_invoice_nro)}],
+    }
+    request_payload['wsfe_request'] = wsfe_req
+
+    try:
+        fe_out = wsfe_cae_solicitar(runtime_cfg, auth_req, wsfe_req)
+    except ArcaRetryableError as exc:
+        consult = wsfe_comp_consultar(runtime_cfg, auth_req, pto_vta=pto_vta, cbte_tipo=cbte_tipo, cbte_nro=next_cbte)
+        consult_cae = _clean_text(consult.get('cae'))
+        if consult.get('found') and consult_cae:
+            return {
+                'status': 'authorized',
+                'error_message': None,
+                'error_code': None,
+                'response': {'recovered_by_consulta': True, 'consulta': consult, 'error': str(exc)},
+                'request_payload': request_payload,
+                'pto_vta': pto_vta,
+                'cbte_tipo': cbte_tipo,
+                'cbte_nro': consult.get('cbte_nro') or next_cbte,
+                'cae': consult_cae,
+                'cae_due_date': _fmt_compact_date(consult.get('cae_due_date')),
+            }
+        return {
+            'status': 'retry',
+            'error_message': _to_arca_error_message(exc),
+            'error_code': _to_arca_error_code(exc),
+            'response': {'ok': False, 'exception': str(exc), 'consulta': consult},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': next_cbte,
+            'cae': None,
+            'cae_due_date': None,
+        }
+    except ArcaConfigError as exc:
+        return {
+            'status': 'manual_review',
+            'error_message': _to_arca_error_message(exc),
+            'error_code': _to_arca_error_code(exc),
+            'response': {'ok': False, 'exception': str(exc), 'payload': getattr(exc, 'payload', {})},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': next_cbte,
+            'cae': None,
+            'cae_due_date': None,
+        }
+    except ArcaError as exc:
+        return {
+            'status': 'rejected',
+            'error_message': _to_arca_error_message(exc),
+            'error_code': _to_arca_error_code(exc),
+            'response': {'ok': False, 'exception': str(exc), 'payload': getattr(exc, 'payload', {})},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': next_cbte,
+            'cae': None,
+            'cae_due_date': None,
+        }
+
+    messages.extend(fe_out.get('messages') or [])
+    outcome_code, outcome_message = _arca_messages_to_error(messages)
+    result_code = (_clean_text(fe_out.get('resultado')) or '').upper()
+    cae = _clean_text(fe_out.get('cae'))
+    due = _fmt_compact_date(fe_out.get('cae_due_date'))
+    response_payload = {
+        'resultado': result_code,
+        'messages': messages,
+        'raw': fe_out.get('raw_response'),
+    }
+    if result_code == 'A' and cae:
+        return {
+            'status': 'authorized',
+            'error_message': None,
+            'error_code': None,
+            'response': response_payload,
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
+            'cae': cae,
+            'cae_due_date': due,
+        }
+    if result_code == 'R':
+        return {
+            'status': 'rejected',
+            'error_message': outcome_message or 'Nota de credito rechazada por ARCA',
+            'error_code': outcome_code,
+            'response': response_payload,
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
+            'cae': None,
+            'cae_due_date': None,
+        }
+    return {
+        'status': 'manual_review',
+        'error_message': outcome_message or 'Respuesta ARCA no concluyente para nota de credito',
+        'error_code': outcome_code,
+        'response': response_payload,
+        'request_payload': request_payload,
+        'pto_vta': pto_vta,
+        'cbte_tipo': cbte_tipo,
+        'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
+        'cae': cae,
+        'cae_due_date': due,
+    }
+
+
+def _emitir_nota_credito_core(venta_id=None, credit_note_id=None, missing_doc_policy='manual_review'):
+    if not venta_id and not credit_note_id:
+        raise ValidationError('venta_id o credit_note_id requerido')
+
+    with transaction.atomic():
+        filters = []
+        params = []
+        if credit_note_id:
+            filters.append('cn.id=%s')
+            params.append(credit_note_id)
+        if venta_id:
+            filters.append('cn.sale_id=%s')
+            params.append(venta_id)
+
+        where_sql = ' AND '.join(filters) if filters else 'TRUE'
         rows = q(
-            '''
-            SELECT cn.*
+            f'''
+            SELECT cn.*, s.channel AS sale_channel, s.customer_snapshot, s.status AS sale_status,
+                   i.status AS invoice_status, i.cbte_tipo AS invoice_cbte_tipo, i.cbte_nro AS invoice_cbte_nro, i.pto_vta AS invoice_pto_vta
             FROM retail_invoice_credit_notes cn
-            WHERE cn.sale_id=%s AND cn.status IN ('pending','retry')
+            JOIN retail_sales s ON s.id=cn.sale_id
+            LEFT JOIN retail_invoices i ON i.sale_id=cn.sale_id
+            WHERE {where_sql}
+              AND cn.status IN ('pending','retry')
             ORDER BY cn.id
             FOR UPDATE
             ''',
-            [venta_id],
+            params,
         ) or []
         if not rows:
+            if credit_note_id:
+                raise ValidationError('Nota de credito no encontrada o no pendiente')
             raise ValidationError('No hay notas de credito pendientes para esta venta')
 
+        cfg = _load_settings()
+        updated_ids = []
         for row in rows:
-            if _mock_enabled():
-                status = 'authorized'
-                cae = f"{random.randint(10000000000000, 99999999999999)}"
-                response_payload = {'mock': True, 'cae': cae}
-                error_message = None
+            sale = {
+                'id': row['sale_id'],
+                'channel': row.get('sale_channel'),
+                'customer_snapshot': row.get('customer_snapshot'),
+                'status': row.get('sale_status'),
+            }
+            invoice = {
+                'cbte_tipo': row.get('invoice_cbte_tipo'),
+                'cbte_nro': row.get('invoice_cbte_nro'),
+                'pto_vta': row.get('invoice_pto_vta'),
+                'status': row.get('invoice_status'),
+                'channel': row.get('sale_channel'),
+            }
+            if (invoice.get('status') or '') != 'authorized':
+                outcome = {
+                    'status': 'manual_review',
+                    'error_message': 'Factura origen no autorizada para emitir nota de credito',
+                    'error_code': 'BASE_INVOICE_NOT_AUTHORIZED',
+                    'response': {'ok': False, 'reason': 'base_invoice_not_authorized'},
+                    'request_payload': {'credit_note_id': row['id'], 'sale_id': row['sale_id']},
+                    'pto_vta': invoice.get('pto_vta'),
+                    'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, cfg),
+                    'cbte_nro': row.get('cbte_nro'),
+                    'cae': None,
+                    'cae_due_date': None,
+                }
             else:
-                status = 'retry'
-                cae = None
-                response_payload = {'ok': False, 'detail': 'Implementar envio real WSFEv1 nota credito'}
-                error_message = 'Integracion real de nota de credito pendiente'
-                _create_job('arca', 'credit_note_issue', {'credit_note_id': row['id']}, status='pending', last_error=error_message)
+                outcome = _build_credit_note_outcome(cfg, sale, invoice, row, missing_doc_policy=missing_doc_policy)
 
+            attempts = int(row.get('attempts') or 0) + 1
             exec_void(
                 '''
                 UPDATE retail_invoice_credit_notes
                 SET status=%s,
+                    pto_vta=%s,
+                    cbte_tipo=%s,
+                    cbte_nro=%s,
                     cae=%s,
-                    cbte_nro=COALESCE(cbte_nro,0)+1,
+                    cae_due_date=%s,
+                    request_payload=%s,
                     response_payload=%s,
+                    error_code=%s,
                     error_message=%s,
-                    attempts=attempts+1,
+                    attempts=%s,
                     updated_at=NOW()
                 WHERE id=%s
                 ''',
-                [status, cae, json.dumps(response_payload), error_message, row['id']],
+                [
+                    outcome.get('status') or 'retry',
+                    outcome.get('pto_vta'),
+                    outcome.get('cbte_tipo'),
+                    outcome.get('cbte_nro'),
+                    outcome.get('cae'),
+                    _fmt_compact_date(outcome.get('cae_due_date')),
+                    json.dumps(outcome.get('request_payload') or {}),
+                    json.dumps(outcome.get('response') or {}),
+                    outcome.get('error_code'),
+                    outcome.get('error_message'),
+                    attempts,
+                    row['id'],
+                ],
             )
+
             if row.get('return_id'):
+                if outcome.get('status') == 'authorized':
+                    ret_status = 'issued'
+                elif outcome.get('status') == 'retry':
+                    ret_status = 'pending'
+                else:
+                    ret_status = 'manual_review'
                 exec_void(
                     'UPDATE retail_returns SET credit_note_status=%s, updated_at=NOW() WHERE id=%s',
-                    ['issued' if status == 'authorized' else 'manual_review', row['return_id']],
+                    [ret_status, row['return_id']],
                 )
 
-    out = q(
-        'SELECT * FROM retail_invoice_credit_notes WHERE sale_id=%s ORDER BY id DESC',
-        [venta_id],
-    ) or []
-    return out
+            if outcome.get('status') == 'retry':
+                _ensure_arca_job('credit_note_issue', {'credit_note_id': row['id']}, last_error=outcome.get('error_message'))
+            updated_ids.append(int(row['id']))
+
+    return updated_ids
 
 
 class RetailFacturacionEmitirView(APIView):
@@ -5107,35 +7150,909 @@ def _tiendanube_cfg(payload=None):
     }
 
 
+def _tiendanube_headers(cfg):
+    return {
+        'Authentication': f"bearer {cfg['access_token']}",
+        'User-Agent': cfg['user_agent'],
+        'Content-Type': 'application/json',
+    }
+
+
+def _tiendanube_request(cfg, method, path, payload=None, timeout_cap=None, allow_404=False):
+    if not cfg.get('store_id') or not cfg.get('access_token'):
+        raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
+
+    rel_path = str(path or '').lstrip('/')
+    url = f"{cfg['api_base']}/{cfg['store_id']}/{rel_path}"
+    timeout = int(cfg.get('timeout') or 15)
+    if timeout_cap is not None:
+        try:
+            timeout = min(timeout, max(1, int(timeout_cap)))
+        except (TypeError, ValueError):
+            timeout = max(1, timeout)
+
+    retries = 3
+    resp = None
+    for attempt in range(retries + 1):
+        try:
+            resp = requests.request(
+                str(method or 'GET').upper(),
+                url,
+                headers=_tiendanube_headers(cfg),
+                json=payload if payload is not None else None,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            raise ValidationError(f'Error consultando Tienda Nube: {exc}')
+
+        status_code = int(resp.status_code)
+        if status_code != 429:
+            break
+        if attempt >= retries:
+            break
+
+        retry_after = _clean_text(resp.headers.get('Retry-After'))
+        delay_secs = None
+        if retry_after:
+            try:
+                delay_secs = max(0.25, float(retry_after))
+            except (TypeError, ValueError):
+                delay_secs = None
+        if delay_secs is None:
+            delay_secs = min(8.0, 1.0 * (2 ** attempt))
+        security_logger.warning(
+            "tiendanube_rate_limit_retry path=%s attempt=%s wait=%.2fs",
+            rel_path,
+            attempt + 1,
+            delay_secs,
+        )
+        time.sleep(delay_secs)
+
+    if resp is None:
+        raise ValidationError('No se obtuvo respuesta de Tienda Nube')
+
+    status_code = int(resp.status_code)
+    parsed = _json_any(resp.text)
+    if allow_404 and status_code == 404:
+        return None
+    if not (200 <= status_code < 300):
+        desc = None
+        if isinstance(parsed, dict):
+            desc = _clean_text(parsed.get('description') or parsed.get('message'))
+        if status_code == 429:
+            body = desc or 'Rate limit alcanzado en Tienda Nube'
+        else:
+            body = desc or (resp.text or '')[:500] or f'HTTP {status_code}'
+        raise ValidationError(f'Tienda Nube HTTP {status_code}: {body}')
+    return parsed if parsed is not None else {}
+
+
+def _normalize_webhook_url(url):
+    raw = _clean_text(url)
+    if not raw:
+        return ''
+    return raw.rstrip('/').lower()
+
+
+def _public_web_url():
+    raw = _clean_text(getattr(settings, 'PUBLIC_WEB_URL', ''))
+    if not raw:
+        raw = _clean_text(getattr(settings, 'FRONTEND_ORIGIN', ''))
+    return raw.rstrip('/')
+
+
+def _tiendanube_desired_webhooks():
+    base = _public_web_url()
+    if not base:
+        raise ValidationError('PUBLIC_WEB_URL no configurado para registrar webhooks Tienda Nube')
+    parsed = urlparse(base if '://' in base else f'https://{base}')
+    host = (parsed.hostname or '').lower()
+    if (parsed.scheme or '').lower() != 'https':
+        raise ValidationError('PUBLIC_WEB_URL debe usar https para webhooks de Tienda Nube')
+    if host in ('localhost', '127.0.0.1'):
+        raise ValidationError('PUBLIC_WEB_URL debe ser publico (no localhost) para webhooks de Tienda Nube')
+    return [
+        {'event': 'order/paid', 'url': f'{base}/api/retail/online/webhooks/orden-pagada/'},
+        {'event': 'order/cancelled', 'url': f'{base}/api/retail/online/webhooks/orden-cancelada/'},
+        {'event': 'order/updated', 'url': f'{base}/api/retail/online/webhooks/orden-actualizada/'},
+        {'event': 'product/created', 'url': f'{base}/api/retail/online/webhooks/catalogo/'},
+        {'event': 'product/updated', 'url': f'{base}/api/retail/online/webhooks/catalogo/'},
+        {'event': 'product/deleted', 'url': f'{base}/api/retail/online/webhooks/catalogo/'},
+    ]
+
+
+def _tiendanube_ensure_webhooks(cfg):
+    targets = _tiendanube_desired_webhooks()
+    existing_raw = _tiendanube_request(cfg, 'GET', 'webhooks', timeout_cap=20)
+    existing = [item for item in (existing_raw if isinstance(existing_raw, list) else []) if isinstance(item, dict)]
+
+    existing_pairs = set()
+    for item in existing:
+        event = _clean_text(item.get('event')).lower()
+        url = _normalize_webhook_url(item.get('url'))
+        if event and url:
+            existing_pairs.add((event, url))
+
+    created = 0
+    already_present = 0
+    failed = 0
+    errors = []
+
+    for target in targets:
+        event = _clean_text(target.get('event')).lower()
+        url = _normalize_webhook_url(target.get('url'))
+        if not event or not url:
+            continue
+        key = (event, url)
+        if key in existing_pairs:
+            already_present += 1
+            continue
+        try:
+            _tiendanube_request(cfg, 'POST', 'webhooks', payload={'event': event, 'url': target.get('url')}, timeout_cap=20)
+            created += 1
+            existing_pairs.add(key)
+        except Exception as exc:
+            failed += 1
+            errors.append(f'{event}: {exc}')
+
+    dedup_errors = []
+    seen = set()
+    for msg in errors:
+        txt = _clean_text(msg)
+        if not txt:
+            continue
+        key = txt.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup_errors.append(txt)
+
+    return {
+        'ok': failed == 0,
+        'targets': len(targets),
+        'created': created,
+        'already_present': already_present,
+        'failed': failed,
+        'errors': dedup_errors[:20],
+    }
+
+
 def _tiendanube_fetch_order(order_id, webhook_payload=None):
     oid = _clean_text(order_id)
     if not oid:
         raise ValidationError('order_id invalido')
 
     cfg = _tiendanube_cfg(webhook_payload)
-    if not cfg.get('store_id') or not cfg.get('access_token'):
-        raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
-
-    url = f"{cfg['api_base']}/{cfg['store_id']}/orders/{oid}"
-    headers = {
-        'Authentication': f"bearer {cfg['access_token']}",
-        'User-Agent': cfg['user_agent'],
-        'Content-Type': 'application/json',
-    }
-    try:
-        resp = requests.get(url, headers=headers, timeout=min(10, cfg['timeout']))
-    except Exception as exc:
-        raise ValidationError(f'Error consultando orden en Tienda Nube: {exc}')
-
-    status_code = int(resp.status_code)
-    body = resp.text
-    if not (200 <= status_code < 300):
-        raise ValidationError(f'Tienda Nube HTTP {status_code}: {body[:500]}')
-
-    data = _json(body)
+    data = _tiendanube_request(cfg, 'GET', f'orders/{oid}', timeout_cap=10)
     if not isinstance(data, dict):
         raise ValidationError('Respuesta Tienda Nube invalida')
     return data
+
+
+def _tiendanube_lookup_variant_ids_by_sku(cfg, sku):
+    sku_clean = _clean_text(sku)
+    if not sku_clean:
+        return {'product_id': None, 'variant_id': None}
+
+    raw = _tiendanube_request(cfg, 'GET', f"products/sku/{quote(sku_clean, safe='')}", timeout_cap=10, allow_404=True)
+    if raw is None:
+        return {'product_id': None, 'variant_id': None}
+
+    products = []
+    if isinstance(raw, dict):
+        products = [raw]
+    elif isinstance(raw, list):
+        products = [item for item in raw if isinstance(item, dict)]
+    if not products:
+        return {'product_id': None, 'variant_id': None}
+
+    fallback_product_id = None
+    fallback_variant_id = None
+    for product in products:
+        product_id = _safe_int(product.get('id'))
+        variants = product.get('variants')
+        if not isinstance(variants, list):
+            continue
+        for var in variants:
+            if not isinstance(var, dict):
+                continue
+            vsku = _clean_text(var.get('sku'))
+            if vsku and vsku.lower() == sku_clean.lower():
+                return {'product_id': product_id, 'variant_id': _safe_int(var.get('id'))}
+        if fallback_variant_id is None and len(variants) == 1 and isinstance(variants[0], dict):
+            fallback_product_id = product_id
+            fallback_variant_id = _safe_int(variants[0].get('id'))
+
+    return {'product_id': fallback_product_id, 'variant_id': fallback_variant_id}
+
+
+def _tiendanube_dedup_errors(messages):
+    out = []
+    seen = set()
+    for msg in messages or []:
+        txt = _clean_text(msg)
+        if not txt:
+            continue
+        key = txt.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(txt)
+    return out
+
+
+def _tiendanube_option_token(value):
+    raw = _clean_text(value) or ''
+    if not raw:
+        return ''
+    normalized = unicodedata.normalize('NFKD', raw)
+    ascii_text = normalized.encode('ascii', 'ignore').decode('ascii')
+    return re.sub(r'[^a-z0-9]+', '', ascii_text.lower())
+
+
+def _tiendanube_extract_size_color(option_values):
+    size_tokens = {'talle', 'size', 'tamano'}
+    color_tokens = {'color', 'colour'}
+    out = {'size': None, 'color': None}
+    for opt in option_values or []:
+        if not isinstance(opt, dict):
+            continue
+        value = _clean_text(opt.get('option_value') or opt.get('value'))
+        if not value:
+            continue
+        code_token = _tiendanube_option_token(opt.get('attribute_code'))
+        name_token = _tiendanube_option_token(opt.get('attribute_name'))
+        if (code_token in size_tokens or name_token in size_tokens) and not out['size']:
+            out['size'] = value
+            continue
+        if (code_token in color_tokens or name_token in color_tokens) and not out['color']:
+            out['color'] = value
+            continue
+    return out
+
+
+def _tiendanube_extract_variant_attributes(option_values):
+    size_tokens = {'talle', 'size', 'tamano'}
+    color_tokens = {'color', 'colour'}
+    out = {'color': None, 'attributes': []}
+    seen = set()
+
+    for opt in option_values or []:
+        if not isinstance(opt, dict):
+            continue
+
+        value = _clean_text(opt.get('option_value') or opt.get('value'))
+        if not value:
+            continue
+
+        raw_code = _clean_text(opt.get('attribute_code'))
+        raw_name = _clean_text(opt.get('attribute_name'))
+        code_token = _tiendanube_option_token(raw_code)
+        name_token = _tiendanube_option_token(raw_name)
+        token = code_token or name_token
+
+        if code_token in color_tokens or name_token in color_tokens:
+            if not out['color']:
+                out['color'] = value
+            continue
+
+        display_name = raw_name or raw_code
+        if not display_name:
+            continue
+        if code_token in size_tokens or name_token in size_tokens:
+            display_name = 'Talle'
+
+        key = token or _tiendanube_option_token(display_name)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+
+        out['attributes'].append({'name': display_name, 'value': value})
+
+    return out
+
+
+def _tiendanube_product_name_with_color(base_name, color_value):
+    name = _clean_text(base_name) or 'Producto RH'
+    color = _clean_text(color_value)
+    if not color:
+        return name
+    name_token = _tiendanube_option_token(name)
+    color_token = _tiendanube_option_token(color)
+    if color_token and color_token in name_token:
+        return name
+    return f'{name} {color}'.strip()
+
+
+def _tiendanube_build_create_product_payload_from_local_variant(local_variant):
+    row = local_variant if isinstance(local_variant, dict) else {}
+    sku = _clean_text(row.get('sku'))
+    if not sku:
+        raise ValidationError('Variante local sin SKU para crear en Tienda Nube')
+
+    options = row.get('option_values') or []
+    attributes_info = _tiendanube_extract_variant_attributes(options)
+    name_base = _clean_text(row.get('producto')) or _clean_text(row.get('display_name')) or f"Producto RH {row.get('id') or _random_suffix(4)}"
+    product_name = _tiendanube_product_name_with_color(name_base, attributes_info.get('color'))
+
+    price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
+    cost = _to_decimal(row.get('cost_avg_ars') or 0, 'cost_avg_ars', allow_none=True) or Decimal('0')
+    if price < 0:
+        price = Decimal('0')
+    if cost < 0:
+        cost = Decimal('0')
+    stock = max(0, int(_safe_int(row.get('stock_on_hand')) or 0))
+
+    variant_payload = {
+        'sku': sku,
+        'price': str(price.quantize(TWO_DEC, rounding=ROUND_HALF_UP)),
+        'stock': stock,
+    }
+    if cost > 0:
+        variant_payload['cost'] = str(cost.quantize(TWO_DEC, rounding=ROUND_HALF_UP))
+    barcode = _clean_text(row.get('barcode_internal'))
+    if barcode:
+        variant_payload['barcode'] = barcode
+
+    payload = {
+        'name': {'es': product_name},
+        'published': bool(row.get('active')),
+        'variants': [variant_payload],
+    }
+    attrs = attributes_info.get('attributes') or []
+    if attrs:
+        payload['attributes'] = [{'es': item['name']} for item in attrs]
+        variant_payload['values'] = [{'es': item['value']} for item in attrs]
+
+    return payload
+
+
+def _tiendanube_pick_variant_id_by_sku(remote_product, sku):
+    sku_clean = _clean_text(sku)
+    fallback = None
+    for variant in _tiendanube_listify((remote_product or {}).get('variants')):
+        if not isinstance(variant, dict):
+            continue
+        vid = _safe_int(variant.get('id'))
+        if not vid:
+            continue
+        if fallback is None:
+            fallback = vid
+        vsku = _clean_text(variant.get('sku'))
+        if sku_clean and vsku and vsku.lower() == sku_clean.lower():
+            return vid
+    return fallback
+
+
+def _tiendanube_create_remote_product_for_local_variant(cfg, local_variant):
+    payload = _tiendanube_build_create_product_payload_from_local_variant(local_variant)
+    created = _tiendanube_request(cfg, 'POST', 'products', payload=payload, timeout_cap=20)
+    created_product = created if isinstance(created, dict) else {}
+    product_id = _safe_int(created_product.get('id'))
+    variant_id = _tiendanube_pick_variant_id_by_sku(created_product, _clean_text(local_variant.get('sku')))
+
+    if not (product_id and variant_id):
+        mapped = _tiendanube_lookup_variant_ids_by_sku(cfg, _clean_text(local_variant.get('sku')))
+        product_id = product_id or _safe_int(mapped.get('product_id'))
+        variant_id = variant_id or _safe_int(mapped.get('variant_id'))
+    if not (product_id and variant_id):
+        raise ValidationError('No se pudo obtener mapping remoto despues de crear producto en Tienda Nube')
+
+    return {'product_id': product_id, 'variant_id': variant_id}
+
+
+def _tiendanube_ensure_rows_remote_mapping(cfg, rows, *, reason='sync'):
+    link_info = _tiendanube_autolink_rows_by_sku(cfg, rows)
+    errors = list(link_info.get('errors') or [])
+    created_remote = 0
+    creation_failed = 0
+
+    for row in rows or []:
+        variant_id_local = _safe_int((row or {}).get('id'))
+        if not variant_id_local:
+            continue
+        if _safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id')):
+            continue
+        try:
+            local_variant = _load_variante(variant_id_local, include_costs=True)
+            if not local_variant:
+                raise ValidationError(f'Variante local {variant_id_local} no encontrada')
+            created_map = _tiendanube_create_remote_product_for_local_variant(cfg, local_variant)
+            product_id_remote = _safe_int(created_map.get('product_id'))
+            variant_id_remote = _safe_int(created_map.get('variant_id'))
+            if not product_id_remote or not variant_id_remote:
+                raise ValidationError('Respuesta invalida al crear producto remoto')
+            exec_void(
+                '''
+                UPDATE retail_product_variants
+                SET tiendanube_product_id=%s,
+                    tiendanube_variant_id=%s,
+                    updated_at=NOW()
+                WHERE id=%s
+                ''',
+                [product_id_remote, variant_id_remote, variant_id_local],
+            )
+            row['tiendanube_product_id'] = product_id_remote
+            row['tiendanube_variant_id'] = variant_id_remote
+            created_remote += 1
+        except Exception as exc:
+            creation_failed += 1
+            sku = _clean_text(row.get('sku')) or f'variant_{variant_id_local}'
+            errors.append(f"SKU {sku}: {exc}")
+            security_logger.warning(
+                "tiendanube_mapping_create_failed reason=%s variant_id=%s sku=%s error=%s",
+                reason,
+                variant_id_local,
+                _clean_text(row.get('sku')),
+                exc,
+            )
+
+    pending_mapping = sum(
+        1 for row in (rows or []) if not (_safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id')))
+    )
+    return {
+        'auto_mapped': int(link_info.get('auto_mapped') or 0),
+        'created_remote': created_remote,
+        'creation_failed': creation_failed,
+        'pending_mapping': pending_mapping,
+        'errors': _tiendanube_dedup_errors(errors),
+    }
+
+
+def _tiendanube_autolink_rows_by_sku(cfg, rows):
+    cache = {}
+    auto_mapped = 0
+    errors = []
+
+    for row in rows:
+        variant_id_local = _safe_int(row.get('id'))
+        if not variant_id_local:
+            continue
+
+        product_id_remote = _safe_int(row.get('tiendanube_product_id'))
+        variant_id_remote = _safe_int(row.get('tiendanube_variant_id'))
+        if product_id_remote and variant_id_remote:
+            continue
+
+        sku = _clean_text(row.get('sku'))
+        if not sku:
+            continue
+
+        key = sku.lower()
+        if key not in cache:
+            try:
+                cache[key] = _tiendanube_lookup_variant_ids_by_sku(cfg, sku)
+            except ValidationError as exc:
+                cache[key] = {'product_id': None, 'variant_id': None, 'error': str(exc)}
+
+        mapped = cache.get(key) or {}
+        mapped_product_id = _safe_int(mapped.get('product_id'))
+        mapped_variant_id = _safe_int(mapped.get('variant_id'))
+        if not (mapped_product_id and mapped_variant_id):
+            msg = _clean_text(mapped.get('error'))
+            if msg:
+                errors.append(f"SKU {sku}: {msg}")
+            continue
+
+        row['tiendanube_product_id'] = mapped_product_id
+        row['tiendanube_variant_id'] = mapped_variant_id
+        exec_void(
+            '''
+            UPDATE retail_product_variants
+            SET tiendanube_product_id=%s,
+                tiendanube_variant_id=%s,
+                updated_at=NOW()
+            WHERE id=%s
+            ''',
+            [mapped_product_id, mapped_variant_id, variant_id_local],
+        )
+        auto_mapped += 1
+
+    pending_mapping = sum(
+        1 for row in rows if not (_safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id')))
+    )
+    return {'auto_mapped': auto_mapped, 'pending_mapping': pending_mapping, 'errors': _tiendanube_dedup_errors(errors)}
+
+
+def _tiendanube_delete_remote_for_local_variant(cfg, row):
+    local_row = row if isinstance(row, dict) else {}
+    local_variant_id = _safe_int(local_row.get('id'))
+    sku = _clean_text(local_row.get('sku'))
+    product_id_remote = _safe_int(local_row.get('tiendanube_product_id'))
+    variant_id_remote = _safe_int(local_row.get('tiendanube_variant_id'))
+
+    if (not product_id_remote or not variant_id_remote) and sku:
+        try:
+            mapped = _tiendanube_lookup_variant_ids_by_sku(cfg, sku)
+        except Exception as exc:
+            return {'ok': False, 'deleted': False, 'scope': None, 'error': f'SKU {sku}: {exc}'}
+        product_id_remote = product_id_remote or _safe_int(mapped.get('product_id'))
+        variant_id_remote = variant_id_remote or _safe_int(mapped.get('variant_id'))
+        if product_id_remote:
+            local_row['tiendanube_product_id'] = product_id_remote
+        if variant_id_remote:
+            local_row['tiendanube_variant_id'] = variant_id_remote
+
+    if not product_id_remote:
+        return {'ok': True, 'deleted': False, 'scope': 'not_mapped', 'error': None}
+
+    try:
+        remote_product = _tiendanube_request(
+            cfg,
+            'GET',
+            f'products/{product_id_remote}',
+            timeout_cap=20,
+            allow_404=True,
+        )
+    except Exception as exc:
+        return {'ok': False, 'deleted': False, 'scope': None, 'error': f'SKU {sku or local_variant_id}: {exc}'}
+
+    delete_scope = 'already_missing'
+    if remote_product is None:
+        pass
+    else:
+        variants = [v for v in _tiendanube_listify(remote_product.get('variants')) if isinstance(v, dict)]
+        variant_exists = any(_safe_int(v.get('id')) == variant_id_remote for v in variants)
+        should_delete_variant = bool(variant_id_remote and len(variants) > 1 and variant_exists)
+        try:
+            if should_delete_variant:
+                _tiendanube_request(
+                    cfg,
+                    'DELETE',
+                    f'products/{product_id_remote}/variants/{variant_id_remote}',
+                    timeout_cap=20,
+                    allow_404=True,
+                )
+                delete_scope = 'variant'
+            elif len(variants) <= 1:
+                _tiendanube_request(
+                    cfg,
+                    'DELETE',
+                    f'products/{product_id_remote}',
+                    timeout_cap=20,
+                    allow_404=True,
+                )
+                delete_scope = 'product'
+            else:
+                delete_scope = 'already_missing'
+        except Exception as exc:
+            return {'ok': False, 'deleted': False, 'scope': None, 'error': f'SKU {sku or local_variant_id}: {exc}'}
+
+    if local_variant_id:
+        exec_void(
+            '''
+            UPDATE retail_product_variants
+            SET tiendanube_product_id=NULL,
+                tiendanube_variant_id=NULL,
+                updated_at=NOW()
+            WHERE id=%s
+            ''',
+            [local_variant_id],
+        )
+    local_row['tiendanube_product_id'] = None
+    local_row['tiendanube_variant_id'] = None
+    return {'ok': True, 'deleted': True, 'scope': delete_scope, 'error': None}
+
+
+def _tiendanube_delete_local_variants_now(local_variant_ids, *, reason='manual_delete'):
+    ids = []
+    seen = set()
+    for raw_id in local_variant_ids or []:
+        vid = _safe_int(raw_id)
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        ids.append(vid)
+    if not ids:
+        return {'processed': 0, 'deleted_remote': 0, 'failed': 0, 'errors': []}
+
+    cfg = _tiendanube_cfg()
+    if not cfg.get('store_id') or not cfg.get('access_token'):
+        return {
+            'processed': len(ids),
+            'deleted_remote': 0,
+            'failed': len(ids),
+            'errors': ['Tienda Nube no configurado'],
+        }
+
+    rows = q(
+        '''
+        SELECT id, sku, tiendanube_product_id, tiendanube_variant_id
+        FROM retail_product_variants
+        WHERE id = ANY(%s)
+        ORDER BY id
+        ''',
+        [ids],
+    ) or []
+    if not rows:
+        return {'processed': 0, 'deleted_remote': 0, 'failed': 0, 'errors': []}
+
+    deleted_remote = 0
+    failed = 0
+    deleted_products = 0
+    deleted_variants = 0
+    skipped_not_mapped = 0
+    errors = []
+
+    for row in rows:
+        out = _tiendanube_delete_remote_for_local_variant(cfg, row)
+        if not out.get('ok'):
+            failed += 1
+            msg = _clean_text(out.get('error'))
+            if msg:
+                errors.append(msg)
+            continue
+        if out.get('scope') == 'not_mapped':
+            skipped_not_mapped += 1
+            continue
+        if out.get('deleted'):
+            deleted_remote += 1
+            if out.get('scope') == 'product':
+                deleted_products += 1
+            if out.get('scope') == 'variant':
+                deleted_variants += 1
+
+    dedup = _tiendanube_dedup_errors(errors)
+    if dedup:
+        security_logger.warning(
+            "tiendanube_auto_delete_with_errors reason=%s ids=%s errors=%s",
+            reason,
+            ','.join(str(v) for v in ids),
+            '; '.join(dedup)[:1000],
+        )
+
+    return {
+        'processed': len(rows),
+        'deleted_remote': deleted_remote,
+        'deleted_products': deleted_products,
+        'deleted_variants': deleted_variants,
+        'skipped_not_mapped': skipped_not_mapped,
+        'failed': failed,
+        'errors': dedup,
+    }
+
+
+def _chunk_variant_ops(ops, size=50):
+    out = []
+    step = max(1, int(size or 50))
+    for i in range(0, len(ops), step):
+        out.append(ops[i : i + step])
+    return out
+
+
+def _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=False, sync_stock=False):
+    if not ops:
+        return {'synced': 0, 'failed': 0, 'errors': []}
+
+    synced_local = set()
+    failed_local = set()
+    errors = []
+
+    min_interval = 0.55
+    last_sent_at = None
+    for chunk in _chunk_variant_ops(ops, size=50):
+        if last_sent_at is not None:
+            elapsed = time.monotonic() - last_sent_at
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
+
+        grouped = {}
+        for op in chunk:
+            pid = _safe_int(op.get('product_id'))
+            vid = _safe_int(op.get('variant_id'))
+            if not pid or not vid:
+                failed_local.add(_safe_int(op.get('local_variant_id')))
+                continue
+            grouped.setdefault(pid, [])
+            payload_variant = {'id': vid}
+            if sync_price:
+                payload_variant['price'] = float(op.get('price') or 0)
+            if sync_stock:
+                payload_variant['inventory_levels'] = [{'stock': int(op.get('stock') or 0)}]
+            grouped[pid].append(payload_variant)
+
+        if not grouped:
+            continue
+
+        payload = [{'id': pid, 'variants': variants} for pid, variants in grouped.items()]
+        try:
+            response_data = _tiendanube_request(cfg, 'PATCH', 'products/stock-price', payload=payload)
+            last_sent_at = time.monotonic()
+        except ValidationError as exc:
+            errors.append(str(exc))
+            for op in chunk:
+                failed_local.add(_safe_int(op.get('local_variant_id')))
+            continue
+
+        success_variant_ids = set()
+        if isinstance(response_data, list):
+            for prod in response_data:
+                if not isinstance(prod, dict):
+                    continue
+                variants = prod.get('variants')
+                if not isinstance(variants, list):
+                    continue
+                for variant in variants:
+                    if not isinstance(variant, dict):
+                        continue
+                    vid = _safe_int(variant.get('id'))
+                    if not vid:
+                        continue
+                    if variant.get('success') is False:
+                        continue
+                    success_variant_ids.add(vid)
+
+        if success_variant_ids:
+            for op in chunk:
+                local_id = _safe_int(op.get('local_variant_id'))
+                if not local_id:
+                    continue
+                if _safe_int(op.get('variant_id')) in success_variant_ids:
+                    synced_local.add(local_id)
+                else:
+                    failed_local.add(local_id)
+        else:
+            # Si la API responde 2xx sin detalle por variante, asumimos éxito del lote.
+            for op in chunk:
+                local_id = _safe_int(op.get('local_variant_id'))
+                if local_id:
+                    synced_local.add(local_id)
+
+    failed_local = {vid for vid in failed_local if vid and vid not in synced_local}
+    errors = [msg for msg in errors if _clean_text(msg)]
+    return {'synced': len(synced_local), 'failed': len(failed_local), 'errors': errors}
+
+
+def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, sync_stock=False, reason='manual'):
+    ids = []
+    seen = set()
+    for raw_id in local_variant_ids or []:
+        vid = _safe_int(raw_id)
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        ids.append(vid)
+    if not ids:
+        return {'synced': 0, 'failed': 0, 'errors': []}
+    if not (sync_price or sync_stock):
+        return {'synced': 0, 'failed': 0, 'errors': []}
+
+    cfg = _tiendanube_cfg()
+    if not cfg.get('store_id') or not cfg.get('access_token'):
+        return {'synced': 0, 'failed': len(ids), 'errors': ['Tienda Nube no configurado']}
+
+    rows = q(
+        '''
+        SELECT v.id, v.sku, v.stock_on_hand, v.price_online_ars,
+               v.tiendanube_product_id, v.tiendanube_variant_id
+        FROM retail_product_variants v
+        WHERE v.id = ANY(%s)
+          AND v.active=TRUE
+        ORDER BY v.id
+        ''',
+        [ids],
+    ) or []
+    if not rows:
+        return {'synced': 0, 'failed': 0, 'errors': []}
+
+    mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason=reason)
+    ops = []
+    for row in rows:
+        pid = _safe_int(row.get('tiendanube_product_id'))
+        vid = _safe_int(row.get('tiendanube_variant_id'))
+        if not pid or not vid:
+            continue
+        payload = {
+            'local_variant_id': _safe_int(row.get('id')),
+            'product_id': pid,
+            'variant_id': vid,
+        }
+        if sync_price:
+            price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
+            payload['price'] = float(price.quantize(TWO_DEC, rounding=ROUND_HALF_UP))
+        if sync_stock:
+            payload['stock'] = max(0, int(_safe_int(row.get('stock_on_hand')) or 0))
+        ops.append(payload)
+
+    if not ops:
+        pending = int(mapping_info.get('pending_mapping') or 0)
+        errors = list(mapping_info.get('errors') or [])
+        if pending > 0 and not errors:
+            errors = [f'{pending} variantes sin mapping Tienda Nube']
+        return {
+            'synced': 0,
+            'failed': pending,
+            'errors': _tiendanube_dedup_errors(errors),
+            'created_remote': int(mapping_info.get('created_remote') or 0),
+            'creation_failed': int(mapping_info.get('creation_failed') or 0),
+        }
+
+    result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=sync_price, sync_stock=sync_stock)
+    pending = int(mapping_info.get('pending_mapping') or 0)
+    sync_errors = list(mapping_info.get('errors') or []) + list(result.get('errors') or [])
+    dedup = _tiendanube_dedup_errors(sync_errors)
+    failed_total = int(result.get('failed') or 0) + pending
+
+    if dedup:
+        security_logger.warning(
+            "tiendanube_auto_sync_with_errors reason=%s ids=%s errors=%s",
+            reason,
+            ','.join(str(v) for v in ids),
+            '; '.join(dedup)[:1000],
+        )
+    return {
+        'synced': int(result.get('synced') or 0),
+        'failed': failed_total,
+        'errors': dedup,
+        'created_remote': int(mapping_info.get('created_remote') or 0),
+        'creation_failed': int(mapping_info.get('creation_failed') or 0),
+    }
+
+
+def _tiendanube_schedule_local_variants_sync(local_variant_ids, *, sync_price=False, sync_stock=False, reason='auto'):
+    ids = []
+    seen = set()
+    for raw_id in local_variant_ids or []:
+        vid = _safe_int(raw_id)
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        ids.append(vid)
+    if not ids:
+        return
+    if not (sync_price or sync_stock):
+        return
+
+    def _runner():
+        try:
+            _tiendanube_sync_local_variants_now(
+                ids,
+                sync_price=sync_price,
+                sync_stock=sync_stock,
+                reason=reason,
+            )
+        except Exception as exc:
+            security_logger.warning(
+                "tiendanube_auto_sync_failed reason=%s ids=%s error=%s",
+                reason,
+                ','.join(str(v) for v in ids),
+                exc,
+            )
+
+    try:
+        transaction.on_commit(_runner)
+    except Exception:
+        _runner()
+
+
+def _tiendanube_schedule_local_variants_delete(local_variant_ids, *, reason='auto_delete'):
+    ids = []
+    seen = set()
+    for raw_id in local_variant_ids or []:
+        vid = _safe_int(raw_id)
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        ids.append(vid)
+    if not ids:
+        return
+
+    def _runner():
+        try:
+            _tiendanube_delete_local_variants_now(ids, reason=reason)
+        except Exception as exc:
+            security_logger.warning(
+                "tiendanube_auto_delete_failed reason=%s ids=%s error=%s",
+                reason,
+                ','.join(str(v) for v in ids),
+                exc,
+            )
+
+    try:
+        transaction.on_commit(_runner)
+    except Exception:
+        _runner()
 
 
 def _infer_payment_method_from_online(payload):
@@ -5272,30 +8189,1285 @@ def _extract_online_items(payload):
     return out
 
 
+def _extract_tiendanube_customer_identity(payload):
+    data = payload if isinstance(payload, dict) else {}
+    customer = data.get('customer') if isinstance(data.get('customer'), dict) else {}
+    external_customer_id = _clean_text(
+        data.get('customer_id')
+        or data.get('customerId')
+        or data.get('id')
+        or customer.get('id')
+    )
+    email = _clean_text(data.get('email') or customer.get('email') or data.get('customer_email'))
+    return {'external_customer_id': external_customer_id, 'email': email}
+
+
+def _online_customer_filter(identity):
+    filters = []
+    params = []
+
+    ext_id = _clean_text((identity or {}).get('external_customer_id'))
+    email = _clean_text((identity or {}).get('email'))
+    if ext_id:
+        filters.append("(customer_snapshot->>'external_customer_id')=%s")
+        params.append(ext_id)
+    if email:
+        filters.append("LOWER(COALESCE(customer_snapshot->>'email',''))=LOWER(%s)")
+        params.append(email)
+
+    if not filters:
+        return {'where_sql': 'FALSE', 'params': []}
+    return {'where_sql': ' OR '.join(filters), 'params': params}
+
+
+def _apply_online_customer_redact(identity):
+    clause = _online_customer_filter(identity)
+    rows = q(
+        f'''
+        SELECT id
+        FROM retail_sales
+        WHERE channel='online'
+          AND ({clause['where_sql']})
+        FOR UPDATE
+        ''',
+        clause['params'],
+    ) or []
+    sales_ids = [int(row['id']) for row in rows if _safe_int(row.get('id'))]
+    if sales_ids:
+        for sale_id in sales_ids:
+            exec_void(
+                '''
+                UPDATE retail_sales
+                SET customer_snapshot=%s
+                WHERE id=%s
+                ''',
+                [json.dumps({'name': 'ANONIMIZADO'}), sale_id],
+            )
+
+    email = _clean_text((identity or {}).get('email'))
+    if email:
+        exec_void(
+            '''
+            UPDATE retail_customers
+            SET full_name='ANONIMIZADO',
+                doc_type=NULL,
+                doc_number=NULL,
+                tax_id=NULL,
+                email=NULL,
+                phone=NULL,
+                address=NULL,
+                city=NULL,
+                province=NULL,
+                notes='Redactado por webhook customers/redact',
+                updated_at=NOW()
+            WHERE LOWER(COALESCE(email,''))=LOWER(%s)
+            ''',
+            [email],
+        )
+
+    return {'sales_redacted': len(sales_ids)}
+
+
+def _online_customer_data_report(identity):
+    clause = _online_customer_filter(identity)
+    return q(
+        f'''
+        SELECT id, sale_number, source_order_id, status, total_ars, created_at
+        FROM retail_sales
+        WHERE channel='online'
+          AND ({clause['where_sql']})
+        ORDER BY created_at DESC, id DESC
+        LIMIT 200
+        ''',
+        clause['params'],
+    ) or []
+
+
+def _tiendanube_order_is_refunded_or_cancelled(order):
+    data = order if isinstance(order, dict) else {}
+    status_tokens = set()
+
+    def push(value):
+        token = _clean_text(value)
+        if token:
+            status_tokens.add(token.lower())
+
+    for key in ('status', 'payment_status', 'financial_status', 'fulfillment_status'):
+        push(data.get(key))
+
+    gateway = data.get('gateway')
+    if isinstance(gateway, dict):
+        for key in ('status', 'payment_status', 'financial_status'):
+            push(gateway.get(key))
+
+    transactions = data.get('transactions')
+    if isinstance(transactions, list):
+        for tx in transactions:
+            if not isinstance(tx, dict):
+                continue
+            for key in ('status', 'payment_status', 'kind', 'type'):
+                push(tx.get(key))
+
+    if status_tokens & {'refunded', 'partially_refunded', 'partially-refunded'}:
+        return True
+    if status_tokens & {'cancelled', 'canceled', 'voided'}:
+        return True
+
+    txt = json.dumps(data, ensure_ascii=False).lower()
+    return ('refunded' in txt) or ('cancelled' in txt) or ('canceled' in txt)
+
+
+def _cancel_online_sale_for_webhook(order_id, reason='Cancelacion webhook Tienda Nube'):
+    sale = q('SELECT * FROM retail_sales WHERE source_order_id=%s FOR UPDATE', [order_id], one=True)
+    if not sale:
+        return {'ok': True, 'noop': True, 'reason': 'sale_not_found'}
+    if sale.get('status') == 'cancelled':
+        return {'ok': True, 'noop': True, 'sale_id': sale['id'], 'reason': 'already_cancelled'}
+
+    items = q('SELECT * FROM retail_sale_items WHERE sale_id=%s FOR UPDATE', [sale['id']]) or []
+    if any(int(it.get('returned_qty') or 0) > 0 for it in items):
+        return {'ok': False, 'detail': 'Venta con devoluciones parciales; requiere revision manual'}
+
+    for item in items:
+        variant = q('SELECT id, stock_on_hand FROM retail_product_variants WHERE id=%s FOR UPDATE', [item['variant_id']], one=True)
+        new_stock = int(variant['stock_on_hand']) + int(item['quantity'])
+        exec_void('UPDATE retail_product_variants SET stock_on_hand=%s WHERE id=%s', [new_stock, item['variant_id']])
+        exec_void(
+            '''
+            INSERT INTO retail_stock_movements(
+              variant_id, movement_kind, qty_signed, stock_after,
+              cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
+            )
+            VALUES (%s,'online_cancel',%s,%s,%s,'sale',%s,%s,NULL)
+            ''',
+            [
+                item['variant_id'],
+                int(item['quantity']),
+                new_stock,
+                item['unit_cost_snapshot_ars'],
+                sale['id'],
+                reason,
+            ],
+        )
+
+    exec_void(
+        '''
+        UPDATE retail_sales
+        SET status='cancelled', cancelled_at=NOW(), cancel_reason=%s
+        WHERE id=%s
+        ''',
+        [reason, sale['id']],
+    )
+    exec_void(
+        "UPDATE retail_invoices SET status='manual_review', error_message=%s, updated_at=NOW() WHERE sale_id=%s",
+        [reason, sale['id']],
+    )
+    return {'ok': True, 'sale_id': sale['id']}
+
+
+def _tiendanube_listify(raw):
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    return [raw]
+
+
+def _tiendanube_locale_text(raw, locale_priority=('es', 'pt', 'en')):
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        for key in locale_priority:
+            value = _clean_text(raw.get(key))
+            if value:
+                return value
+        for value in raw.values():
+            txt = _clean_text(value)
+            if txt:
+                return txt
+        return None
+    if isinstance(raw, list):
+        for item in raw:
+            txt = _tiendanube_locale_text(item, locale_priority=locale_priority)
+            if txt:
+                return txt
+        return None
+    return _clean_text(raw)
+
+
+def _tiendanube_attribute_code_from_name(name):
+    base = _clean_text(name) or 'opcion'
+    normalized = unicodedata.normalize('NFKD', base)
+    ascii_text = normalized.encode('ascii', 'ignore').decode('ascii')
+    txt = re.sub(r'[^a-z0-9]+', '_', ascii_text.lower()).strip('_')
+    return txt or 'opcion'
+
+
+def _tiendanube_ensure_attribute(name, sort_order=100):
+    attr_name = _clean_text(name) or 'Opcion'
+    row = q(
+        '''
+        SELECT id, code, name, active
+        FROM retail_variant_attributes
+        WHERE LOWER(name)=LOWER(%s)
+        ORDER BY id
+        LIMIT 1
+        ''',
+        [attr_name],
+        one=True,
+    )
+    if row:
+        if not bool(row.get('active')):
+            exec_void('UPDATE retail_variant_attributes SET active=TRUE, sort_order=%s WHERE id=%s', [int(sort_order), row['id']])
+        return {'id': row['id'], 'code': row['code'], 'name': row['name']}
+
+    base_code = _tiendanube_attribute_code_from_name(attr_name)
+    probe = base_code
+    suffix = 2
+    while q('SELECT id FROM retail_variant_attributes WHERE LOWER(code)=LOWER(%s)', [probe], one=True):
+        probe = f"{base_code}_{suffix}"
+        suffix += 1
+
+    aid = exec_returning(
+        '''
+        INSERT INTO retail_variant_attributes(name, code, applies_to_category_id, active, sort_order)
+        VALUES (%s,%s,NULL,TRUE,%s)
+        RETURNING id
+        ''',
+        [attr_name, probe, int(sort_order)],
+    )
+    return q('SELECT id, code, name FROM retail_variant_attributes WHERE id=%s', [aid], one=True) or {
+        'id': aid,
+        'code': probe,
+        'name': attr_name,
+    }
+
+
+def _tiendanube_option_pairs(product, variant):
+    attrs = []
+    for idx, raw_attr in enumerate(_tiendanube_listify((product or {}).get('attributes'))):
+        name = _tiendanube_locale_text(raw_attr)
+        attrs.append(_clean_text(name) or f'Opcion {idx + 1}')
+
+    values = []
+    for raw_val in _tiendanube_listify((variant or {}).get('values')):
+        value = _tiendanube_locale_text(raw_val)
+        values.append(_clean_text(value))
+
+    variant_id = _safe_int((variant or {}).get('id'))
+    variant_sku = _clean_text((variant or {}).get('sku'))
+    fallback_token = variant_sku or (str(variant_id) if variant_id else _random_suffix(4))
+
+    pair_count = max(len(attrs), len(values))
+    if pair_count <= 0:
+        return [{'attribute_name': 'Variante', 'value': fallback_token}]
+
+    out = []
+    for idx in range(pair_count):
+        attr_name = _clean_text(attrs[idx] if idx < len(attrs) else None) or f'Opcion {idx + 1}'
+        value = _clean_text(values[idx] if idx < len(values) else None)
+        if not value:
+            value = fallback_token if pair_count == 1 else f'{fallback_token}-{idx + 1}'
+        out.append({'attribute_name': attr_name, 'value': value})
+    return out
+
+
+def _tiendanube_variant_stock(variant):
+    stock = _safe_int((variant or {}).get('stock'))
+    if stock is not None:
+        return max(0, int(stock))
+
+    total = 0
+    found = False
+    for level in _tiendanube_listify((variant or {}).get('inventory_levels')):
+        if not isinstance(level, dict):
+            continue
+        qty = _safe_int(level.get('stock'))
+        if qty is None:
+            continue
+        found = True
+        total += int(qty)
+    if found:
+        return max(0, total)
+    return 0
+
+
+def _tiendanube_variant_prices(variant):
+    data = variant if isinstance(variant, dict) else {}
+    price_store = _to_decimal(
+        data.get('price') or data.get('price_without_taxes') or data.get('promotional_price') or 0,
+        'price_store',
+        allow_none=True,
+    ) or Decimal('0')
+    price_online = _to_decimal(
+        data.get('promotional_price') or data.get('price') or data.get('price_without_taxes') or 0,
+        'price_online',
+        allow_none=True,
+    )
+    if price_online is None:
+        price_online = price_store
+    cost_avg = _to_decimal(data.get('cost') or 0, 'cost_avg', allow_none=True) or Decimal('0')
+
+    if price_store < 0:
+        price_store = Decimal('0')
+    if price_online < 0:
+        price_online = Decimal('0')
+    if cost_avg < 0:
+        cost_avg = Decimal('0')
+
+    return {
+        'price_store_ars': price_store.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+        'price_online_ars': price_online.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+        'cost_avg_ars': cost_avg.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+    }
+
+
+def _tiendanube_unique_sku(raw_sku, remote_variant_id=None, exclude_variant_id=None):
+    candidate = _clean_text(raw_sku)
+    if candidate:
+        cleaned = re.sub(r'[^A-Za-z0-9._-]+', '-', candidate).strip('-._')
+    else:
+        cleaned = ''
+    if not cleaned:
+        tail = str(_safe_int(remote_variant_id) or _random_suffix(6))
+        cleaned = f'TN-{tail}'
+
+    probe = cleaned
+    suffix = 2
+    while True:
+        existing = q('SELECT id FROM retail_product_variants WHERE LOWER(sku)=LOWER(%s)', [probe], one=True)
+        if not existing:
+            return probe
+        if exclude_variant_id and int(existing['id']) == int(exclude_variant_id):
+            return probe
+        probe = f'{cleaned}-{suffix}'
+        suffix += 1
+
+
+def _tiendanube_pick_barcode(raw_barcode, existing_variant_id=None):
+    candidate = _digits(raw_barcode)
+    if len(candidate) == 13 and _ean13_is_valid(candidate):
+        row = q(
+            '''
+            SELECT v.id
+            FROM retail_product_variants v
+            LEFT JOIN retail_variant_barcodes b ON b.variant_id=v.id
+            WHERE LOWER(v.barcode_internal)=LOWER(%s)
+               OR LOWER(COALESCE(b.barcode,''))=LOWER(%s)
+            ORDER BY CASE WHEN LOWER(v.barcode_internal)=LOWER(%s) THEN 0 ELSE 1 END, v.id
+            LIMIT 1
+            ''',
+            [candidate, candidate, candidate],
+            one=True,
+        )
+        if not row:
+            return candidate
+        if existing_variant_id and int(row['id']) == int(existing_variant_id):
+            return candidate
+
+    _, supplier_code = _resolve_supplier_code(None, allow_generic=True)
+    return _generate_ean13_code(supplier_code)
+
+
+def _tiendanube_resolve_or_create_local_product(
+    remote_product_id,
+    *,
+    name,
+    description=None,
+    brand=None,
+    active=True,
+    product_cache=None,
+):
+    rid = _safe_int(remote_product_id)
+    cache = product_cache if isinstance(product_cache, dict) else {}
+    if rid and rid in cache:
+        return {'id': int(cache[rid]), 'created': False}
+
+    existing = None
+    if rid:
+        existing = q(
+            '''
+            SELECT p.id
+            FROM retail_products p
+            JOIN retail_product_variants v ON v.product_id=p.id
+            WHERE v.tiendanube_product_id=%s
+            GROUP BY p.id
+            ORDER BY p.id
+            LIMIT 1
+            ''',
+            [rid],
+            one=True,
+        )
+    if existing:
+        pid = int(existing['id'])
+        exec_void(
+            '''
+            UPDATE retail_products
+            SET name=%s,
+                description=%s,
+                brand=%s,
+                active=%s
+            WHERE id=%s
+            ''',
+            [
+                _clean_text(name) or f'Producto TN {rid}',
+                _clean_text(description),
+                _clean_text(brand) or DEFAULT_PRODUCT_BRAND,
+                bool(active),
+                pid,
+            ],
+        )
+        if rid:
+            cache[rid] = pid
+        return {'id': pid, 'created': False}
+
+    pid = exec_returning(
+        '''
+        INSERT INTO retail_products(name, description, category_id, brand, season, active, sku_prefix, default_cost_ars)
+        VALUES (%s,%s,NULL,%s,NULL,%s,NULL,0)
+        RETURNING id
+        ''',
+        [
+            _clean_text(name) or f'Producto TN {rid or _random_suffix(4)}',
+            _clean_text(description),
+            _clean_text(brand) or DEFAULT_PRODUCT_BRAND,
+            bool(active),
+        ],
+    )
+    if rid:
+        cache[rid] = pid
+    return {'id': pid, 'created': True}
+
+
+def _tiendanube_build_normalized_options(local_product_id, option_pairs, remote_variant_id=None, exclude_variant_id=None):
+    option_payload = []
+    for idx, pair in enumerate(option_pairs or []):
+        attr_name = _clean_text((pair or {}).get('attribute_name')) or f'Opcion {idx + 1}'
+        value = _clean_text((pair or {}).get('value')) or str(_safe_int(remote_variant_id) or _random_suffix(4))
+        attr = _tiendanube_ensure_attribute(attr_name, sort_order=(idx + 1) * 10)
+        option_payload.append({'attribute_code': attr['code'], 'value': value})
+
+    if not option_payload:
+        fallback_attr = _tiendanube_ensure_attribute('Variante', sort_order=900)
+        option_payload.append(
+            {
+                'attribute_code': fallback_attr['code'],
+                'value': str(_safe_int(remote_variant_id) or _random_suffix(4)),
+            }
+        )
+
+    base_token = str(_safe_int(remote_variant_id) or _random_suffix(4))
+    discriminator_attr = None
+    for attempt in range(6):
+        normalized, signature = _normalize_option_values({'option_values': option_payload})
+        params = [local_product_id, signature]
+        where_extra = ''
+        if exclude_variant_id:
+            where_extra = 'AND id<>%s'
+            params.append(exclude_variant_id)
+        conflict = q(
+            f'''
+            SELECT id
+            FROM retail_product_variants
+            WHERE product_id=%s
+              AND LOWER(option_signature)=LOWER(%s)
+              {where_extra}
+            LIMIT 1
+            ''',
+            params,
+            one=True,
+        )
+        if not conflict:
+            return {'options': normalized, 'signature': signature}
+
+        if discriminator_attr is None:
+            discriminator_attr = _tiendanube_ensure_attribute('Variante', sort_order=900)
+        discriminator_value = base_token if attempt == 0 else f'{base_token}-{attempt + 1}'
+        replaced = False
+        for item in option_payload:
+            code = _clean_text(item.get('attribute_code'))
+            if code and discriminator_attr and code.lower() == str(discriminator_attr['code']).lower():
+                item['value'] = discriminator_value
+                replaced = True
+                break
+        if not replaced:
+            option_payload.append({'attribute_code': discriminator_attr['code'], 'value': discriminator_value})
+
+    raise ValidationError('No se pudo generar option_signature unico para variante importada')
+
+
+def _tiendanube_upsert_catalog_variant(remote_product, remote_variant, local_product_id, created_by=None):
+    product_data = remote_product if isinstance(remote_product, dict) else {}
+    variant_data = remote_variant if isinstance(remote_variant, dict) else {}
+    remote_product_id = _safe_int(product_data.get('id'))
+    remote_variant_id = _safe_int(variant_data.get('id'))
+    remote_sku = _clean_text(variant_data.get('sku'))
+
+    existing = None
+    linked_by_sku = False
+    if remote_variant_id:
+        existing = q(
+            '''
+            SELECT id, product_id, sku, barcode_internal, stock_on_hand, stock_reserved
+            FROM retail_product_variants
+            WHERE tiendanube_variant_id=%s
+            LIMIT 1
+            ''',
+            [remote_variant_id],
+            one=True,
+        )
+    if not existing and remote_sku:
+        probe = q(
+            '''
+            SELECT id, product_id, sku, barcode_internal, stock_on_hand, stock_reserved, tiendanube_variant_id
+            FROM retail_product_variants
+            WHERE LOWER(sku)=LOWER(%s)
+            LIMIT 1
+            ''',
+            [remote_sku],
+            one=True,
+        )
+        if probe:
+            mapped_remote = _safe_int(probe.get('tiendanube_variant_id'))
+            if not mapped_remote or (remote_variant_id and mapped_remote == remote_variant_id):
+                existing = probe
+                linked_by_sku = True
+
+    existing_id = _safe_int((existing or {}).get('id'))
+    options_info = _tiendanube_build_normalized_options(
+        local_product_id,
+        _tiendanube_option_pairs(product_data, variant_data),
+        remote_variant_id=remote_variant_id,
+        exclude_variant_id=existing_id,
+    )
+    normalized_options = options_info['options']
+    signature = options_info['signature']
+
+    product_name = _tiendanube_locale_text(product_data.get('name')) or f'Producto TN {remote_product_id or "?"}'
+    display_name = _tiendanube_locale_text(variant_data.get('name')) or f'{product_name} ({signature})'
+
+    prices = _tiendanube_variant_prices(variant_data)
+    stock_on_hand = _tiendanube_variant_stock(variant_data)
+    is_active = bool(product_data.get('published') is not False and variant_data.get('visible') is not False)
+
+    sku_seed = remote_sku or _clean_text((existing or {}).get('sku'))
+    sku = _tiendanube_unique_sku(sku_seed, remote_variant_id=remote_variant_id, exclude_variant_id=existing_id)
+
+    if existing_id:
+        barcode = _clean_text(existing.get('barcode_internal')) or _tiendanube_pick_barcode(
+            variant_data.get('barcode'),
+            existing_variant_id=existing_id,
+        )
+        exec_void(
+            '''
+            UPDATE retail_product_variants
+            SET product_id=%s,
+                option_signature=%s,
+                display_name=%s,
+                sku=%s,
+                barcode_internal=%s,
+                price_store_ars=%s,
+                price_online_ars=%s,
+                cost_avg_ars=%s,
+                stock_on_hand=%s,
+                active=%s,
+                tiendanube_product_id=%s,
+                tiendanube_variant_id=%s
+            WHERE id=%s
+            ''',
+            [
+                local_product_id,
+                signature,
+                display_name,
+                sku,
+                barcode,
+                prices['price_store_ars'],
+                prices['price_online_ars'],
+                prices['cost_avg_ars'],
+                stock_on_hand,
+                is_active,
+                remote_product_id,
+                remote_variant_id,
+                existing_id,
+            ],
+        )
+        exec_void('DELETE FROM retail_variant_option_values WHERE variant_id=%s', [existing_id])
+        for idx, opt in enumerate(normalized_options):
+            exec_void(
+                '''
+                INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value, sort_order)
+                VALUES (%s,%s,%s,%s)
+                ''',
+                [existing_id, opt['attribute_id'], opt['value'], (idx + 1) * 10],
+            )
+
+        delta = int(stock_on_hand) - int(_safe_int(existing.get('stock_on_hand')) or 0)
+        if delta != 0:
+            exec_void(
+                '''
+                INSERT INTO retail_stock_movements(
+                  variant_id, movement_kind, qty_signed, stock_after,
+                  cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
+                )
+                VALUES (%s,'manual_adjustment',%s,%s,%s,'tiendanube_import',%s,'Ajuste por importacion de Tienda Nube',%s)
+                ''',
+                [
+                    existing_id,
+                    delta,
+                    stock_on_hand,
+                    prices['cost_avg_ars'],
+                    existing_id,
+                    created_by,
+                ],
+            )
+        try:
+            _associate_variant_barcode(
+                existing_id,
+                barcode,
+                make_primary=True,
+                force_move=False,
+                created_by=created_by,
+                source='tiendanube_import',
+            )
+        except Exception:
+            _ensure_variant_primary_barcode(existing_id, created_by=created_by, source='tiendanube_import')
+        return {'created': False, 'variant_id': existing_id, 'linked_by_sku': linked_by_sku}
+
+    barcode = _tiendanube_pick_barcode(variant_data.get('barcode'))
+    variant_id = exec_returning(
+        '''
+        INSERT INTO retail_product_variants(
+          product_id, option_signature, display_name, sku, barcode_internal,
+          price_store_ars, price_online_ars, cost_avg_ars,
+          stock_on_hand, stock_reserved, stock_min,
+          tiendanube_product_id, tiendanube_variant_id, active
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,0,0,%s,%s,%s)
+        RETURNING id
+        ''',
+        [
+            local_product_id,
+            signature,
+            display_name,
+            sku,
+            barcode,
+            prices['price_store_ars'],
+            prices['price_online_ars'],
+            prices['cost_avg_ars'],
+            stock_on_hand,
+            remote_product_id,
+            remote_variant_id,
+            is_active,
+        ],
+    )
+    exec_void(
+        '''
+        INSERT INTO retail_variant_barcodes(
+          variant_id, barcode, is_primary, supplier_id, source, created_by
+        )
+        VALUES (%s,%s,TRUE,NULL,'tiendanube_import',%s)
+        ''',
+        [variant_id, barcode, created_by],
+    )
+    for idx, opt in enumerate(normalized_options):
+        exec_void(
+            '''
+            INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value, sort_order)
+            VALUES (%s,%s,%s,%s)
+            ''',
+            [variant_id, opt['attribute_id'], opt['value'], (idx + 1) * 10],
+        )
+    if stock_on_hand != 0:
+        exec_void(
+            '''
+            INSERT INTO retail_stock_movements(
+              variant_id, movement_kind, qty_signed, stock_after,
+              cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
+            )
+            VALUES (%s,'manual_adjustment',%s,%s,%s,'tiendanube_import',%s,'Stock inicial importado de Tienda Nube',%s)
+            ''',
+            [
+                variant_id,
+                stock_on_hand,
+                stock_on_hand,
+                prices['cost_avg_ars'],
+                variant_id,
+                created_by,
+            ],
+        )
+    return {'created': True, 'variant_id': variant_id, 'linked_by_sku': linked_by_sku}
+
+
+def _tiendanube_fetch_products(cfg, limit_products=100, per_page=50):
+    target = max(1, min(int(limit_products or 100), 2000))
+    page_size = max(1, min(int(per_page or 50), 200))
+    page = 1
+    out = []
+    while len(out) < target:
+        remaining = target - len(out)
+        step = min(page_size, remaining)
+        raw = _tiendanube_request(cfg, 'GET', f'products?page={page}&per_page={step}', timeout_cap=20)
+        items = []
+        if isinstance(raw, list):
+            items = [item for item in raw if isinstance(item, dict)]
+        elif isinstance(raw, dict):
+            if isinstance(raw.get('products'), list):
+                items = [item for item in raw.get('products') if isinstance(item, dict)]
+            elif raw.get('id') is not None:
+                items = [raw]
+        if not items:
+            break
+        out.extend(items[:remaining])
+        if len(items) < step:
+            break
+        page += 1
+        if page > 200:
+            break
+    return out
+
+
+def _tiendanube_import_products_into_local(remote_products, created_by=None):
+    product_cache = {}
+    created_products = 0
+    updated_products = 0
+    created_variants = 0
+    updated_variants = 0
+    linked_by_sku = 0
+    processed_variants = 0
+    errors = []
+
+    for product in remote_products or []:
+        if not isinstance(product, dict):
+            continue
+        remote_product_id = _safe_int(product.get('id'))
+        if not remote_product_id:
+            errors.append('Producto remoto sin id valido')
+            continue
+
+        product_name = _tiendanube_locale_text(product.get('name')) or f'Producto TN {remote_product_id}'
+        product_description = _tiendanube_locale_text(product.get('description'))
+        product_brand = _tiendanube_locale_text(product.get('brand')) or DEFAULT_PRODUCT_BRAND
+        product_active = bool(product.get('published') is not False)
+
+        product_result = _tiendanube_resolve_or_create_local_product(
+            remote_product_id,
+            name=product_name,
+            description=product_description,
+            brand=product_brand,
+            active=product_active,
+            product_cache=product_cache,
+        )
+        local_product_id = int(product_result['id'])
+        if product_result.get('created'):
+            created_products += 1
+        else:
+            updated_products += 1
+
+        variants = [v for v in _tiendanube_listify(product.get('variants')) if isinstance(v, dict)]
+        if not variants:
+            errors.append(f'Producto {remote_product_id} no trae variantes')
+            continue
+
+        for variant in variants:
+            processed_variants += 1
+            try:
+                with transaction.atomic():
+                    upsert_result = _tiendanube_upsert_catalog_variant(
+                        product,
+                        variant,
+                        local_product_id,
+                        created_by=created_by,
+                    )
+                if upsert_result.get('created'):
+                    created_variants += 1
+                else:
+                    updated_variants += 1
+                if upsert_result.get('linked_by_sku'):
+                    linked_by_sku += 1
+            except Exception as exc:
+                variant_ref = _safe_int(variant.get('id')) or _clean_text(variant.get('sku')) or '?'
+                errors.append(f'Producto {remote_product_id} variante {variant_ref}: {exc}')
+
+    dedup_errors = []
+    seen = set()
+    for msg in errors:
+        txt = _clean_text(msg)
+        if not txt:
+            continue
+        key = txt.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup_errors.append(txt)
+
+    return {
+        'ok': len(dedup_errors) == 0,
+        'products_processed': len(remote_products or []),
+        'variants_processed': processed_variants,
+        'products_created': created_products,
+        'products_updated': updated_products,
+        'variants_created': created_variants,
+        'variants_updated': updated_variants,
+        'linked_by_sku': linked_by_sku,
+        'failed': len(dedup_errors),
+        'errors': dedup_errors,
+    }
+
+
+_TIENDANUBE_RETRYABLE_JOB_TYPES = ('import_catalogo', 'sync_catalogo', 'sync_stock')
+
+
+def _tiendanube_run_import_catalogo_job(job_id, payload, *, created_by=None):
+    data = payload if isinstance(payload, dict) else (_json_any(payload) or {})
+    limit_products = _to_int(data.get('limit_products') or data.get('limit') or 100, 'limit_products')
+    per_page = _to_int(data.get('per_page') or 50, 'per_page')
+    limit_products = max(1, min(limit_products, 2000))
+    per_page = max(1, min(per_page, 200))
+
+    try:
+        _job_set_running(job_id, 'tiendanube_import_catalogo')
+        cfg = _tiendanube_cfg()
+        if not cfg.get('store_id') or not cfg.get('access_token'):
+            raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
+
+        remote_products = _tiendanube_fetch_products(cfg, limit_products=limit_products, per_page=per_page)
+        summary = _tiendanube_import_products_into_local(
+            remote_products,
+            created_by=created_by,
+        )
+        ok = bool(summary.get('ok'))
+        dedup_errors = summary.get('errors') or []
+        if ok:
+            _job_set_done(job_id)
+        else:
+            _job_set_failed(job_id, '; '.join(dedup_errors)[:1000])
+
+        out = dict(summary)
+        out['job_id'] = job_id
+        out['errors'] = dedup_errors[:50]
+        return {'status_code': 200, 'body': out}
+    except ValidationError as exc:
+        _job_set_failed(job_id, str(exc))
+        return {'status_code': 400, 'body': {'ok': False, 'job_id': job_id, 'detail': str(exc)}}
+    except Exception as exc:
+        _job_set_failed(job_id, str(exc))
+        return {'status_code': 500, 'body': {'ok': False, 'job_id': job_id, 'detail': f'Error inesperado import catalogo: {exc}'}}
+
+
+def _tiendanube_run_sync_catalogo_job(job_id, payload):
+    data = payload if isinstance(payload, dict) else (_json_any(payload) or {})
+    limit = _to_int(data.get('limit') or 200, 'limit')
+    limit = max(1, min(limit, 2000))
+    rows = q(
+        '''
+        SELECT v.id, v.sku, v.barcode_internal, v.price_online_ars,
+               v.tiendanube_product_id, v.tiendanube_variant_id,
+               p.name AS producto, COALESCE(p.brand,'') AS marca,
+               v.option_signature
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.active=TRUE
+        ORDER BY v.id
+        LIMIT %s
+        ''',
+        [limit],
+    ) or []
+
+    try:
+        _job_set_running(job_id, 'tiendanube_sync_catalogo')
+        cfg = _tiendanube_cfg()
+        if not cfg.get('store_id') or not cfg.get('access_token'):
+            raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
+
+        mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason='sync_catalogo')
+        ops = []
+        for row in rows:
+            pid = _safe_int(row.get('tiendanube_product_id'))
+            vid = _safe_int(row.get('tiendanube_variant_id'))
+            if not pid or not vid:
+                continue
+            price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
+            ops.append(
+                {
+                    'local_variant_id': _safe_int(row.get('id')),
+                    'product_id': pid,
+                    'variant_id': vid,
+                    'price': float(price.quantize(TWO_DEC, rounding=ROUND_HALF_UP)),
+                }
+            )
+
+        sync_result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=True, sync_stock=False)
+        mapped = sum(
+            1 for row in rows if _safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id'))
+        )
+        errors = list(mapping_info.get('errors') or []) + list(sync_result.get('errors') or [])
+        dedup_errors = _tiendanube_dedup_errors(errors)
+        failed_total = int(sync_result.get('failed') or 0) + int(mapping_info.get('pending_mapping') or 0)
+
+        ok = len(dedup_errors) == 0
+        if ok:
+            _job_set_done(job_id)
+        else:
+            _job_set_failed(job_id, '; '.join(dedup_errors)[:1000])
+
+        return {
+            'status_code': 200,
+            'body': {
+                'ok': ok,
+                'job_id': job_id,
+                'processed': len(rows),
+                'mapped': mapped,
+                'pending_mapping': len(rows) - mapped,
+                'auto_mapped': int(mapping_info.get('auto_mapped') or 0),
+                'created_remote': int(mapping_info.get('created_remote') or 0),
+                'creation_failed': int(mapping_info.get('creation_failed') or 0),
+                'synced': int(sync_result.get('synced') or 0),
+                'failed': failed_total,
+                'errors': dedup_errors[:20],
+            },
+        }
+    except ValidationError as exc:
+        _job_set_failed(job_id, str(exc))
+        return {'status_code': 400, 'body': {'ok': False, 'job_id': job_id, 'detail': str(exc)}}
+    except Exception as exc:
+        _job_set_failed(job_id, str(exc))
+        return {'status_code': 500, 'body': {'ok': False, 'job_id': job_id, 'detail': f'Error inesperado sync catalogo: {exc}'}}
+
+
+def _tiendanube_run_sync_stock_job(job_id, payload):
+    data = payload if isinstance(payload, dict) else (_json_any(payload) or {})
+    limit = _to_int(data.get('limit') or 200, 'limit')
+    limit = max(1, min(limit, 2000))
+    rows = q(
+        '''
+        SELECT id, sku, stock_on_hand, tiendanube_product_id, tiendanube_variant_id
+        FROM retail_product_variants
+        WHERE active=TRUE
+        ORDER BY id
+        LIMIT %s
+        ''',
+        [limit],
+    ) or []
+
+    try:
+        _job_set_running(job_id, 'tiendanube_sync_stock')
+        cfg = _tiendanube_cfg()
+        if not cfg.get('store_id') or not cfg.get('access_token'):
+            raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
+
+        mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason='sync_stock')
+        ops = []
+        for row in rows:
+            pid = _safe_int(row.get('tiendanube_product_id'))
+            vid = _safe_int(row.get('tiendanube_variant_id'))
+            if not pid or not vid:
+                continue
+            stock_on_hand = _safe_int(row.get('stock_on_hand'))
+            ops.append(
+                {
+                    'local_variant_id': _safe_int(row.get('id')),
+                    'product_id': pid,
+                    'variant_id': vid,
+                    'stock': max(0, int(stock_on_hand or 0)),
+                }
+            )
+
+        sync_result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=False, sync_stock=True)
+        linked = sum(
+            1 for row in rows if _safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id'))
+        )
+        unlinked = len(rows) - linked
+        errors = list(mapping_info.get('errors') or []) + list(sync_result.get('errors') or [])
+        dedup_errors = _tiendanube_dedup_errors(errors)
+        failed_total = int(sync_result.get('failed') or 0) + int(mapping_info.get('pending_mapping') or 0)
+
+        ok = len(dedup_errors) == 0
+        if ok:
+            _job_set_done(job_id)
+        else:
+            _job_set_failed(job_id, '; '.join(dedup_errors)[:1000])
+
+        return {
+            'status_code': 200,
+            'body': {
+                'ok': ok,
+                'job_id': job_id,
+                'processed': len(rows),
+                'linked': linked,
+                'unlinked': unlinked,
+                'auto_mapped': int(mapping_info.get('auto_mapped') or 0),
+                'created_remote': int(mapping_info.get('created_remote') or 0),
+                'creation_failed': int(mapping_info.get('creation_failed') or 0),
+                'synced': int(sync_result.get('synced') or 0),
+                'failed': failed_total,
+                'errors': dedup_errors[:20],
+            },
+        }
+    except ValidationError as exc:
+        _job_set_failed(job_id, str(exc))
+        return {'status_code': 400, 'body': {'ok': False, 'job_id': job_id, 'detail': str(exc)}}
+    except Exception as exc:
+        _job_set_failed(job_id, str(exc))
+        return {'status_code': 500, 'body': {'ok': False, 'job_id': job_id, 'detail': f'Error inesperado sync stock: {exc}'}}
+
+
+def _tiendanube_run_retryable_job(job_id, job_type, payload, *, created_by=None):
+    kind = _clean_text(job_type).lower()
+    if kind == 'import_catalogo':
+        return _tiendanube_run_import_catalogo_job(job_id, payload, created_by=created_by)
+    if kind == 'sync_catalogo':
+        return _tiendanube_run_sync_catalogo_job(job_id, payload)
+    if kind == 'sync_stock':
+        return _tiendanube_run_sync_stock_job(job_id, payload)
+
+    detail = f'Tipo de job Tienda Nube no soportado: {job_type}'
+    _job_set_failed(job_id, detail)
+    return {'status_code': 400, 'body': {'ok': False, 'job_id': job_id, 'detail': detail}}
+
+
+def _tiendanube_failed_sync_jobs(limit=20):
+    lim = max(1, min(int(limit or 20), 200))
+    rows = q(
+        '''
+        SELECT id, job_type, status, attempts, payload, last_error, created_at, updated_at, next_retry_at
+        FROM integration_jobs
+        WHERE provider='tiendanube'
+          AND status='failed'
+          AND job_type = ANY(%s)
+        ORDER BY id DESC
+        LIMIT %s
+        ''',
+        [list(_TIENDANUBE_RETRYABLE_JOB_TYPES), lim],
+    ) or []
+    out = []
+    for row in rows:
+        item = dict(row)
+        item['payload'] = _json_any(row.get('payload')) or {}
+        item['last_error'] = _clean_text(row.get('last_error'))
+        out.append(item)
+    return out
+
+
+def _tiendanube_failed_sync_jobs_summary(limit_items=20):
+    by_type = {name: 0 for name in _TIENDANUBE_RETRYABLE_JOB_TYPES}
+    counts = q(
+        '''
+        SELECT job_type, COUNT(*)::int AS cnt
+        FROM integration_jobs
+        WHERE provider='tiendanube'
+          AND status='failed'
+          AND job_type = ANY(%s)
+        GROUP BY job_type
+        ''',
+        [list(_TIENDANUBE_RETRYABLE_JOB_TYPES)],
+    ) or []
+    for row in counts:
+        job_type = _clean_text(row.get('job_type'))
+        if job_type in by_type:
+            by_type[job_type] = int(row.get('cnt') or 0)
+    failed_total = int(sum(by_type.values()))
+    items = _tiendanube_failed_sync_jobs(limit=limit_items)
+    return {'failed_total': failed_total, 'by_type': by_type, 'items': items}
+
+
+def _retry_tiendanube_failed_jobs(limit=20, actor_id=None):
+    lim = max(1, min(int(limit or 20), 200))
+    jobs = _tiendanube_failed_sync_jobs(limit=lim)
+
+    retried = 0
+    succeeded = 0
+    still_failed = 0
+    errors = []
+    results = []
+
+    for job in jobs:
+        job_id = _safe_int(job.get('id'))
+        job_type = _clean_text(job.get('job_type'))
+        payload = job.get('payload') if isinstance(job.get('payload'), dict) else (_json_any(job.get('payload')) or {})
+        if not job_id or not job_type:
+            continue
+        retried += 1
+        run = _tiendanube_run_retryable_job(job_id, job_type, payload, created_by=actor_id)
+        body = run.get('body') if isinstance(run.get('body'), dict) else {}
+        status_code = int(run.get('status_code') or 200)
+        ok = bool(body.get('ok')) and 200 <= status_code < 300
+        if ok:
+            succeeded += 1
+        else:
+            still_failed += 1
+            detail = _clean_text(body.get('detail'))
+            if not detail:
+                detail = '; '.join(_tiendanube_dedup_errors(body.get('errors') or [])) if isinstance(body.get('errors'), list) else ''
+            if detail:
+                errors.append(f'job {job_id} ({job_type}): {detail}')
+        results.append(
+            {
+                'job_id': job_id,
+                'job_type': job_type,
+                'ok': ok,
+                'status_code': status_code,
+                'detail': _clean_text(body.get('detail')),
+            }
+        )
+
+    dedup_errors = _tiendanube_dedup_errors(errors)
+    return {
+        'ok': still_failed == 0,
+        'retried': retried,
+        'succeeded': succeeded,
+        'still_failed': still_failed,
+        'errors': dedup_errors[:20],
+        'results': results[:50],
+        'failed_summary': _tiendanube_failed_sync_jobs_summary(limit_items=20),
+    }
+
+
+class RetailOnlineImportCatalogoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        _require_staff(request)
+        data = request.data or {}
+        limit_products = _to_int(data.get('limit_products') or data.get('limit') or 100, 'limit_products')
+        per_page = _to_int(data.get('per_page') or 50, 'per_page')
+        limit_products = max(1, min(limit_products, 2000))
+        per_page = max(1, min(per_page, 200))
+
+        job_id = _create_job(
+            'tiendanube',
+            'import_catalogo',
+            {'limit_products': limit_products, 'per_page': per_page},
+            status='pending',
+        )
+        result = _tiendanube_run_import_catalogo_job(
+            job_id,
+            {'limit_products': limit_products, 'per_page': per_page},
+            created_by=getattr(request.user, 'id', None),
+        )
+        return Response(result.get('body') or {}, status=int(result.get('status_code') or 200))
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class RetailOnlineWebhookCatalogoView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @transaction.atomic
+    def post(self, request):
+        _verify_tiendanube_signature(request)
+        payload = _json(request.body)
+        event_name = _clean_text(payload.get('event') or payload.get('topic') or payload.get('type')) or 'product/updated'
+        product_id = _safe_int(payload.get('id') or payload.get('product_id') or payload.get('resource_id'))
+        if not product_id:
+            raise ValidationError('product_id ausente en webhook de catalogo')
+
+        dedupe_key = _tiendanube_event_id(payload, event_name, product_id)
+        signature = request.headers.get('x-linkedstore-hmac-sha256') or request.headers.get('X-Linkedstore-Hmac-Sha256')
+
+        # `product/updated` puede repetirse muchas veces para el mismo producto.
+        # Dedupe estricto por `event_id` bloquearia cambios futuros.
+        # Solo evitamos retries inmediatos (misma firma) en una ventana corta.
+        existing_event = q(
+            '''
+            SELECT id
+            FROM retail_webhook_events
+            WHERE provider='tiendanube'
+              AND event_type='product_catalog'
+              AND event_id LIKE %s
+              AND COALESCE(signature,'')=COALESCE(%s,'')
+              AND created_at >= NOW() - INTERVAL '15 seconds'
+            ORDER BY id DESC
+            LIMIT 1
+            FOR UPDATE
+            ''',
+            [f'{dedupe_key}:%', signature],
+            one=True,
+        )
+        if existing_event:
+            return Response({'ok': True, 'duplicate': True, 'event_id': dedupe_key})
+
+        event_id = f"{dedupe_key}:{timezone.now().strftime('%Y%m%d%H%M%S%f')}"
+
+        event_db_id = exec_returning(
+            '''
+            INSERT INTO retail_webhook_events(provider, event_type, event_id, external_order_id, signature, payload)
+            VALUES ('tiendanube','product_catalog',%s,%s,%s,%s)
+            RETURNING id
+            ''',
+            [event_id, str(product_id), signature, json.dumps(payload)],
+        )
+
+        event_topic = event_name.lower()
+        if event_topic == 'product/deleted':
+            rows = q(
+                '''
+                SELECT id, product_id
+                FROM retail_product_variants
+                WHERE tiendanube_product_id=%s
+                FOR UPDATE
+                ''',
+                [product_id],
+            ) or []
+            variant_ids = [int(row['id']) for row in rows if _safe_int(row.get('id'))]
+            product_ids = sorted({int(row['product_id']) for row in rows if _safe_int(row.get('product_id'))})
+            if variant_ids:
+                exec_void('UPDATE retail_product_variants SET active=FALSE WHERE id = ANY(%s)', [variant_ids])
+            for pid in product_ids:
+                left_active = q(
+                    'SELECT COUNT(*)::int AS cnt FROM retail_product_variants WHERE product_id=%s AND active=TRUE',
+                    [pid],
+                    one=True,
+                ) or {'cnt': 0}
+                if int(left_active.get('cnt') or 0) <= 0:
+                    exec_void('UPDATE retail_products SET active=FALSE WHERE id=%s', [pid])
+            exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
+            return Response(
+                {
+                    'ok': True,
+                    'event_id': dedupe_key,
+                    'event': event_name,
+                    'product_id': product_id,
+                    'variants_deactivated': len(variant_ids),
+                }
+            )
+
+        if event_topic not in ('product/created', 'product/updated'):
+            exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
+            return Response({'ok': True, 'event_id': dedupe_key, 'event': event_name, 'ignored': True})
+
+        cfg = _tiendanube_cfg(payload)
+        product = _tiendanube_request(cfg, 'GET', f'products/{product_id}', timeout_cap=20)
+        if not isinstance(product, dict):
+            raise ValidationError('Respuesta invalida al consultar producto webhook')
+
+        summary = _tiendanube_import_products_into_local(
+            [product],
+            created_by=None,
+        )
+        ok = bool(summary.get('ok'))
+        if ok:
+            exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
+        else:
+            exec_void(
+                'UPDATE retail_webhook_events SET processed=FALSE, error_message=%s WHERE id=%s',
+                ['; '.join(summary.get('errors') or [])[:1000], event_db_id],
+            )
+        out = dict(summary)
+        out.update({'event_id': dedupe_key, 'event': event_name, 'product_id': product_id})
+        out['errors'] = (summary.get('errors') or [])[:20]
+        return Response(out, status=200 if ok else 400)
+
+
 class RetailOnlineSyncCatalogoView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         _require_staff(request)
         limit = _to_int((request.data or {}).get('limit') or 200, 'limit')
-        rows = q(
-            '''
-            SELECT v.id, v.sku, v.barcode_internal, v.price_online_ars,
-                   v.tiendanube_product_id, v.tiendanube_variant_id,
-                   p.name AS producto, COALESCE(p.brand,'') AS marca,
-                   v.option_signature
-            FROM retail_product_variants v
-            JOIN retail_products p ON p.id=v.product_id
-            WHERE v.active=TRUE
-            ORDER BY v.id
-            LIMIT %s
-            ''',
-            [max(1, min(limit, 2000))],
-        ) or []
-        mapped = sum(1 for r in rows if r.get('tiendanube_variant_id'))
-        pending = len(rows) - mapped
-        job_id = _create_job('tiendanube', 'sync_catalogo', {'limit': limit, 'variants': rows}, status='pending')
-        return Response({'ok': True, 'job_id': job_id, 'processed': len(rows), 'mapped': mapped, 'pending_mapping': pending})
+        limit = max(1, min(limit, 2000))
+        job_id = _create_job('tiendanube', 'sync_catalogo', {'limit': limit}, status='pending')
+        result = _tiendanube_run_sync_catalogo_job(job_id, {'limit': limit})
+        return Response(result.get('body') or {}, status=int(result.get('status_code') or 200))
 
 
 class RetailOnlineSyncStockView(APIView):
@@ -5304,20 +9476,161 @@ class RetailOnlineSyncStockView(APIView):
     def post(self, request):
         _require_staff(request)
         limit = _to_int((request.data or {}).get('limit') or 200, 'limit')
-        rows = q(
-            '''
-            SELECT id, sku, stock_on_hand, tiendanube_variant_id
-            FROM retail_product_variants
-            WHERE active=TRUE
-            ORDER BY id
-            LIMIT %s
-            ''',
-            [max(1, min(limit, 2000))],
-        ) or []
-        linked = [r for r in rows if r.get('tiendanube_variant_id')]
-        unlinked = [r for r in rows if not r.get('tiendanube_variant_id')]
-        job_id = _create_job('tiendanube', 'sync_stock', {'limit': limit, 'variants': linked}, status='pending')
-        return Response({'ok': True, 'job_id': job_id, 'processed': len(rows), 'linked': len(linked), 'unlinked': len(unlinked)})
+        limit = max(1, min(limit, 2000))
+        job_id = _create_job('tiendanube', 'sync_stock', {'limit': limit}, status='pending')
+        result = _tiendanube_run_sync_stock_job(job_id, {'limit': limit})
+        return Response(result.get('body') or {}, status=int(result.get('status_code') or 200))
+
+
+class RetailOnlineFailedJobsSummaryView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        limit_items = _to_int((request.query_params or {}).get('limit') or 20, 'limit', allow_none=True)
+        if limit_items is None:
+            limit_items = 20
+        limit_items = max(1, min(limit_items, 200))
+        summary = _tiendanube_failed_sync_jobs_summary(limit_items=limit_items)
+        return Response(summary)
+
+
+class RetailOnlineRetryFailedJobsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        _require_staff(request)
+        data = request.data or {}
+        limit = _to_int(data.get('limit') or 20, 'limit')
+        result = _retry_tiendanube_failed_jobs(limit=limit, actor_id=getattr(request.user, 'id', None))
+        return Response(result)
+
+
+class RetailOnlineJobsProcessView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        _require_staff(request)
+        data = request.data or {}
+        providers = data.get('providers')
+        if isinstance(providers, str):
+            providers = [providers]
+        if not isinstance(providers, list) or not providers:
+            providers = ['arca', 'tiendanube']
+        normalized = []
+        for item in providers:
+            name = (_clean_text(item) or '').lower()
+            if name in ('arca', 'tiendanube') and name not in normalized:
+                normalized.append(name)
+        if not normalized:
+            raise ValidationError('providers invalido (arca|tiendanube)')
+
+        limit = _to_int(data.get('limit') or 20, 'limit')
+        limit = max(1, min(limit, 200))
+        max_attempts = _to_int(data.get('max_attempts') or 8, 'max_attempts')
+        max_attempts = max(1, min(max_attempts, 20))
+
+        out = {
+            'processed_at': timezone.now().isoformat(),
+            'providers': normalized,
+            'results': {},
+        }
+        if 'arca' in normalized:
+            out['results']['arca'] = process_arca_jobs(limit=limit, max_attempts=max_attempts)
+        if 'tiendanube' in normalized:
+            out['results']['tiendanube'] = _retry_tiendanube_failed_jobs(
+                limit=limit,
+                actor_id=getattr(request.user, 'id', None),
+            )
+        return Response(out)
+
+
+class RetailOnlineOAuthReauthorizeUrlView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        require_permission(request, 'action.config.online_credentials')
+        data = request.data or {}
+        state = _clean_text(data.get('state')) or uuid.uuid4().hex
+        cfg = q('SELECT tiendanube_client_id FROM retail_settings WHERE id=1', one=True) or {}
+        client_id = _clean_text(cfg.get('tiendanube_client_id')) or _clean_text(getattr(settings, 'TIENDANUBE_CLIENT_ID', ''))
+        if not client_id:
+            raise ValidationError('Tienda Nube client_id no configurado')
+        base = _clean_text(getattr(settings, 'TIENDANUBE_AUTHORIZE_BASE', 'https://www.tiendanube.com/apps'))
+        authorize_url = f"{(base or 'https://www.tiendanube.com/apps').rstrip('/')}/{quote(client_id, safe='')}/authorize"
+        query = urlencode({'state': state})
+        if query:
+            authorize_url = f"{authorize_url}?{query}"
+        security_logger.info(
+            "tiendanube_oauth_reauthorize_url_requested user_id=%s client_id=%s",
+            getattr(getattr(request, 'user', None), 'id', None),
+            client_id,
+        )
+        return Response({'ok': True, 'authorize_url': authorize_url, 'client_id': client_id, 'state': state})
+
+
+class RetailOnlineOAuthApplyTokenView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        require_permission(request, 'action.config.online_credentials')
+        _set_audit_user(request)
+        data = request.data or {}
+        store_id = _to_int(data.get('store_id') or data.get('user_id'), 'store_id')
+        access_token = _clean_text(data.get('access_token'))
+        if not access_token:
+            raise ValidationError('access_token requerido')
+
+        webhook_secret_requested = 'webhook_secret' in data
+        webhook_secret = _clean_text(data.get('webhook_secret')) if webhook_secret_requested else None
+        rotate_from_client_secret = bool(data.get('rotate_webhook_secret_from_client_secret'))
+        if rotate_from_client_secret:
+            row = q('SELECT tiendanube_client_secret FROM retail_settings WHERE id=1', one=True) or {}
+            webhook_secret = _clean_text(row.get('tiendanube_client_secret'))
+            if not webhook_secret:
+                raise ValidationError('No se pudo rotar webhook_secret: client_secret no configurado')
+            webhook_secret_requested = True
+
+        exec_void('INSERT INTO retail_settings(id) VALUES (1) ON CONFLICT (id) DO NOTHING')
+        updates = ['tiendanube_store_id=%s', 'tiendanube_access_token=%s']
+        params = [store_id, access_token]
+        if webhook_secret_requested:
+            updates.append('tiendanube_webhook_secret=%s')
+            params.append(webhook_secret)
+        params.append(1)
+        exec_void(f"UPDATE retail_settings SET {', '.join(updates)} WHERE id=%s", params)
+
+        row = q('SELECT * FROM retail_settings WHERE id=1', one=True) or {}
+        webhook_sync = None
+        webhook_warnings = []
+        try:
+            webhook_sync = _tiendanube_ensure_webhooks(_tiendanube_cfg())
+        except Exception as exc:
+            webhook_warnings.append(str(exc))
+            security_logger.warning(
+                "tiendanube_oauth_apply_token_webhooks_failed user_id=%s store_id=%s error=%s",
+                getattr(getattr(request, 'user', None), 'id', None),
+                store_id,
+                exc,
+            )
+
+        security_logger.info(
+            "tiendanube_oauth_apply_token user_id=%s store_id=%s webhook_secret_updated=%s",
+            getattr(getattr(request, 'user', None), 'id', None),
+            store_id,
+            bool(webhook_secret_requested),
+        )
+        out = {
+            'ok': True,
+            'store_id': store_id,
+            'settings': _sanitize_retail_settings_response(row),
+        }
+        if webhook_sync is not None:
+            out['webhooks'] = webhook_sync
+        if webhook_warnings:
+            out['warnings'] = webhook_warnings[:5]
+        return Response(out)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -5379,6 +9692,7 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
                 'auto_emit_invoice': _load_settings().get('auto_invoice_online_paid', True),
                 'customer_name': _clean_text(customer.get('name') or order.get('customer_name') or order.get('name')),
                 'customer_email': _clean_text(customer.get('email') or order.get('customer_email') or order.get('email') or order.get('contact_email')),
+                'customer_external_id': _clean_text(customer.get('id') or order.get('customer_id')),
             }
 
             quote = _build_quote(request, sale_payload, lock_variants=True)
@@ -5409,6 +9723,7 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
                             'name': sale_payload.get('customer_name'),
                             'doc': None,
                             'email': sale_payload.get('customer_email'),
+                            'external_customer_id': sale_payload.get('customer_external_id'),
                         }
                     ),
                     quote['subtotal_ars'],
@@ -5487,7 +9802,7 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
                 )
 
             if sale_payload.get('auto_emit_invoice') and quote['invoice_required']:
-                _emitir_factura(sale_id, request)
+                _emitir_factura(sale_id, request, missing_doc_policy='manual_review')
 
             exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
             return Response({'ok': True, 'event_id': event_id, 'sale_id': sale_id})
@@ -5535,59 +9850,95 @@ class RetailOnlineWebhookOrdenCanceladaView(APIView):
             [event_id, order_id, signature, json.dumps(payload)],
         )
 
-        sale = q('SELECT * FROM retail_sales WHERE source_order_id=%s FOR UPDATE', [order_id], one=True)
-        if sale and sale.get('status') != 'cancelled':
-            items = q('SELECT * FROM retail_sale_items WHERE sale_id=%s FOR UPDATE', [sale['id']]) or []
-            if any(int(it.get('returned_qty') or 0) > 0 for it in items):
-                _create_job(
-                    'tiendanube',
-                    'webhook_order_cancelled',
-                    {'event_id': event_id, 'order_id': order_id, 'payload': payload},
-                    status='failed',
-                    last_error='Venta con devoluciones parciales; requiere revision manual',
-                )
-                exec_void(
-                    'UPDATE retail_webhook_events SET processed=FALSE, error_message=%s WHERE id=%s',
-                    ['Venta con devoluciones parciales; requiere revision manual', event_db_id],
-                )
-                return Response({'ok': False, 'detail': 'Venta con devoluciones parciales'}, status=400)
-
-            for item in items:
-                variant = q('SELECT id, stock_on_hand FROM retail_product_variants WHERE id=%s FOR UPDATE', [item['variant_id']], one=True)
-                new_stock = int(variant['stock_on_hand']) + int(item['quantity'])
-                exec_void('UPDATE retail_product_variants SET stock_on_hand=%s WHERE id=%s', [new_stock, item['variant_id']])
-                exec_void(
-                    '''
-                    INSERT INTO retail_stock_movements(
-                      variant_id, movement_kind, qty_signed, stock_after,
-                      cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
-                    )
-                    VALUES (%s,'online_cancel',%s,%s,%s,'sale',%s,'Cancelacion webhook Tienda Nube',NULL)
-                    ''',
-                    [
-                        item['variant_id'],
-                        int(item['quantity']),
-                        new_stock,
-                        item['unit_cost_snapshot_ars'],
-                        sale['id'],
-                    ],
-                )
-
-            exec_void(
-                '''
-                UPDATE retail_sales
-                SET status='cancelled', cancelled_at=NOW(), cancel_reason=%s
-                WHERE id=%s
-                ''',
-                ['Cancelacion webhook Tienda Nube', sale['id']],
+        out = _cancel_online_sale_for_webhook(order_id, reason='Cancelacion webhook Tienda Nube')
+        if not out.get('ok'):
+            _create_job(
+                'tiendanube',
+                'webhook_order_cancelled',
+                {'event_id': event_id, 'order_id': order_id, 'payload': payload},
+                status='failed',
+                last_error=out.get('detail') or 'Error cancelando venta online',
             )
             exec_void(
-                "UPDATE retail_invoices SET status='manual_review', error_message='Venta online cancelada', updated_at=NOW() WHERE sale_id=%s",
-                [sale['id']],
+                'UPDATE retail_webhook_events SET processed=FALSE, error_message=%s WHERE id=%s',
+                [out.get('detail') or 'Error cancelando venta online', event_db_id],
             )
+            return Response({'ok': False, 'detail': out.get('detail') or 'No se pudo cancelar la venta'}, status=400)
 
         exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
-        return Response({'ok': True, 'event_id': event_id, 'order_id': order_id})
+        return Response(
+            {
+                'ok': True,
+                'event_id': event_id,
+                'order_id': order_id,
+                'sale_id': out.get('sale_id'),
+                'noop': bool(out.get('noop')),
+            }
+        )
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class RetailOnlineWebhookOrdenActualizadaView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @transaction.atomic
+    def post(self, request):
+        _verify_tiendanube_signature(request)
+        payload = _json(request.body)
+        order_id = _clean_text(payload.get('id') or payload.get('order_id') or payload.get('number'))
+        if not order_id:
+            raise ValidationError('order_id ausente en webhook')
+        event_id = _tiendanube_event_id(payload, 'order/updated', order_id)
+        signature = request.headers.get('x-linkedstore-hmac-sha256') or request.headers.get('X-Linkedstore-Hmac-Sha256')
+
+        existing_event = q(
+            'SELECT id FROM retail_webhook_events WHERE provider=\'tiendanube\' AND event_id=%s FOR UPDATE',
+            [event_id],
+            one=True,
+        )
+        if existing_event:
+            return Response({'ok': True, 'duplicate': True, 'event_id': event_id})
+
+        event_db_id = exec_returning(
+            '''
+            INSERT INTO retail_webhook_events(provider, event_type, event_id, external_order_id, signature, payload)
+            VALUES ('tiendanube','order_updated',%s,%s,%s,%s)
+            RETURNING id
+            ''',
+            [event_id, order_id, signature, json.dumps(payload)],
+        )
+
+        order = _tiendanube_fetch_order(order_id, payload)
+        if not _tiendanube_order_is_refunded_or_cancelled(order):
+            exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
+            return Response({'ok': True, 'event_id': event_id, 'order_id': order_id, 'ignored': True})
+
+        out = _cancel_online_sale_for_webhook(order_id, reason='Refund webhook Tienda Nube')
+        if not out.get('ok'):
+            _create_job(
+                'tiendanube',
+                'webhook_order_updated_refund',
+                {'event_id': event_id, 'order_id': order_id, 'payload': payload},
+                status='failed',
+                last_error=out.get('detail') or 'Error procesando refund',
+            )
+            exec_void(
+                'UPDATE retail_webhook_events SET processed=FALSE, error_message=%s WHERE id=%s',
+                [out.get('detail') or 'Error procesando refund', event_db_id],
+            )
+            return Response({'ok': False, 'detail': out.get('detail') or 'No se pudo procesar refund'}, status=400)
+
+        exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
+        return Response(
+            {
+                'ok': True,
+                'event_id': event_id,
+                'order_id': order_id,
+                'sale_id': out.get('sale_id'),
+                'noop': bool(out.get('noop')),
+            }
+        )
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -5642,6 +9993,89 @@ class RetailOnlineWebhookStoreRedactView(APIView):
         exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
         security_logger.warning("tiendanube_store_redact_applied store_id=%s", store_id or "")
         return Response({'ok': True, 'event_id': event_id, 'store_id': store_id})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class RetailOnlineWebhookCustomerRedactView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @transaction.atomic
+    def post(self, request):
+        _verify_tiendanube_signature(request)
+        payload = _json(request.body)
+        identity = _extract_tiendanube_customer_identity(payload)
+        external_customer_id = _clean_text(identity.get('external_customer_id')) or 'customer'
+        event_id = _tiendanube_event_id(payload, 'customers/redact', external_customer_id)
+        signature = request.headers.get('x-linkedstore-hmac-sha256') or request.headers.get('X-Linkedstore-Hmac-Sha256')
+
+        existing_event = q(
+            'SELECT id FROM retail_webhook_events WHERE provider=\'tiendanube\' AND event_id=%s FOR UPDATE',
+            [event_id],
+            one=True,
+        )
+        if existing_event:
+            return Response({'ok': True, 'duplicate': True, 'event_id': event_id})
+
+        event_db_id = exec_returning(
+            '''
+            INSERT INTO retail_webhook_events(provider, event_type, event_id, external_order_id, signature, payload)
+            VALUES ('tiendanube','customers_redact',%s,%s,%s,%s)
+            RETURNING id
+            ''',
+            [event_id, _clean_text(identity.get('external_customer_id')), signature, json.dumps(payload)],
+        )
+
+        out = _apply_online_customer_redact(identity)
+        exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
+        return Response({'ok': True, 'event_id': event_id, 'sales_redacted': int(out.get('sales_redacted') or 0)})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class RetailOnlineWebhookCustomerDataRequestView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @transaction.atomic
+    def post(self, request):
+        _verify_tiendanube_signature(request)
+        payload = _json(request.body)
+        identity = _extract_tiendanube_customer_identity(payload)
+        external_customer_id = _clean_text(identity.get('external_customer_id')) or 'customer'
+        event_id = _tiendanube_event_id(payload, 'customers/data_request', external_customer_id)
+        signature = request.headers.get('x-linkedstore-hmac-sha256') or request.headers.get('X-Linkedstore-Hmac-Sha256')
+
+        existing_event = q(
+            'SELECT id FROM retail_webhook_events WHERE provider=\'tiendanube\' AND event_id=%s FOR UPDATE',
+            [event_id],
+            one=True,
+        )
+        if existing_event:
+            return Response({'ok': True, 'duplicate': True, 'event_id': event_id})
+
+        event_db_id = exec_returning(
+            '''
+            INSERT INTO retail_webhook_events(provider, event_type, event_id, external_order_id, signature, payload)
+            VALUES ('tiendanube','customers_data_request',%s,%s,%s,%s)
+            RETURNING id
+            ''',
+            [event_id, _clean_text(identity.get('external_customer_id')), signature, json.dumps(payload)],
+        )
+
+        report_rows = _online_customer_data_report(identity)
+        _create_job(
+            'tiendanube',
+            'webhook_customer_data_request',
+            {
+                'event_id': event_id,
+                'identity': identity,
+                'report_rows': report_rows,
+            },
+            status='done',
+            last_error=None,
+        )
+        exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
+        return Response({'ok': True, 'event_id': event_id, 'records': len(report_rows)})
 
 
 def _to_datetime(value, label, allow_none=True):
@@ -6118,7 +10552,6 @@ class RetailConfigSettingsView(APIView):
 
     @transaction.atomic
     def put(self, request):
-        _require_admin(request)
         _set_audit_user(request)
         data = request.data or {}
         updates = []
@@ -6142,6 +10575,8 @@ class RetailConfigSettingsView(APIView):
         int_fields = [
             'arca_pto_vta_store',
             'arca_pto_vta_online',
+            'arca_cbte_tipo_store',
+            'arca_cbte_tipo_online',
             'tiendanube_store_id',
         ]
         positive_int_fields = [
@@ -6152,6 +10587,11 @@ class RetailConfigSettingsView(APIView):
             'purchase_default_markup_pct',
         ]
         bool_fields = ['auto_invoice_online_paid']
+
+        known_fields = set(text_fields + int_fields + positive_int_fields + non_negative_decimal_fields + bool_fields)
+        known_fields.update({'ean_country_prefix', 'ean_generic_supplier_code', 'currency_code'})
+        requested_fields = {field for field in known_fields if field in data}
+        _require_settings_write_permissions(request, requested_fields)
 
         if 'ean_country_prefix' in data:
             updates.append('ean_country_prefix=%s')
@@ -6166,8 +10606,11 @@ class RetailConfigSettingsView(APIView):
                 params.append(_clean_text(data.get(field)))
         for field in int_fields:
             if field in data:
+                val = _to_int(data.get(field), field, allow_none=True)
+                if field.startswith('arca_') and val is not None and val <= 0:
+                    raise ValidationError(f'{field} debe ser mayor a 0')
                 updates.append(f'{field}=%s')
-                params.append(_to_int(data.get(field), field, allow_none=True))
+                params.append(val)
         for field in positive_int_fields:
             if field in data:
                 val = _to_int(data.get(field), field)
@@ -6215,7 +10658,7 @@ class RetailConfigPageSettingsView(APIView):
 
     @transaction.atomic
     def put(self, request):
-        _require_admin(request)
+        require_permission(request, 'action.config.editar')
         _set_audit_user(request)
         data = request.data or {}
         if not isinstance(data, dict):
@@ -6243,7 +10686,7 @@ class RetailConfigPaymentAccountsView(APIView):
 
     @transaction.atomic
     def put(self, request):
-        _require_admin(request)
+        require_permission(request, 'action.config.editar')
         _set_audit_user(request)
         data = request.data or {}
         accounts = data.get('accounts')
@@ -6259,7 +10702,7 @@ class RetailConfigPaymentAccountsView(APIView):
             payment_method = _clean_text(item.get('payment_method'))
             if payment_method is not None:
                 payment_method = payment_method.lower()
-                if payment_method not in ('cash', 'debit', 'transfer', 'credit'):
+                if payment_method not in ('cash', 'debit', 'transfer', 'credit', 'store_credit'):
                     raise ValidationError('payment_method invalido')
             provider = _clean_text(item.get('provider'))
             active = bool(item.get('active', True))
@@ -6292,6 +10735,796 @@ class RetailConfigPaymentAccountsView(APIView):
                 )
 
         return self.get(request)
+
+
+INVENTORY_COUNT_STATUSES = {'draft', 'in_progress', 'closed', 'cancelled'}
+INVENTORY_COUNT_SCOPES = {'all', 'low_stock', 'custom'}
+
+
+def _inventory_count_code(count_id):
+    return f"CNT-{timezone.localdate().strftime('%Y%m%d')}-{int(count_id):06d}"
+
+
+def _normalize_inventory_count_status(raw, default=None):
+    value = (_clean_text(raw) or default or '').lower()
+    if not value:
+        return None
+    if value not in INVENTORY_COUNT_STATUSES:
+        raise ValidationError('status invalido (draft|in_progress|closed|cancelled)')
+    return value
+
+
+def _normalize_inventory_count_scope(raw, default='all'):
+    scope = (_clean_text(raw) or default or 'all').lower()
+    if scope not in INVENTORY_COUNT_SCOPES:
+        raise ValidationError('scope invalido (all|low_stock|custom)')
+    return scope
+
+
+def _load_inventory_count(conteo_id, include_items=True, limit_items=2000):
+    row = q(
+        '''
+        SELECT c.*,
+               COALESCE(uc.nombre,'') AS created_by_name,
+               COALESCE(ux.nombre,'') AS closed_by_name
+        FROM retail_inventory_counts c
+        LEFT JOIN users uc ON uc.id=c.created_by
+        LEFT JOIN users ux ON ux.id=c.closed_by
+        WHERE c.id=%s
+        ''',
+        [conteo_id],
+        one=True,
+    )
+    if not row:
+        return None
+    if not include_items:
+        return row
+    items = q(
+        '''
+        SELECT ci.*, v.sku, v.option_signature, v.stock_on_hand,
+               p.name AS producto
+        FROM retail_inventory_count_items ci
+        JOIN retail_product_variants v ON v.id=ci.variant_id
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE ci.count_id=%s
+        ORDER BY ci.id
+        LIMIT %s
+        ''',
+        [conteo_id, max(1, min(int(limit_items or 2000), 5000))],
+    ) or []
+    row['items'] = items
+    row['summary'] = {
+        'items_total': len(items),
+        'items_counted': sum(1 for item in items if item.get('counted_qty') is not None),
+        'items_with_diff': sum(1 for item in items if int(item.get('diff_qty') or 0) != 0),
+        'diff_units_total': sum(int(item.get('diff_qty') or 0) for item in items),
+    }
+    return row
+
+
+class RetailInventarioConteosView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        status = _normalize_inventory_count_status((request.query_params or {}).get('status'), default=None)
+        limit_items = _to_int((request.query_params or {}).get('limit') or 50, 'limit', allow_none=True)
+        limit_items = max(1, min(int(limit_items or 50), 500))
+        params = []
+        where = ''
+        if status:
+            where = 'WHERE c.status=%s'
+            params.append(status)
+        params.append(limit_items)
+        rows = q(
+            f'''
+            SELECT c.id, c.code, c.status, c.scope, c.reason,
+                   c.started_at, c.closed_at, c.created_at, c.updated_at,
+                   COALESCE(uc.nombre,'') AS created_by_name,
+                   COALESCE(ux.nombre,'') AS closed_by_name,
+                   COALESCE(stats.items_total,0)::int AS items_total,
+                   COALESCE(stats.items_counted,0)::int AS items_counted,
+                   COALESCE(stats.items_with_diff,0)::int AS items_with_diff
+            FROM retail_inventory_counts c
+            LEFT JOIN users uc ON uc.id=c.created_by
+            LEFT JOIN users ux ON ux.id=c.closed_by
+            LEFT JOIN (
+              SELECT ci.count_id,
+                     COUNT(*)::int AS items_total,
+                     COUNT(*) FILTER (WHERE ci.counted_qty IS NOT NULL)::int AS items_counted,
+                     COUNT(*) FILTER (WHERE COALESCE(ci.diff_qty,0) <> 0)::int AS items_with_diff
+              FROM retail_inventory_count_items ci
+              GROUP BY ci.count_id
+            ) stats ON stats.count_id=c.id
+            {where}
+            ORDER BY c.id DESC
+            LIMIT %s
+            ''',
+            params,
+        ) or []
+        return Response({'rows': rows})
+
+    @transaction.atomic
+    def post(self, request):
+        _require_staff(request)
+        _set_audit_user(request)
+        data = request.data or {}
+        scope = _normalize_inventory_count_scope(data.get('scope'), default='all')
+        reason = _clean_text(data.get('reason')) or 'Conteo ciclico'
+        include_inactive = bool(data.get('include_inactive'))
+        variant_ids_raw = data.get('variant_ids') if isinstance(data.get('variant_ids'), list) else []
+        variant_ids = []
+        for item in variant_ids_raw:
+            vid = _to_int(item, 'variant_id', allow_none=True)
+            if vid and vid not in variant_ids:
+                variant_ids.append(vid)
+
+        where_parts = []
+        params = []
+        if not include_inactive:
+            where_parts.append('v.active=TRUE')
+        if scope == 'low_stock':
+            where_parts.append('v.stock_on_hand <= v.stock_min')
+            where_parts.append('v.stock_min > 0')
+        if scope == 'custom' and not variant_ids:
+            raise ValidationError('scope custom requiere variant_ids')
+        if variant_ids:
+            where_parts.append('v.id = ANY(%s)')
+            params.append(variant_ids)
+
+        where_sql = ' AND '.join(where_parts) if where_parts else 'TRUE'
+        variants = q(
+            f'''
+            SELECT v.id AS variant_id, v.stock_on_hand, v.stock_min
+            FROM retail_product_variants v
+            WHERE {where_sql}
+            ORDER BY v.id
+            LIMIT 5000
+            ''',
+            params,
+        ) or []
+        if not variants:
+            raise ValidationError('No hay variantes para el conteo seleccionado')
+
+        conteo_id = exec_returning(
+            '''
+            INSERT INTO retail_inventory_counts(
+              code, status, scope, reason, started_at, created_by, snapshot
+            )
+            VALUES ('PENDIENTE','in_progress',%s,%s,NOW(),%s,%s::jsonb)
+            RETURNING id
+            ''',
+            [
+                scope,
+                reason,
+                getattr(request.user, 'id', None),
+                json.dumps(
+                    {
+                        'scope': scope,
+                        'include_inactive': include_inactive,
+                        'variant_ids': variant_ids,
+                        'variants_count': len(variants),
+                    }
+                ),
+            ],
+        )
+        exec_void('UPDATE retail_inventory_counts SET code=%s WHERE id=%s', [_inventory_count_code(conteo_id), conteo_id])
+
+        for row in variants:
+            exec_void(
+                '''
+                INSERT INTO retail_inventory_count_items(
+                  count_id, variant_id, expected_qty
+                )
+                VALUES (%s,%s,%s)
+                ''',
+                [conteo_id, row.get('variant_id'), int(row.get('stock_on_hand') or 0)],
+            )
+
+        return Response(_load_inventory_count(conteo_id), status=201)
+
+
+class RetailInventarioConteoDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, conteo_id):
+        _require_staff(request)
+        row = _load_inventory_count(conteo_id)
+        if not row:
+            return Response({'detail': 'Conteo no encontrado'}, status=404)
+        return Response(row)
+
+
+class RetailInventarioConteoCerrarView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, conteo_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        conteo = q('SELECT * FROM retail_inventory_counts WHERE id=%s FOR UPDATE', [conteo_id], one=True)
+        if not conteo:
+            return Response({'detail': 'Conteo no encontrado'}, status=404)
+        if conteo.get('status') not in ('draft', 'in_progress'):
+            raise ValidationError('El conteo ya fue cerrado o cancelado')
+
+        data = request.data or {}
+        apply_adjustments = bool(data.get('apply_adjustments', True))
+        create_incidents = bool(data.get('create_incidents', True))
+        raw_items = data.get('items') if isinstance(data.get('items'), list) else []
+
+        by_count_item = {}
+        by_variant = {}
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            if item.get('count_item_id') is not None:
+                by_count_item[_to_int(item.get('count_item_id'), 'count_item_id')] = item
+            if item.get('variant_id') is not None:
+                by_variant[_to_int(item.get('variant_id'), 'variant_id')] = item
+
+        items = q(
+            '''
+            SELECT *
+            FROM retail_inventory_count_items
+            WHERE count_id=%s
+            ORDER BY id
+            FOR UPDATE
+            ''',
+            [conteo_id],
+        ) or []
+        if not items:
+            raise ValidationError('El conteo no tiene items')
+
+        adjusted_items = 0
+        diff_units_total = 0
+        incidents_created = 0
+        for item in items:
+            source = by_count_item.get(int(item['id'])) or by_variant.get(int(item['variant_id'])) or {}
+            counted_qty = source.get('counted_qty')
+            if counted_qty is None:
+                counted_qty = item.get('expected_qty')
+            counted_qty = _to_int(counted_qty, 'counted_qty')
+            if counted_qty < 0:
+                raise ValidationError('counted_qty no puede ser negativo')
+            expected_qty = int(item.get('expected_qty') or 0)
+            diff_qty = int(counted_qty) - expected_qty
+            diff_units_total += diff_qty
+            reason = _clean_text(source.get('adjustment_reason') or source.get('reason'))
+
+            if apply_adjustments and diff_qty != 0:
+                if not reason:
+                    raise ValidationError(f'adjustment_reason requerido para variante {item.get("variant_id")}')
+                variant = q(
+                    'SELECT id, stock_on_hand FROM retail_product_variants WHERE id=%s FOR UPDATE',
+                    [item.get('variant_id')],
+                    one=True,
+                )
+                if not variant:
+                    raise ValidationError(f'Variante no encontrada: {item.get("variant_id")}')
+                stock_after = int(variant.get('stock_on_hand') or 0) + diff_qty
+                if stock_after < 0:
+                    raise ValidationError(f'El ajuste deja stock negativo en variante {item.get("variant_id")}')
+                exec_void('UPDATE retail_product_variants SET stock_on_hand=%s WHERE id=%s', [stock_after, item.get('variant_id')])
+                exec_void(
+                    '''
+                    INSERT INTO retail_stock_movements(
+                      variant_id, movement_kind, qty_signed, stock_after,
+                      cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
+                    )
+                    VALUES (%s,'manual_adjustment',%s,%s,NULL,'inventory_count',%s,%s,%s)
+                    ''',
+                    [
+                        item.get('variant_id'),
+                        diff_qty,
+                        stock_after,
+                        conteo_id,
+                        reason,
+                        getattr(request.user, 'id', None),
+                    ],
+                )
+                adjusted_items += 1
+
+            exec_void(
+                '''
+                UPDATE retail_inventory_count_items
+                SET counted_qty=%s,
+                    diff_qty=%s,
+                    adjustment_reason=%s,
+                    adjusted_by=%s,
+                    adjusted_at=%s,
+                    updated_at=NOW()
+                WHERE id=%s
+                ''',
+                [
+                    counted_qty,
+                    diff_qty,
+                    reason,
+                    getattr(request.user, 'id', None) if diff_qty != 0 else None,
+                    timezone.now() if diff_qty != 0 else None,
+                    item.get('id'),
+                ],
+            )
+
+            if create_incidents and abs(diff_qty) >= 5:
+                _create_operational_incident(
+                    source='inventario',
+                    severity='medium' if abs(diff_qty) < 10 else 'high',
+                    action_required='Validar diferencia de conteo y causa raiz',
+                    sla_minutes=240,
+                    status='open',
+                    title=f'Diferencia en conteo {conteo.get("code") or conteo_id}',
+                    detail=f'Variante {item.get("variant_id")} con diferencia {diff_qty:+d} unidades',
+                    related_entity_type='inventory_count',
+                    related_entity_id=conteo_id,
+                    payload={
+                        'count_id': conteo_id,
+                        'count_item_id': item.get('id'),
+                        'variant_id': item.get('variant_id'),
+                        'expected_qty': expected_qty,
+                        'counted_qty': counted_qty,
+                        'diff_qty': diff_qty,
+                    },
+                    created_by=getattr(request.user, 'id', None),
+                )
+                incidents_created += 1
+
+        exec_void(
+            '''
+            UPDATE retail_inventory_counts
+            SET status='closed',
+                closed_at=NOW(),
+                closed_by=%s,
+                snapshot=%s::jsonb,
+                updated_at=NOW()
+            WHERE id=%s
+            ''',
+            [
+                getattr(request.user, 'id', None),
+                json.dumps(
+                    {
+                        'apply_adjustments': apply_adjustments,
+                        'adjusted_items': adjusted_items,
+                        'diff_units_total': diff_units_total,
+                        'incidents_created': incidents_created,
+                    }
+                ),
+                conteo_id,
+            ],
+        )
+        row = _load_inventory_count(conteo_id)
+        row['close_summary'] = {
+            'adjusted_items': adjusted_items,
+            'diff_units_total': diff_units_total,
+            'incidents_created': incidents_created,
+            'apply_adjustments': apply_adjustments,
+        }
+        return Response(row)
+
+
+class RetailReposicionSugeridaView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        days = _to_int((request.query_params or {}).get('days') or 30, 'days')
+        days = max(7, min(days, 120))
+        limit_items = _to_int((request.query_params or {}).get('limit') or 120, 'limit')
+        limit_items = max(1, min(limit_items, 500))
+        rows = q(
+            '''
+            WITH sales AS (
+              SELECT si.variant_id, COALESCE(SUM(si.quantity),0)::int AS sold_qty
+              FROM retail_sale_items si
+              JOIN retail_sales s ON s.id=si.sale_id
+              WHERE s.status IN ('confirmed','partial_return','returned')
+                AND s.created_at >= (NOW() - (%s || ' days')::interval)
+              GROUP BY si.variant_id
+            ),
+            last_supplier AS (
+              SELECT DISTINCT ON (pi.variant_id)
+                     pi.variant_id,
+                     p.supplier_id,
+                     COALESCE(rs.name,'') AS supplier_name,
+                     p.purchase_date
+              FROM retail_purchase_items pi
+              JOIN retail_purchases p ON p.id=pi.purchase_id
+              LEFT JOIN retail_suppliers rs ON rs.id=p.supplier_id
+              ORDER BY pi.variant_id, p.purchase_date DESC, pi.id DESC
+            )
+            SELECT v.id AS variant_id,
+                   v.sku,
+                   v.option_signature,
+                   p.name AS producto,
+                   v.stock_on_hand,
+                   v.stock_min,
+                   COALESCE(s.sold_qty,0)::int AS sold_qty,
+                   ROUND((COALESCE(s.sold_qty,0)::numeric / %s::numeric), 3) AS daily_rotation,
+                   GREATEST(
+                     v.stock_min,
+                     CEIL((COALESCE(s.sold_qty,0)::numeric / %s::numeric) * 14)
+                   )::int AS target_stock,
+                   GREATEST(
+                     GREATEST(
+                       v.stock_min,
+                       CEIL((COALESCE(s.sold_qty,0)::numeric / %s::numeric) * 14)
+                     )::int - v.stock_on_hand,
+                     0
+                   )::int AS suggested_qty,
+                   ls.supplier_id,
+                   ls.supplier_name,
+                   CASE
+                     WHEN v.stock_on_hand <= 0 THEN 'critical'
+                     WHEN v.stock_on_hand < v.stock_min THEN 'high'
+                     ELSE 'medium'
+                   END AS severity,
+                   CASE
+                     WHEN (COALESCE(s.sold_qty,0)::numeric / %s::numeric) > 0
+                       THEN ROUND(v.stock_on_hand::numeric / NULLIF((COALESCE(s.sold_qty,0)::numeric / %s::numeric),0), 1)
+                     ELSE NULL
+                   END AS est_days_to_break
+            FROM retail_product_variants v
+            JOIN retail_products p ON p.id=v.product_id
+            LEFT JOIN sales s ON s.variant_id=v.id
+            LEFT JOIN last_supplier ls ON ls.variant_id=v.id
+            WHERE v.active=TRUE
+            ORDER BY severity, est_days_to_break ASC NULLS LAST, suggested_qty DESC, v.id
+            LIMIT %s
+            ''',
+            [days, days, days, days, days, days, limit_items],
+        ) or []
+        out = []
+        for row in rows:
+            suggested_qty = int(row.get('suggested_qty') or 0)
+            if suggested_qty <= 0:
+                continue
+            out.append(
+                {
+                    **row,
+                    'source': 'inventario',
+                    'action_required': 'Evaluar reposicion y emitir compra',
+                    'sla_minutes': 480 if row.get('severity') == 'critical' else 1440,
+                    'status': 'open',
+                }
+            )
+        return Response({'days': days, 'rows': out})
+
+
+def _alert_fingerprint(source, key):
+    src = (_clean_text(source) or 'alert').lower()
+    raw = _clean_text(key) or 'default'
+    return hashlib.sha1(f'{src}:{raw}'.encode('utf-8')).hexdigest()
+
+
+def _upsert_operational_alert(
+    *,
+    source,
+    severity,
+    title,
+    detail,
+    action_required,
+    sla_minutes,
+    payload,
+    fingerprint_key,
+):
+    fingerprint = _alert_fingerprint(source, fingerprint_key)
+    existing = q(
+        'SELECT id, status FROM retail_operation_alerts WHERE fingerprint=%s ORDER BY id DESC LIMIT 1',
+        [fingerprint],
+        one=True,
+    )
+    params = [
+        _normalize_pending_source(source, default='alertas'),
+        _normalize_pending_severity(severity, default='medium'),
+        _clean_text(action_required) or 'Revisar alerta',
+        _to_sla_minutes(sla_minutes, default=120),
+        _clean_text(title) or 'Alerta operativa',
+        _clean_text(detail),
+        json.dumps(payload if isinstance(payload, dict) else {}),
+        fingerprint,
+    ]
+    if existing:
+        exec_void(
+            '''
+            UPDATE retail_operation_alerts
+            SET source=%s,
+                severity=%s,
+                action_required=%s,
+                sla_minutes=%s,
+                title=%s,
+                detail=%s,
+                payload=%s::jsonb,
+                status=CASE WHEN status='resolved' THEN 'open' ELSE status END,
+                last_seen_at=NOW(),
+                updated_at=NOW()
+            WHERE id=%s
+            ''',
+            [*params, existing.get('id')],
+        )
+        return existing.get('id')
+    return exec_returning(
+        '''
+        INSERT INTO retail_operation_alerts(
+          source, severity, action_required, sla_minutes, status,
+          title, detail, payload, fingerprint, first_seen_at, last_seen_at
+        )
+        VALUES (%s,%s,%s,%s,'open',%s,%s,%s::jsonb,%s,NOW(),NOW())
+        RETURNING id
+        ''',
+        params,
+    )
+
+
+def _refresh_operational_alerts():
+    generated = []
+    low_stock = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM retail_product_variants
+        WHERE active=TRUE
+          AND stock_min > 0
+          AND stock_on_hand <= stock_min
+        ''',
+        one=True,
+    ) or {'cnt': 0}
+    low_stock_cnt = int(low_stock.get('cnt') or 0)
+    if low_stock_cnt > 0:
+        generated.append(
+            _upsert_operational_alert(
+                source='inventario',
+                severity='high' if low_stock_cnt >= 15 else 'medium',
+                title='Stock critico detectado',
+                detail=f'{low_stock_cnt} variante(s) por debajo de stock minimo.',
+                action_required='Priorizar reposicion y compras',
+                sla_minutes=240,
+                payload={'variants_below_min': low_stock_cnt},
+                fingerprint_key='low_stock_global',
+            )
+        )
+
+    returns_cur = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM retail_returns
+        WHERE created_at >= (NOW() - INTERVAL '7 days')
+        ''',
+        one=True,
+    ) or {'cnt': 0}
+    returns_prev = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM retail_returns
+        WHERE created_at >= (NOW() - INTERVAL '14 days')
+          AND created_at < (NOW() - INTERVAL '7 days')
+        ''',
+        one=True,
+    ) or {'cnt': 0}
+    cur_cnt = int(returns_cur.get('cnt') or 0)
+    prev_cnt = int(returns_prev.get('cnt') or 0)
+    if cur_cnt >= 6 and cur_cnt > max(prev_cnt + 2, int(prev_cnt * 1.5)):
+        generated.append(
+            _upsert_operational_alert(
+                source='postventa',
+                severity='high',
+                title='Suba de devoluciones',
+                detail=f'Devoluciones ultimos 7 dias: {cur_cnt} (previos 7 dias: {prev_cnt}).',
+                action_required='Revisar causas y productos comprometidos',
+                sla_minutes=180,
+                payload={'returns_last_7d': cur_cnt, 'returns_prev_7d': prev_cnt},
+                fingerprint_key='returns_spike_7d',
+            )
+        )
+
+    failed_jobs = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM integration_jobs
+        WHERE status IN ('failed','dead_letter')
+          AND created_at >= (NOW() - INTERVAL '24 hours')
+        ''',
+        one=True,
+    ) or {'cnt': 0}
+    failed_cnt = int(failed_jobs.get('cnt') or 0)
+    if failed_cnt > 0:
+        generated.append(
+            _upsert_operational_alert(
+                source='online',
+                severity='critical' if failed_cnt >= 10 else 'high',
+                title='Jobs de integracion fallidos',
+                detail=f'{failed_cnt} job(s) fallidos/dead_letter en las ultimas 24h.',
+                action_required='Ejecutar reproceso y validar conectores',
+                sla_minutes=60,
+                payload={'failed_jobs_24h': failed_cnt},
+                fingerprint_key='integration_failed_24h',
+            )
+        )
+    return generated
+
+
+def _serialize_alert_row(row):
+    payload = _json_any(row.get('payload')) or {}
+    payload.update({'alert_id': row.get('id')})
+    return _pending_item(
+        pid=f"alert:{row.get('id')}",
+        source=row.get('source') or 'alertas',
+        severity=row.get('severity') or 'medium',
+        action_required=row.get('action_required') or 'Revisar alerta',
+        sla_minutes=row.get('sla_minutes') or 120,
+        status=row.get('status') or 'open',
+        title=row.get('title') or f'Alerta #{row.get("id")}',
+        detail=row.get('detail'),
+        created_at=row.get('created_at'),
+        payload=payload,
+    )
+
+
+class RetailDashboardOperativoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_admin(request)
+        today = timezone.localdate().isoformat()
+        hourly_sales = q(
+            '''
+            SELECT EXTRACT(HOUR FROM s.created_at)::int AS hour_slot,
+                   COUNT(*)::int AS sales_count,
+                   COALESCE(SUM(s.total_ars),0)::numeric(14,2) AS total_ars
+            FROM retail_sales s
+            WHERE s.status IN ('confirmed','partial_return','returned')
+              AND s.created_at::date=%s
+            GROUP BY EXTRACT(HOUR FROM s.created_at)
+            ORDER BY hour_slot
+            ''',
+            [today],
+        ) or []
+        hourly_margin = q(
+            '''
+            SELECT EXTRACT(HOUR FROM s.created_at)::int AS hour_slot,
+                   COALESCE(SUM(si.line_total_ars - (si.unit_cost_snapshot_ars * si.quantity)),0)::numeric(14,2) AS margin_ars
+            FROM retail_sale_items si
+            JOIN retail_sales s ON s.id=si.sale_id
+            WHERE s.status IN ('confirmed','partial_return','returned')
+              AND s.created_at::date=%s
+            GROUP BY EXTRACT(HOUR FROM s.created_at)
+            ORDER BY hour_slot
+            ''',
+            [today],
+        ) or []
+        margin_by_hour = {int(row.get('hour_slot')): row.get('margin_ars') for row in hourly_margin}
+        for row in hourly_sales:
+            row['margin_ars'] = margin_by_hour.get(int(row.get('hour_slot') or 0), Decimal('0.00'))
+
+        kpis = q(
+            '''
+            SELECT
+              COUNT(*) FILTER (WHERE s.status IN ('confirmed','partial_return','returned'))::int AS sales_count,
+              COALESCE(SUM(s.total_ars) FILTER (WHERE s.status IN ('confirmed','partial_return','returned')),0)::numeric(14,2) AS sales_total_ars,
+              COALESCE(SUM(si.line_total_ars - (si.unit_cost_snapshot_ars * si.quantity)),0)::numeric(14,2) AS margin_ars
+            FROM retail_sales s
+            LEFT JOIN retail_sale_items si ON si.sale_id=s.id
+            WHERE s.created_at::date=%s
+            ''',
+            [today],
+            one=True,
+        ) or {}
+        returns = q(
+            '''
+            SELECT COUNT(*)::int AS returns_count,
+                   COALESCE(SUM(total_refund_ars),0)::numeric(14,2) AS refunds_total_ars
+            FROM retail_returns
+            WHERE created_at::date=%s
+            ''',
+            [today],
+            one=True,
+        ) or {}
+        cash = q(
+            '''
+            SELECT COUNT(*)::int AS sessions_count,
+                   COALESCE(SUM(difference_total_ars),0)::numeric(14,2) AS difference_total_ars
+            FROM retail_cash_sessions
+            WHERE opened_at::date=%s
+            ''',
+            [today],
+            one=True,
+        ) or {}
+        arca = q(
+            '''
+            SELECT status, COUNT(*)::int AS cnt
+            FROM retail_invoices
+            WHERE created_at::date=%s
+            GROUP BY status
+            ORDER BY status
+            ''',
+            [today],
+        ) or []
+        online = q(
+            '''
+            SELECT status, COUNT(*)::int AS cnt
+            FROM integration_jobs
+            WHERE provider='tiendanube'
+              AND created_at >= (NOW() - INTERVAL '24 hours')
+            GROUP BY status
+            ORDER BY status
+            '''
+        ) or []
+        return Response(
+            {
+                'date': today,
+                'sales_by_hour': hourly_sales,
+                'kpis': {
+                    'sales_count': int(kpis.get('sales_count') or 0),
+                    'sales_total_ars': kpis.get('sales_total_ars') or Decimal('0.00'),
+                    'margin_ars': kpis.get('margin_ars') or Decimal('0.00'),
+                    'returns_count': int(returns.get('returns_count') or 0),
+                    'refunds_total_ars': returns.get('refunds_total_ars') or Decimal('0.00'),
+                    'cash_sessions_count': int(cash.get('sessions_count') or 0),
+                    'cash_difference_total_ars': cash.get('difference_total_ars') or Decimal('0.00'),
+                },
+                'arca_status': arca,
+                'online_health': online,
+            }
+        )
+
+
+class RetailAlertasView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_admin(request)
+        _refresh_operational_alerts()
+        status_raw = _clean_text((request.query_params or {}).get('status'))
+        params = []
+        where = "WHERE status IN ('open','acknowledged')"
+        if status_raw:
+            where = 'WHERE status=%s'
+            params.append(status_raw)
+        rows = q(
+            f'''
+            SELECT *
+            FROM retail_operation_alerts
+            {where}
+            ORDER BY
+              CASE severity
+                WHEN 'critical' THEN 1
+                WHEN 'high' THEN 2
+                WHEN 'medium' THEN 3
+                ELSE 4
+              END,
+              created_at DESC
+            LIMIT 300
+            ''',
+            params,
+        ) or []
+        serialized = [_serialize_alert_row(row) for row in rows]
+        return Response({'generated_at': timezone.now().isoformat(), 'rows': serialized})
+
+
+class RetailAlertaAckView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, alerta_id):
+        _require_admin(request)
+        _set_audit_user(request)
+        row = q('SELECT * FROM retail_operation_alerts WHERE id=%s FOR UPDATE', [alerta_id], one=True)
+        if not row:
+            return Response({'detail': 'Alerta no encontrada'}, status=404)
+        status = _clean_text((request.data or {}).get('status')) or 'acknowledged'
+        if status not in ('acknowledged', 'resolved', 'open'):
+            raise ValidationError('status invalido (acknowledged|resolved|open)')
+        exec_void(
+            '''
+            UPDATE retail_operation_alerts
+            SET status=%s,
+                acknowledged_by=%s,
+                acknowledged_at=CASE WHEN %s='open' THEN NULL ELSE NOW() END,
+                updated_at=NOW()
+            WHERE id=%s
+            ''',
+            [status, getattr(request.user, 'id', None), status, alerta_id],
+        )
+        updated = q('SELECT * FROM retail_operation_alerts WHERE id=%s', [alerta_id], one=True)
+        return Response({'ok': True, 'alert': _serialize_alert_row(updated)})
 
 
 class RetailReporteResumenComercialView(APIView):
@@ -6737,9 +11970,12 @@ __all__ = [
     'RetailCompraDetailView',
     'RetailCajaAperturaView',
     'RetailCajaCierreView',
+    'RetailCajaCierreAsistidoView',
     'RetailCajaActualView',
     'RetailCajaDetailView',
     'RetailCajaCuentasView',
+    'RetailOperacionPendientesView',
+    'RetailOperacionIncidenciaResolverView',
     'RetailVentasView',
     'RetailVentaDetailView',
     'RetailPromocionesView',
@@ -6750,18 +11986,34 @@ __all__ = [
     'RetailVentasConfirmarView',
     'RetailVentaAnularView',
     'RetailVentaDevolverView',
+    'RetailVentaOperacionSolicitudView',
     'RetailVentaCambiarView',
+    'RetailStoreCreditsView',
+    'RetailStoreCreditConsumeView',
+    'RetailInventarioConteosView',
+    'RetailInventarioConteoDetailView',
+    'RetailInventarioConteoCerrarView',
+    'RetailReposicionSugeridaView',
     'RetailFacturacionEmitirView',
     'RetailFacturacionDetailView',
     'RetailFacturacionNotaCreditoView',
     'RetailConfigSettingsView',
     'RetailConfigPageSettingsView',
     'RetailConfigPaymentAccountsView',
+    'RetailOnlineImportCatalogoView',
     'RetailOnlineSyncCatalogoView',
     'RetailOnlineSyncStockView',
+    'RetailOnlineFailedJobsSummaryView',
+    'RetailOnlineRetryFailedJobsView',
+    'RetailOnlineJobsProcessView',
+    'RetailOnlineOAuthReauthorizeUrlView',
+    'RetailOnlineOAuthApplyTokenView',
     'RetailOnlineWebhookOrdenPagadaView',
     'RetailOnlineWebhookOrdenCanceladaView',
+    'RetailOnlineWebhookOrdenActualizadaView',
     'RetailOnlineWebhookStoreRedactView',
+    'RetailOnlineWebhookCustomerRedactView',
+    'RetailOnlineWebhookCustomerDataRequestView',
     'RetailReporteResumenComercialView',
     'RetailReporteAnalisisProductosView',
     'RetailReporteAnalisisProveedoresView',
@@ -6772,6 +12024,9 @@ __all__ = [
     'RetailReporteVentasPorMedioView',
     'RetailReporteCierreCajaView',
     'RetailReporteDevolucionesView',
+    'RetailDashboardOperativoView',
+    'RetailAlertasView',
+    'RetailAlertaAckView',
 ]
 
 

@@ -336,10 +336,6 @@ function Ensure-Repository {
   if (Test-Path $gitDir) {
     Register-SafeDirectory
 
-    if (-not (Test-RepoFilesPresent -RootPath $script:RepoDir)) {
-      throw "El repositorio en $script:RepoDir no contiene los archivos requeridos del instalador."
-    }
-
     $dirtyRaw = & $script:GitExe -C $script:RepoDir status --porcelain --untracked-files=all 2>$null
     if ($LASTEXITCODE -ne 0) {
       throw "Fallo git status para validar el repositorio existente."
@@ -355,35 +351,38 @@ function Ensure-Repository {
     $originRaw = & $script:GitExe -C $script:RepoDir config --get remote.origin.url 2>$null
     $currentOrigin = (($originRaw | Out-String).Trim())
 
-    $reasons = New-Object System.Collections.Generic.List[string]
-    if ($isDirty) {
-      $reasons.Add("hay cambios locales sin commitear")
-    }
-    if (-not [string]::Equals($currentBranch, $Branch, [System.StringComparison]::OrdinalIgnoreCase)) {
-      $reasons.Add("la rama activa es $currentBranch y se esperaba $Branch")
-    }
-    if (-not [string]::Equals((Normalize-RepoUrl -Url $currentOrigin), (Normalize-RepoUrl -Url $RepoUrl), [System.StringComparison]::OrdinalIgnoreCase)) {
-      $reasons.Add("el remoto origin es $currentOrigin y se esperaba $RepoUrl")
-    }
-
-    if ($reasons.Count -gt 0) {
-      Add-StepResult -Step "Repositorio" -Status "BLOCKED" -Message ("No se actualiza el repo porque " + ($reasons -join "; ") + ". Se reutiliza la copia local.")
-      return @{
-        RepoCommit = Get-RepoCommitMarker
-        UsingLocal = $true
+    if ([string]::IsNullOrWhiteSpace($currentOrigin)) {
+      & $script:GitExe -C $script:RepoDir remote add origin $RepoUrl
+      if ($LASTEXITCODE -ne 0) {
+        throw "No se pudo configurar remote origin."
+      }
+    } elseif (-not [string]::Equals((Normalize-RepoUrl -Url $currentOrigin), (Normalize-RepoUrl -Url $RepoUrl), [System.StringComparison]::OrdinalIgnoreCase)) {
+      & $script:GitExe -C $script:RepoDir remote set-url origin $RepoUrl
+      if ($LASTEXITCODE -ne 0) {
+        throw "No se pudo actualizar remote origin."
       }
     }
 
     $beforeCommit = Get-RepoCommitMarker
     try {
-      & $script:GitExe -C $script:RepoDir fetch --all --prune
+      & $script:GitExe -C $script:RepoDir fetch --prune origin
       if ($LASTEXITCODE -ne 0) {
         throw "git fetch fallo."
       }
 
-      & $script:GitExe -C $script:RepoDir pull --ff-only origin $Branch
+      & $script:GitExe -C $script:RepoDir checkout -f -B $Branch "origin/$Branch"
       if ($LASTEXITCODE -ne 0) {
-        throw "git pull --ff-only fallo."
+        throw "git checkout forzado fallo."
+      }
+
+      & $script:GitExe -C $script:RepoDir reset --hard "origin/$Branch"
+      if ($LASTEXITCODE -ne 0) {
+        throw "git reset --hard fallo."
+      }
+
+      & $script:GitExe -C $script:RepoDir clean -fd
+      if ($LASTEXITCODE -ne 0) {
+        throw "git clean -fd fallo."
       }
     } catch {
       Add-StepResult -Step "Repositorio" -Status "BLOCKED" -Message "No se pudo actualizar por Git. Se reutiliza la copia local existente."
@@ -393,8 +392,14 @@ function Ensure-Repository {
       }
     }
 
+    if (-not (Test-RepoFilesPresent -RootPath $script:RepoDir)) {
+      throw "El repositorio actualizado en $script:RepoDir no contiene los archivos requeridos del instalador."
+    }
+
     $afterCommit = Get-RepoCommitMarker
-    if ([string]::Equals($beforeCommit, $afterCommit, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($isDirty -or -not [string]::Equals($currentBranch, $Branch, [System.StringComparison]::OrdinalIgnoreCase) -or -not [string]::Equals((Normalize-RepoUrl -Url $currentOrigin), (Normalize-RepoUrl -Url $RepoUrl), [System.StringComparison]::OrdinalIgnoreCase)) {
+      Add-StepResult -Step "Repositorio" -Status "UPDATED" -Message "Repositorio sincronizado forzadamente con origin/$Branch en $afterCommit."
+    } elseif ([string]::Equals($beforeCommit, $afterCommit, [System.StringComparison]::OrdinalIgnoreCase)) {
       Add-StepResult -Step "Repositorio" -Status "SKIP" -Message "El repositorio ya estaba actualizado."
     } else {
       Add-StepResult -Step "Repositorio" -Status "UPDATED" -Message "Repositorio actualizado a $afterCommit."
@@ -407,21 +412,24 @@ function Ensure-Repository {
   }
 
   if (Test-Path $script:RepoDir) {
-    if (Test-RepoFilesPresent -RootPath $script:RepoDir) {
-      Add-StepResult -Step "Repositorio" -Status "BLOCKED" -Message "La carpeta existe sin .git. Se reutiliza la copia local sin actualizar."
-      return @{
-        RepoCommit = "local-copy"
-        UsingLocal = $true
-      }
+    $backupPath = Join-Path $script:InstallRoot ("{0}_backup_{1}" -f $script:RepoName, (Get-Date -Format "yyyyMMdd_HHmmss"))
+    try {
+      Move-Item -Path $script:RepoDir -Destination $backupPath -Force -ErrorAction Stop
+    } catch {
+      throw "No se pudo respaldar la carpeta local existente sin .git."
     }
-
-    throw "La carpeta $script:RepoDir existe pero no es un repositorio Git valido ni contiene una copia utilizable."
+    $envBackupPath = Join-Path $backupPath ".env.prod"
+    Add-StepResult -Step "Repositorio" -Status "UPDATED" -Message "Carpeta local sin .git respaldada en $backupPath para clonar desde Git."
   }
 
   Write-Log "Clonando repositorio en $script:RepoDir..."
   & $script:GitExe clone --branch $Branch --single-branch $RepoUrl $script:RepoDir
   if ($LASTEXITCODE -ne 0) {
     throw "Fallo git clone."
+  }
+
+  if ($envBackupPath -and (Test-Path $envBackupPath)) {
+    Copy-Item -Path $envBackupPath -Destination (Join-Path $script:RepoDir ".env.prod") -Force
   }
 
   Register-SafeDirectory

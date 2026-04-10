@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar.jsx';
 import Footer from './components/Footer.jsx';
 import { useAuth } from './context/AuthContext';
-import { getRetailConfigPageSettings } from './lib/api';
+import { getRetailConfigPageSettings, getRetailOnlineFailedJobsSummary } from './lib/api';
 
 function mergePageSettings(raw) {
   return {
@@ -23,6 +23,7 @@ export default function App() {
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [pageSettings, setPageSettings] = useState(mergePageSettings(null));
+  const [onlineAlertCount, setOnlineAlertCount] = useState(0);
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -60,6 +61,30 @@ export default function App() {
     };
   }, [user]);
 
+  useEffect(() => {
+    if (!user) {
+      setOnlineAlertCount(0);
+      return undefined;
+    }
+    let active = true;
+    const loadOnlineAlerts = async () => {
+      try {
+        const resp = await getRetailOnlineFailedJobsSummary({ limit: 20 });
+        const count = Number(resp?.failed_total || 0);
+        if (active) setOnlineAlertCount(Math.max(0, count));
+      } catch {
+        if (active) setOnlineAlertCount(0);
+      }
+    };
+
+    loadOnlineAlerts();
+    const timer = window.setInterval(loadOnlineAlerts, 45000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [user]);
+
   const appName = pageSettings.app_name || import.meta.env.VITE_APP_NAME || 'Las Chulas';
 
   useEffect(() => {
@@ -70,6 +95,7 @@ export default function App() {
       '/ventas': 'ventas',
       '/promociones': 'promociones',
       '/garantias': 'garantias',
+      '/inventario': 'inventario',
       '/reportes': 'reportes',
       '/online': 'online',
       '/config': 'config',
@@ -127,6 +153,7 @@ export default function App() {
           onClose={() => setMobileMenuOpen(false)}
           labels={pageSettings.nav_labels}
           sectionTitle={pageSettings.sidebar_section_title}
+          onlineAlertCount={onlineAlertCount}
         />
         <div className="flex-1 p-3 md:p-6">
           <Outlet />

@@ -9,13 +9,14 @@ const DEFAULT_LABELS = {
   ventas: 'Ventas',
   promociones: 'Promociones',
   garantias: 'Cambios y devoluciones',
+  inventario: 'Inventario ciclico',
   reportes: 'Reportes',
   online: 'Online',
   config_general: 'Config general',
   config_paginas: 'Config páginas',
 };
 
-const LinkItem = ({ to, children, onClick }) => (
+const LinkItem = ({ to, children, onClick, indicator = null }) => (
   <NavLink
     to={to}
     onClick={onClick}
@@ -27,11 +28,20 @@ const LinkItem = ({ to, children, onClick }) => (
       }`
     }
   >
-    {children}
+    <span className="flex items-center justify-between gap-2">
+      <span>{children}</span>
+      {indicator}
+    </span>
   </NavLink>
 );
 
-export default function Sidebar({ mobileOpen = false, onClose, labels = {}, sectionTitle = 'Operaciones' }) {
+export default function Sidebar({
+  mobileOpen = false,
+  onClose,
+  labels = {},
+  sectionTitle = 'Operaciones',
+  onlineAlertCount = 0,
+}) {
   const { user } = useAuth();
   if (!user) return null;
 
@@ -42,6 +52,7 @@ export default function Sidebar({ mobileOpen = false, onClose, labels = {}, sect
   const canCompras = can(user, PERMISSION_CODES.PAGE_COMPRAS);
   const canVentas = can(user, PERMISSION_CODES.PAGE_VENTAS);
   const canPromociones = can(user, PERMISSION_CODES.PAGE_PROMOCIONES);
+  const canInventario = canProductos && can(user, PERMISSION_CODES.ACTION_INVENTARIO_CONTEO);
   const canReportes = String(user?.rol || '').toLowerCase() === 'admin';
   const canOnline = can(user, PERMISSION_CODES.PAGE_ONLINE);
   const canConfig = can(user, PERMISSION_CODES.PAGE_CONFIG);
@@ -94,8 +105,26 @@ export default function Sidebar({ mobileOpen = false, onClose, labels = {}, sect
           {canVentas ? <LinkItem to="/ventas" onClick={handleNavigate}>{navLabels.ventas}</LinkItem> : null}
           {canPromociones ? <LinkItem to="/promociones" onClick={handleNavigate}>{navLabels.promociones}</LinkItem> : null}
           {canVentas ? <LinkItem to="/garantias" onClick={handleNavigate}>{navLabels.garantias}</LinkItem> : null}
+          {canInventario ? <LinkItem to="/inventario" onClick={handleNavigate}>{navLabels.inventario}</LinkItem> : null}
           {canReportes ? <LinkItem to="/reportes" onClick={handleNavigate}>{navLabels.reportes}</LinkItem> : null}
-          {canOnline ? <LinkItem to="/online" onClick={handleNavigate}>{navLabels.online}</LinkItem> : null}
+          {canOnline ? (
+            <LinkItem
+              to="/online"
+              onClick={handleNavigate}
+              indicator={
+                onlineAlertCount > 0 ? (
+                  <span
+                    title={`${onlineAlertCount} pendiente(s) online`}
+                    className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold leading-none text-white"
+                  >
+                    !
+                  </span>
+                ) : null
+              }
+            >
+              {navLabels.online}
+            </LinkItem>
+          ) : null}
           {canConfig ? <LinkItem to="/config" onClick={handleNavigate}>{navLabels.config_general}</LinkItem> : null}
           {canConfig ? <LinkItem to="/config/paginas" onClick={handleNavigate}>{navLabels.config_paginas}</LinkItem> : null}
         </div>

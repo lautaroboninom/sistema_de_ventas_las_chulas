@@ -19,13 +19,24 @@ import Promociones from './pages/Promociones.jsx';
 import Garantias from './pages/Garantias.jsx';
 import Reportes from './pages/Reportes.jsx';
 import Online from './pages/Online.jsx';
+import Inventario from './pages/Inventario.jsx';
 import ConfigGeneral from './pages/ConfigGeneral.jsx';
 import ConfigPaginas from './pages/ConfigPaginas.jsx';
 import { PERMISSION_CODES } from './lib/permissions';
 
 function resolveInitialRoute() {
   const saved = window.localStorage.getItem('las_chulas_default_route') || '/pos';
-  const allowed = new Set(['/pos', '/productos', '/compras', '/ventas', '/promociones', '/garantias', '/online', '/config']);
+  const allowed = new Set([
+    '/pos',
+    '/productos',
+    '/compras',
+    '/ventas',
+    '/promociones',
+    '/garantias',
+    '/inventario',
+    '/online',
+    '/config',
+  ]);
   return allowed.has(saved) ? saved : '/pos';
 }
 
@@ -33,11 +44,15 @@ function NotFound() {
   return <div className="p-8 text-center text-gray-600">Página no encontrada</div>;
 }
 
-if (import.meta.env.VITE_SW !== '1' && 'serviceWorker' in navigator) {
-  navigator.serviceWorker
-    .getRegistrations()
-    .then((regs) => regs.forEach((reg) => reg.unregister()))
-    .catch(() => {});
+if ('serviceWorker' in navigator) {
+  if (import.meta.env.VITE_SW === '1') {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  } else {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => regs.forEach((reg) => reg.unregister()))
+      .catch(() => {});
+  }
 }
 
 const router = createBrowserRouter([
@@ -95,6 +110,17 @@ const router = createBrowserRouter([
         element: (
           <ProtectedRoute permissions={PERMISSION_CODES.PAGE_VENTAS}>
             <Garantias />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: 'inventario',
+        element: (
+          <ProtectedRoute
+            permissions={[PERMISSION_CODES.PAGE_PRODUCTOS, PERMISSION_CODES.ACTION_INVENTARIO_CONTEO]}
+            requireAll
+          >
+            <Inventario />
           </ProtectedRoute>
         ),
       },

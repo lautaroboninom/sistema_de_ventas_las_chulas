@@ -6,7 +6,6 @@ import secrets
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
 from django.core.cache import cache
-from django.core.mail import send_mail
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -19,6 +18,7 @@ from rest_framework.views import APIView
 
 from ..auth import issue_token, verify_hash, JWT_TTL_MIN
 from ..ip_utils import get_client_ip
+from ..mail_delivery import send_mail_checked
 from ..models import User
 from ..permissions import resolve_effective_permissions
 from .helpers import (
@@ -209,17 +209,26 @@ class ForgotPasswordView(APIView):
             f"<p><a href=\"{url}\">{url}</a></p>"
             "<p>Si no fuiste vos, ignora este correo.</p>"
         )
-        try:
-            send_mail(
-                subj,
-                txt,
-                settings.DEFAULT_FROM_EMAIL,
-                [email],
-                html_message=html,
-                fail_silently=True,
+        delivery = send_mail_checked(
+            subj,
+            txt,
+            email,
+            html_body=html,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+        )
+        if not delivery.get("ok"):
+            # Mantener respuesta neutral para no filtrar existencia de cuentas, pero
+            # evitar dejar tokens activos cuando el correo no salio.
+            exec_void("DELETE FROM password_reset_tokens WHERE token_hash=%s", [token_hash])
+            logger.warning(
+                "forgot_email_delivery_failed ip=%s email=%s code=%s reason=%s",
+                ip,
+                email,
+                delivery.get("error_code"),
+                delivery.get("reason") or delivery.get("detail"),
             )
-        except Exception:
-            pass
+        else:
+            logger.info("forgot_email_delivery_sent ip=%s email=%s", ip, email)
         return ok_response
 
 

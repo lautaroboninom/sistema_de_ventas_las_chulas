@@ -60,8 +60,11 @@ def _validate_secret_value(label: str, value: str, min_length: int) -> None:
 
 
 _validate_secret_value("DJANGO_SECRET_KEY", SECRET_KEY, 40)
-_validate_secret_value("JWT_SECRET", os.getenv("JWT_SECRET", ""), 40)
+_jwt_secret = os.getenv("JWT_SECRET", "")
+_validate_secret_value("JWT_SECRET", _jwt_secret, 40)
 _validate_secret_value("POSTGRES_PASSWORD", os.getenv("POSTGRES_PASSWORD", ""), 20)
+if (_jwt_secret or "").strip() == (SECRET_KEY or "").strip():
+    raise ImproperlyConfigured("JWT_SECRET no puede ser igual a DJANGO_SECRET_KEY en produccion")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/1").strip()
 CACHES = {

@@ -171,9 +171,17 @@ export const getRetailCompra = (id) => api.get(`/api/retail/compras/${id}/`);
 // Caja
 export const postRetailCajaApertura = (payload) => api.post('/api/retail/caja/apertura/', payload || {});
 export const postRetailCajaCierre = (payload) => api.post('/api/retail/caja/cierre/', payload || {});
+export const postRetailCajaCierreAsistido = (payload) => api.post('/api/retail/caja/cierre-asistido/', payload || {});
 export const getRetailCajaActual = () => api.get('/api/retail/caja/actual/');
 export const getRetailCajaCuentas = () => api.get('/api/retail/caja/cuentas/');
 export const getRetailCaja = (id) => api.get(`/api/retail/caja/${id}/`);
+export const getRetailOperacionPendientes = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.limit) qs.set('limit', String(params.limit));
+  return api.get(`/api/retail/operacion/pendientes/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const postRetailOperacionIncidenciaResolver = (id, payload) =>
+  api.post(`/api/retail/operacion/incidencias/${id}/resolver/`, payload || {});
 
 // Ventas/facturacion
 export const getRetailVentas = (params = {}) => {
@@ -203,7 +211,33 @@ export const postRetailVentaCotizar = (payload) => api.post('/api/retail/ventas/
 export const postRetailVentaConfirmar = (payload) => api.post('/api/retail/ventas/confirmar/', payload);
 export const postRetailVentaAnular = (id, payload) => api.post(`/api/retail/ventas/${id}/anular/`, payload || {});
 export const postRetailVentaDevolver = (id, payload) => api.post(`/api/retail/ventas/${id}/devolver/`, payload || {});
+export const postRetailVentaSolicitud = (id, payload) => api.post(`/api/retail/ventas/${id}/solicitudes/`, payload || {});
 export const postRetailVentaCambiar = (id, payload) => api.post(`/api/retail/ventas/${id}/cambiar/`, payload || {});
+export const getRetailStoreCredits = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.customer_doc) qs.set('customer_doc', params.customer_doc);
+  if (params.status) qs.set('status', params.status);
+  if (params.limit) qs.set('limit', String(params.limit));
+  return api.get(`/api/retail/store-credits/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const postRetailStoreCreditConsume = (id, payload) =>
+  api.post(`/api/retail/store-credits/${id}/consume/`, payload || {});
+export const getRetailInventarioConteos = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set('status', params.status);
+  if (params.limit) qs.set('limit', String(params.limit));
+  return api.get(`/api/retail/inventario/conteos/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const postRetailInventarioConteo = (payload) => api.post('/api/retail/inventario/conteos/', payload || {});
+export const getRetailInventarioConteoDetail = (id) => api.get(`/api/retail/inventario/conteos/${id}/`);
+export const postRetailInventarioConteoCerrar = (id, payload) =>
+  api.post(`/api/retail/inventario/conteos/${id}/cerrar/`, payload || {});
+export const getRetailReposicionSugerida = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.days) qs.set('days', String(params.days));
+  if (params.limit) qs.set('limit', String(params.limit));
+  return api.get(`/api/retail/reposicion/sugerida/${qs.toString() ? `?${qs}` : ''}`);
+};
 export const getRetailPosDrafts = (params = {}) => {
   const qs = new URLSearchParams();
   if (params.status) qs.set('status', params.status);
@@ -241,8 +275,20 @@ export const putRetailConfigPaymentAccounts = (payload) =>
   api.put('/api/retail/config/payment-accounts/', payload || {});
 
 // Online
+export const postRetailOnlineImportCatalogo = (payload) => api.post('/api/retail/online/import/catalogo/', payload || {});
 export const postRetailOnlineSyncCatalogo = (payload) => api.post('/api/retail/online/sync/catalogo/', payload || {});
 export const postRetailOnlineSyncStock = (payload) => api.post('/api/retail/online/sync/stock/', payload || {});
+export const getRetailOnlineFailedJobsSummary = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.limit) qs.set('limit', String(params.limit));
+  return api.get(`/api/retail/online/jobs/failed-summary/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const postRetailOnlineRetryFailed = (payload) => api.post('/api/retail/online/jobs/retry-failed/', payload || {});
+export const postRetailOnlineJobsProcess = (payload) => api.post('/api/retail/online/jobs/process/', payload || {});
+export const postRetailOnlineOAuthReauthorizeUrl = (payload) =>
+  api.post('/api/retail/online/oauth/reauthorize-url/', payload || {});
+export const postRetailOnlineOAuthApplyToken = (payload) =>
+  api.post('/api/retail/online/oauth/apply-token/', payload || {});
 
 // Reportes
 export const getRetailReporteResumenComercial = (params = {}) => {
@@ -301,6 +347,13 @@ export const getRetailReporteDevoluciones = (params = {}) => {
   if (params.hasta) qs.set('hasta', params.hasta);
   return api.get(`/api/retail/reportes/devoluciones/${qs.toString() ? `?${qs}` : ''}`);
 };
+export const getRetailDashboardOperativo = () => api.get('/api/retail/dashboard/operativo/');
+export const getRetailAlertas = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set('status', params.status);
+  return api.get(`/api/retail/alertas/${qs.toString() ? `?${qs}` : ''}`);
+};
+export const postRetailAlertaAck = (id, payload) => api.post(`/api/retail/alertas/${id}/ack/`, payload || {});
 
 
 

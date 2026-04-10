@@ -8,6 +8,7 @@ import {
   postRetailVentaAnular,
   postRetailVentaCambiar,
   postRetailVentaDevolver,
+  postRetailVentaSolicitud,
 } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { can, PERMISSION_CODES } from '../lib/permissions';
@@ -41,6 +42,7 @@ export default function VentasPage() {
   const canReturn = can(user, PERMISSION_CODES.ACTION_VENTAS_DEVOLVER);
   const canExchange = can(user, PERMISSION_CODES.ACTION_VENTAS_CAMBIAR);
   const canOverrideWarranty = can(user, PERMISSION_CODES.ACTION_VENTAS_DEVOLVER_OVERRIDE_GARANTIA);
+  const canStoreCredit = can(user, PERMISSION_CODES.ACTION_POSTVENTA_CREDITO_TIENDA);
   const canEmitInvoice = can(user, PERMISSION_CODES.ACTION_FACTURACION_EMITIR);
   const canEmitCreditNote = can(user, PERMISSION_CODES.ACTION_FACTURACION_NOTA_CREDITO);
 
@@ -62,6 +64,9 @@ export default function VentasPage() {
   const [warrantyType, setWarrantyType] = useState('size');
   const [overrideOutOfWarranty, setOverrideOutOfWarranty] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
+  const [refundMode, setRefundMode] = useState('cash_return');
+  const [exchangeSettlementMode, setExchangeSettlementMode] = useState('even');
+  const [exchangeSettlementAmount, setExchangeSettlementAmount] = useState('');
   const [creditNotesResult, setCreditNotesResult] = useState(null);
 
   const [loadingList, setLoadingList] = useState(false);
@@ -182,6 +187,9 @@ export default function VentasPage() {
       setWarrantyType(preferredType);
       setOverrideOutOfWarranty(false);
       setOverrideReason('');
+      setRefundMode('cash_return');
+      setExchangeSettlementMode('even');
+      setExchangeSettlementAmount('');
       setCreditNotesResult(null);
     } catch (error) {
       setErr(errMsg(error));
@@ -279,6 +287,30 @@ export default function VentasPage() {
     };
   }
 
+  function buildRefundPayload() {
+    if (refundMode === 'store_credit' && !canStoreCredit) {
+      throw new Error('No tienes permiso para emitir credito tienda');
+    }
+    return { refund_mode: refundMode };
+  }
+
+  function buildSettlementPayload() {
+    if (exchangeSettlementMode === 'even') return undefined;
+    const amount = Number(exchangeSettlementAmount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error('Ingresa monto valido para settlement de cambio');
+    }
+    if (exchangeSettlementMode === 'store_credit' && !canStoreCredit) {
+      throw new Error('No tienes permiso para settlement con credito tienda');
+    }
+    return {
+      mode: exchangeSettlementMode,
+      amount_ars: amount,
+      payment_method: selectedSale?.payment_method || 'cash',
+      payment_account_code: selectedSale?.payment_account_code || undefined,
+    };
+  }
+
   async function issueInvoice() {
     if (!selectedId) return;
     await runAction(
@@ -311,6 +343,7 @@ export default function VentasPage() {
         const resp = await postRetailVentaDevolver(selectedId, {
           reason: reason || 'Devolucion total desde pantalla de ventas',
           ...buildWarrantyPayload(),
+          ...buildRefundPayload(),
         });
         setCreditNotesResult(resp);
       },
@@ -330,6 +363,7 @@ export default function VentasPage() {
         const resp = await postRetailVentaDevolver(selectedId, {
           reason: reason || 'Devolucion parcial desde pantalla de ventas',
           ...buildWarrantyPayload(),
+          ...buildRefundPayload(),
           items,
         });
         setCreditNotesResult(resp);
@@ -350,6 +384,7 @@ export default function VentasPage() {
         const resp = await postRetailVentaCambiar(selectedId, {
           reason: reason || 'Cambio 1:1 desde pantalla de ventas',
           ...buildWarrantyPayload(),
+          settlement: buildSettlementPayload(),
           items,
         });
         setCreditNotesResult(resp);
@@ -369,6 +404,25 @@ export default function VentasPage() {
     );
   }
 
+  async function requestBlockedOperation(operationCode, operationLabel) {
+    if (!selectedId) return;
+    const cleanReason = String(reason || '').trim();
+    if (!cleanReason) {
+      setErr('Debes indicar motivo operativo para enviar la solicitud por mail.');
+      return;
+    }
+    await runAction(
+      async () => {
+        const resp = await postRetailVentaSolicitud(selectedId, {
+          operation_code: operationCode,
+          reason: cleanReason,
+        });
+        setCreditNotesResult(resp);
+      },
+      `Solicitud enviada: ${operationLabel}`,
+    );
+  }
+
   const canReturnNow =
     canReturn &&
     selectedSale &&
@@ -382,6 +436,15 @@ export default function VentasPage() {
   const needsOverride = (canReturnNow || canExchangeNow) && !warrantyInWindow;
   const overrideReady = !needsOverride || (overrideOutOfWarranty && canOverrideWarranty && String(overrideReason || '').trim());
   const returnBlocked = acting || loadingDetail || !overrideReady;
+  const canRequestCancel =
+    !canCancel &&
+    selectedSale &&
+    selectedSale.status !== 'cancelled';
+  const canRequestMoneyReturn =
+    !canReturn &&
+    selectedSale &&
+    selectedSale.status !== 'cancelled' &&
+    hasReturnableNonXForYItems;
 
   return (
     <div className="space-y-4">
@@ -427,6 +490,7 @@ export default function VentasPage() {
             <option value="debit">Debito</option>
             <option value="transfer">Transferencia</option>
             <option value="credit">Credito</option>
+            <option value="store_credit">Credito tienda</option>
           </select>
         </div>
         <div className="md:col-span-2">
@@ -579,6 +643,55 @@ export default function VentasPage() {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 text-sm">
+              <div>
+                Modo de devolucion
+                <select
+                  className="input mt-1"
+                  value={refundMode}
+                  onChange={(e) => setRefundMode(e.target.value)}
+                  disabled={acting || loadingDetail}
+                >
+                  <option value="cash_return">Reintegro en caja</option>
+                  <option value="store_credit" disabled={!canStoreCredit}>
+                    Credito tienda
+                  </option>
+                </select>
+                {refundMode === 'store_credit' ? (
+                  <p className="mt-1 text-xs text-indigo-700">
+                    La devolucion genera saldo a favor sin egreso inmediato de caja.
+                  </p>
+                ) : null}
+              </div>
+              <div>
+                Settlement para cambios
+                <select
+                  className="input mt-1"
+                  value={exchangeSettlementMode}
+                  onChange={(e) => setExchangeSettlementMode(e.target.value)}
+                  disabled={acting || loadingDetail}
+                >
+                  <option value="even">Sin diferencia</option>
+                  <option value="customer_owes">Cliente paga diferencia</option>
+                  <option value="store_owes">Local paga diferencia</option>
+                  <option value="store_credit" disabled={!canStoreCredit}>
+                    Diferencia a credito tienda
+                  </option>
+                </select>
+                {exchangeSettlementMode !== 'even' ? (
+                  <input
+                    className="input mt-1"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={exchangeSettlementAmount}
+                    onChange={(e) => setExchangeSettlementAmount(e.target.value)}
+                    placeholder="Monto diferencia"
+                  />
+                ) : null}
+              </div>
+            </div>
+
             {needsOverride ? (
               <div className="rounded border border-amber-300 bg-amber-50 p-2 text-sm space-y-2">
                 <p>
@@ -682,14 +795,14 @@ export default function VentasPage() {
               </table>
             </div>
 
-            <input
-              className="input"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Motivo operativo (anulacion/devolucion/cambio)"
-            />
+              <input
+                className="input"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Motivo operativo (anulacion/devolucion/cambio/solicitud)"
+              />
 
-            <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2">
               {canEmitInvoice ? (
                 <button
                   type="button"
@@ -701,6 +814,17 @@ export default function VentasPage() {
                 </button>
               ) : null}
 
+              {canRequestCancel ? (
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded border border-amber-300 text-amber-800"
+                  onClick={() => requestBlockedOperation('cancel_sale', 'anulacion de venta')}
+                  disabled={acting || loadingDetail}
+                >
+                  Solicitar anulacion por mail
+                </button>
+              ) : null}
+
               {canCancel ? (
                 <button
                   type="button"
@@ -709,6 +833,17 @@ export default function VentasPage() {
                   disabled={acting || loadingDetail || selectedSale.status === 'cancelled'}
                 >
                   Anular venta
+                </button>
+              ) : null}
+
+              {canRequestMoneyReturn ? (
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded border border-amber-300 text-amber-800"
+                  onClick={() => requestBlockedOperation('money_return', 'devolucion monetaria')}
+                  disabled={acting || loadingDetail}
+                >
+                  Solicitar devolucion por mail
                 </button>
               ) : null}
 

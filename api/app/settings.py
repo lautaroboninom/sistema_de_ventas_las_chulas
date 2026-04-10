@@ -13,7 +13,7 @@ def _bool_env(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 # --- NÃºcleo / seguridad ---
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "change-me")
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY") or "dev-only-secret-key-retailhub-local-2026-not-for-prod"
 DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
 
 ALLOWED_HOSTS = _csv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
@@ -92,6 +92,12 @@ ARCA_CUIT = os.getenv("ARCA_CUIT", "")
 ARCA_CERT_PATH = os.getenv("ARCA_CERT_PATH", "")
 ARCA_KEY_PATH = os.getenv("ARCA_KEY_PATH", "")
 ARCA_WSAA_SERVICE = os.getenv("ARCA_WSAA_SERVICE", "wsfe")
+ARCA_WSAA_URL_HOMO = os.getenv("ARCA_WSAA_URL_HOMO", "https://wsaahomo.afip.gov.ar/ws/services/LoginCms")
+ARCA_WSAA_URL_PROD = os.getenv("ARCA_WSAA_URL_PROD", "https://wsaa.afip.gov.ar/ws/services/LoginCms")
+ARCA_WSFE_URL_HOMO = os.getenv("ARCA_WSFE_URL_HOMO", "https://wswhomo.afip.gov.ar/wsfev1/service.asmx")
+ARCA_WSFE_URL_PROD = os.getenv("ARCA_WSFE_URL_PROD", "https://servicios1.afip.gov.ar/wsfev1/service.asmx")
+ARCA_WS_TIMEOUT_SECS = int(os.getenv("ARCA_WS_TIMEOUT_SECS", "25"))
+ARCA_TA_CACHE_SKEW_SECS = int(os.getenv("ARCA_TA_CACHE_SKEW_SECS", "180"))
 
 # Retail - Tienda Nube
 TIENDANUBE_CLIENT_ID = os.getenv("TIENDANUBE_CLIENT_ID", "")

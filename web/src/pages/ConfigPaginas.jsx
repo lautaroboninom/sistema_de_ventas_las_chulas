@@ -12,6 +12,7 @@ const NAV_KEYS = [
   ['ventas', 'Ventas'],
   ['promociones', 'Promociones'],
   ['garantias', 'Cambios y devoluciones'],
+  ['inventario', 'Inventario ciclico'],
   ['reportes', 'Reportes'],
   ['online', 'Online'],
   ['config_general', 'Config general'],
@@ -25,13 +26,24 @@ const PAGE_TITLE_KEYS = [
   ['ventas', 'Título ventas'],
   ['promociones', 'Título promociones'],
   ['garantias', 'Título cambios y devoluciones'],
+  ['inventario', 'Título inventario ciclico'],
   ['reportes', 'Título reportes'],
   ['online', 'Título online'],
   ['config', 'Título config general'],
   ['config_paginas', 'Título config páginas'],
 ];
 
-const DEFAULT_ROUTES = ['/pos', '/productos', '/compras', '/ventas', '/promociones', '/garantias', '/online', '/config'];
+const DEFAULT_ROUTES = [
+  '/pos',
+  '/productos',
+  '/compras',
+  '/ventas',
+  '/promociones',
+  '/garantias',
+  '/inventario',
+  '/online',
+  '/config',
+];
 
 function ensureSettingsShape(value) {
   const row = value || {};
