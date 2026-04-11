@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   deleteUsuario,
+  getRetailConfigArcaAccounts,
   getPermisosCatalogo,
   getRetailConfigPaymentAccounts,
   getRetailConfigSettings,
@@ -16,6 +17,7 @@ import {
   postUsuarioPermisosReset,
   postRetailOnlineOAuthApplyToken,
   postRetailOnlineOAuthReauthorizeUrl,
+  putRetailConfigArcaAccounts,
   putRetailConfigPaymentAccounts,
   putRetailConfigSettings,
   putUsuarioPermisos,
@@ -71,6 +73,8 @@ export default function ConfigGeneral() {
   const { user, refreshSession } = useAuth();
   const [rows, setRows] = useState([]);
   const [settings, setSettings] = useState(null);
+  const [arcaAccounts, setArcaAccounts] = useState([]);
+  const [arcaRotation, setArcaRotation] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -151,13 +155,16 @@ export default function ConfigGeneral() {
     setLoading(true);
     setErr('');
     try {
-      const [usersData, settingsData, accountsData] = await Promise.all([
+      const [usersData, settingsData, arcaData, accountsData] = await Promise.all([
         getUsuarios(),
         getRetailConfigSettings(),
+        getRetailConfigArcaAccounts(),
         getRetailConfigPaymentAccounts(),
       ]);
       setRows(Array.isArray(usersData) ? usersData : []);
       setSettings(settingsData || {});
+      setArcaAccounts(Array.isArray(arcaData?.accounts) ? arcaData.accounts : []);
+      setArcaRotation(arcaData?.rotation || null);
       setAccounts(Array.isArray(accountsData) ? accountsData : []);
     } catch (error) {
       setErr(errMsg(error));
@@ -318,23 +325,6 @@ export default function ConfigGeneral() {
         payload.business_name = settings.business_name || undefined;
         payload.iva_condition = settings.iva_condition || undefined;
         payload.arca_env = settings.arca_env || undefined;
-        payload.arca_cuit = settings.arca_cuit || undefined;
-        payload.arca_pto_vta_store =
-          settings.arca_pto_vta_store === '' || settings.arca_pto_vta_store == null
-            ? undefined
-            : Number(settings.arca_pto_vta_store);
-        payload.arca_pto_vta_online =
-          settings.arca_pto_vta_online === '' || settings.arca_pto_vta_online == null
-            ? undefined
-            : Number(settings.arca_pto_vta_online);
-        payload.arca_cbte_tipo_store =
-          settings.arca_cbte_tipo_store === '' || settings.arca_cbte_tipo_store == null
-            ? undefined
-            : Number(settings.arca_cbte_tipo_store);
-        payload.arca_cbte_tipo_online =
-          settings.arca_cbte_tipo_online === '' || settings.arca_cbte_tipo_online == null
-            ? undefined
-            : Number(settings.arca_cbte_tipo_online);
         payload.ticket_printer_name = settings.ticket_printer_name || undefined;
         payload.label_printer_name = settings.label_printer_name || undefined;
         payload.ean_country_prefix = settings.ean_country_prefix || undefined;
@@ -355,8 +345,6 @@ export default function ConfigGeneral() {
       }
 
       if (canEditOnlineCredentials) {
-        payload.arca_cert_path = settings.arca_cert_path || undefined;
-        payload.arca_key_path = settings.arca_key_path || undefined;
         payload.tiendanube_store_id =
           settings.tiendanube_store_id === '' || settings.tiendanube_store_id == null
             ? undefined
@@ -404,6 +392,68 @@ export default function ConfigGeneral() {
         })),
       });
       setMsg('Cuentas de cobro guardadas');
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveArcaAccounts() {
+    if (!canEditBusinessSettings && !canEditOnlineCredentials) {
+      setErr('No tenes permisos para editar cuentas ARCA.');
+      return;
+    }
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      await putRetailConfigArcaAccounts({
+        accounts: arcaAccounts.map((account) => {
+          const payload = {
+            id: account.id,
+            code: account.code,
+          };
+          if (canEditBusinessSettings) {
+            payload.label = account.label || '';
+            payload.active = !!account.active;
+            payload.sort_order =
+              account.sort_order === '' || account.sort_order == null ? 100 : Number(account.sort_order);
+            payload.arca_cuit = account.arca_cuit === '' ? null : account.arca_cuit || undefined;
+            payload.arca_pto_vta_store =
+              account.arca_pto_vta_store === ''
+                ? null
+                : account.arca_pto_vta_store == null
+                  ? undefined
+                : Number(account.arca_pto_vta_store);
+            payload.arca_pto_vta_online =
+              account.arca_pto_vta_online === ''
+                ? null
+                : account.arca_pto_vta_online == null
+                  ? undefined
+                : Number(account.arca_pto_vta_online);
+            payload.arca_cbte_tipo_store =
+              account.arca_cbte_tipo_store === ''
+                ? null
+                : account.arca_cbte_tipo_store == null
+                  ? undefined
+                : Number(account.arca_cbte_tipo_store);
+            payload.arca_cbte_tipo_online =
+              account.arca_cbte_tipo_online === ''
+                ? null
+                : account.arca_cbte_tipo_online == null
+                  ? undefined
+                : Number(account.arca_cbte_tipo_online);
+          }
+          if (canEditOnlineCredentials) {
+            payload.arca_cert_path = account.arca_cert_path === '' ? null : account.arca_cert_path || undefined;
+            payload.arca_key_path = account.arca_key_path === '' ? null : account.arca_key_path || undefined;
+          }
+          return payload;
+        }),
+      });
+      setMsg('Cuentas ARCA guardadas');
       await loadAll();
     } catch (error) {
       setErr(errMsg(error));
@@ -463,6 +513,10 @@ export default function ConfigGeneral() {
     setErr('');
     window.open(link.url, '_blank', 'noopener,noreferrer');
     setMsg(`Se abrio "${link.label}" en una nueva pestana.`);
+  }
+
+  function updateArcaAccount(idx, patch) {
+    setArcaAccounts((prev) => prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)));
   }
 
   function updateAccount(idx, patch) {
@@ -727,87 +781,148 @@ export default function ConfigGeneral() {
                 ))}
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <select
-                className="input"
-                value={settings?.arca_env || 'homologacion'}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, arca_env: e.target.value }))}
-              >
-                <option value="homologacion">ARCA homologacion</option>
-                <option value="produccion">ARCA produccion</option>
-              </select>
-              <input
-                className="input"
-                placeholder="ARCA CUIT"
-                value={settings?.arca_cuit || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, arca_cuit: e.target.value }))}
-              />
-              <input
-                className="input"
-                type="number"
-                placeholder="Pto vta local"
-                value={settings?.arca_pto_vta_store || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, arca_pto_vta_store: e.target.value }))}
-              />
-              <input
-                className="input"
-                type="number"
-                placeholder="Pto vta online"
-                value={settings?.arca_pto_vta_online || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, arca_pto_vta_online: e.target.value }))}
-              />
-              <input
-                className="input"
-                type="number"
-                placeholder="Cbte tipo local (ej 6)"
-                value={settings?.arca_cbte_tipo_store || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, arca_cbte_tipo_store: e.target.value }))}
-              />
-              <input
-                className="input"
-                type="number"
-                placeholder="Cbte tipo online (ej 6)"
-                value={settings?.arca_cbte_tipo_online || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, arca_cbte_tipo_online: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder={
-                  settings?.arca_cert_path_configured
-                    ? `ARCA cert path (actual: ${settings?.arca_cert_path_masked || 'configurado'})`
-                    : 'ARCA cert path'
-                }
-                value={settings?.arca_cert_path || ''}
-                disabled={!canEditOnlineCredentials}
-                onChange={(e) => setSettings((v) => ({ ...v, arca_cert_path: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder={
-                  settings?.arca_key_path_configured
-                    ? `ARCA key path (actual: ${settings?.arca_key_path_masked || 'configurado'})`
-                    : 'ARCA key path'
-                }
-                value={settings?.arca_key_path || ''}
-                disabled={!canEditOnlineCredentials}
-                onChange={(e) => setSettings((v) => ({ ...v, arca_key_path: e.target.value }))}
-              />
-              <label className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm">
-                <input
-                  type="checkbox"
-                  checked={toBool(settings?.auto_invoice_online_paid)}
+            <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-3">
+              <h4 className="text-sm font-semibold">Entorno ARCA</h4>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <select
+                  className="input"
+                  value={settings?.arca_env || 'homologacion'}
                   disabled={!canEditBusinessSettings}
-                  onChange={(e) => setSettings((v) => ({ ...v, auto_invoice_online_paid: e.target.checked }))}
-                />
-                Facturar online automaticamente
-              </label>
+                  onChange={(e) => setSettings((v) => ({ ...v, arca_env: e.target.value }))}
+                >
+                  <option value="homologacion">ARCA homologacion</option>
+                  <option value="produccion">ARCA produccion</option>
+                </select>
+                <label className="inline-flex min-h-[42px] items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={toBool(settings?.auto_invoice_online_paid)}
+                    disabled={!canEditBusinessSettings}
+                    onChange={(e) => setSettings((v) => ({ ...v, auto_invoice_online_paid: e.target.checked }))}
+                  />
+                  Facturar online automaticamente
+                </label>
+              </div>
+              <div className="text-xs text-gray-500">
+                Ultima cuenta usada:{' '}
+                <strong>{arcaRotation?.last_account_label || arcaRotation?.last_account_code || 'sin uso'}</strong>. Proxima:{' '}
+                <strong>{arcaRotation?.next_account_label || arcaRotation?.next_account_code || 'sin cuenta activa'}</strong>.
+              </div>
             </div>
+
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+              {arcaAccounts.map((account, idx) => (
+                <section key={account.id || account.code || idx} className="rounded-lg border border-gray-200 bg-white p-3 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold">Cuenta {idx === 0 ? 'A' : 'B'}</h4>
+                      <p className="text-xs text-gray-500">{account.label || account.code || 'Cuenta ARCA'}</p>
+                      <p className="text-[11px] uppercase tracking-wide text-gray-400">{account.code || 'sin codigo'}</p>
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={!!account.active}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateArcaAccount(idx, { active: e.target.checked })}
+                      />
+                      Activa
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <input
+                      className="input"
+                      placeholder="Etiqueta visible"
+                      value={account.label || ''}
+                      disabled={!canEditBusinessSettings}
+                      onChange={(e) => updateArcaAccount(idx, { label: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      placeholder="CUIT emisor"
+                      value={account.arca_cuit || ''}
+                      disabled={!canEditBusinessSettings}
+                      onChange={(e) => updateArcaAccount(idx, { arca_cuit: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Pto vta local"
+                      value={account.arca_pto_vta_store ?? ''}
+                      disabled={!canEditBusinessSettings}
+                      onChange={(e) => updateArcaAccount(idx, { arca_pto_vta_store: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Pto vta online"
+                      value={account.arca_pto_vta_online ?? ''}
+                      disabled={!canEditBusinessSettings}
+                      onChange={(e) => updateArcaAccount(idx, { arca_pto_vta_online: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Cbte tipo local"
+                      value={account.arca_cbte_tipo_store ?? ''}
+                      disabled={!canEditBusinessSettings}
+                      onChange={(e) => updateArcaAccount(idx, { arca_cbte_tipo_store: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Cbte tipo online"
+                      value={account.arca_cbte_tipo_online ?? ''}
+                      disabled={!canEditBusinessSettings}
+                      onChange={(e) => updateArcaAccount(idx, { arca_cbte_tipo_online: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      placeholder="Orden"
+                      value={account.sort_order ?? 100}
+                      disabled={!canEditBusinessSettings}
+                      onChange={(e) => updateArcaAccount(idx, { sort_order: e.target.value })}
+                    />
+                    <div className="rounded-lg border border-dashed border-gray-200 px-3 py-2 text-xs text-gray-500">
+                      Emisor fiscal:{' '}
+                      <strong>{account.issuer_cuit || account.arca_cuit || 'sin configurar'}</strong>
+                    </div>
+                    <input
+                      className="input md:col-span-2"
+                      placeholder={
+                        account?.arca_cert_path_configured
+                          ? `Cert path (actual: ${account?.arca_cert_path_masked || 'configurado'})`
+                          : 'Cert path'
+                      }
+                      value={account.arca_cert_path || ''}
+                      disabled={!canEditOnlineCredentials}
+                      onChange={(e) => updateArcaAccount(idx, { arca_cert_path: e.target.value })}
+                    />
+                    <input
+                      className="input md:col-span-2"
+                      placeholder={
+                        account?.arca_key_path_configured
+                          ? `Key path (actual: ${account?.arca_key_path_masked || 'configurado'})`
+                          : 'Key path'
+                      }
+                      value={account.arca_key_path || ''}
+                      disabled={!canEditOnlineCredentials}
+                      onChange={(e) => updateArcaAccount(idx, { arca_key_path: e.target.value })}
+                    />
+                  </div>
+                </section>
+              ))}
+            </div>
+            <button
+              className="btn"
+              type="button"
+              onClick={saveArcaAccounts}
+              disabled={saving || !arcaAccounts.length || (!canEditBusinessSettings && !canEditOnlineCredentials)}
+            >
+              Guardar cuentas ARCA
+            </button>
           </section>
 
           <section className="space-y-3 rounded-xl border border-gray-200 bg-white/60 p-3">

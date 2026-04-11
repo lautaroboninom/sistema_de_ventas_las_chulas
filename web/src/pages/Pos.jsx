@@ -1853,6 +1853,12 @@ export default function PosPage() {
                 Venta confirmada: <strong>{lastSale.sale_number || `#${lastSale.id}`}</strong> por{' '}
                 <strong>{money(lastSale.total_ars)}</strong>. Estado factura:{' '}
                 <strong>{lastSale?.invoice?.status || 'sin generar'}</strong>.
+                {lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code ? (
+                  <>
+                    {' '}Cuenta ARCA:{' '}
+                    <strong>{lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code}</strong>.
+                  </>
+                ) : null}
               </div>
             ) : null}
             </div>

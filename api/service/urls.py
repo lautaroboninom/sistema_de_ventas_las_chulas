@@ -65,6 +65,7 @@ from .views import (
     RetailFacturacionDetailView,
     RetailFacturacionNotaCreditoView,
     RetailConfigSettingsView,
+    RetailConfigArcaAccountsView,
     RetailConfigPageSettingsView,
     RetailConfigPaymentAccountsView,
     RetailOnlineImportCatalogoView,
@@ -169,6 +170,7 @@ urlpatterns = [
     path('retail/facturacion/<int:venta_id>/nota-credito/', RetailFacturacionNotaCreditoView.as_view()),
 
     path('retail/config/settings/', RetailConfigSettingsView.as_view()),
+    path('retail/config/arca-accounts/', RetailConfigArcaAccountsView.as_view()),
     path('retail/config/page-settings/', RetailConfigPageSettingsView.as_view()),
     path('retail/config/payment-accounts/', RetailConfigPaymentAccountsView.as_view()),
 

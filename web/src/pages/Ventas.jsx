@@ -524,6 +524,7 @@ export default function VentasPage() {
                 <th className="py-2 pr-3">Estado</th>
                 <th className="py-2 pr-3">Cobro</th>
                 <th className="py-2 pr-3">Factura</th>
+                <th className="py-2 pr-3">ARCA</th>
                 <th className="py-2 pr-3">Total</th>
               </tr>
             </thead>
@@ -548,12 +549,16 @@ export default function VentasPage() {
                     <div className="text-xs text-gray-500">{row.payment_account_label || row.payment_account_code}</div>
                   </td>
                   <td className="py-2 pr-3">{row.invoice_status || '-'}</td>
+                  <td className="py-2 pr-3">
+                    {row.arca_account_label || row.arca_account_code || '-'}
+                    <div className="text-xs text-gray-500">{row.issuer_cuit || '-'}</div>
+                  </td>
                   <td className="py-2 pr-3">{money(row.total_ars)}</td>
                 </tr>
               ))}
               {!rows.length && !loadingList ? (
                 <tr>
-                  <td className="py-3 text-gray-500" colSpan={7}>
+                  <td className="py-3 text-gray-500" colSpan={8}>
                     Sin ventas para el filtro actual.
                   </td>
                 </tr>
@@ -584,9 +589,15 @@ export default function VentasPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-sm">
               <div>
                 Estado de factura: <strong>{selectedInvoice?.status || 'sin registro'}</strong>
+              </div>
+              <div>
+                Cuenta ARCA: <strong>{selectedInvoice?.arca_account_label || selectedInvoice?.arca_account_code || '-'}</strong>
+              </div>
+              <div>
+                CUIT emisor: <strong>{selectedInvoice?.issuer_cuit || '-'}</strong>
               </div>
               <div>
                 CAE: <strong>{selectedInvoice?.cae || '-'}</strong>

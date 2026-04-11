@@ -1,6 +1,6 @@
 // Minimal service worker for installability + basic offline fallback
-// El valor 0.1.0-4447a90-dirty-20260410141908372 será reemplazado en prebuild por scripts/build-sw.mjs
-const CACHE_NAME = 'las-chulas-cache-0.1.0-4447a90-dirty-20260410141908372';
+// El valor 0.1.0-bc9a236-dirty-20260411002504887 será reemplazado en prebuild por scripts/build-sw.mjs
+const CACHE_NAME = 'las-chulas-cache-0.1.0-bc9a236-dirty-20260411002504887';
 const URLS_TO_CACHE = ['/', '/index.html'];
 
 self.addEventListener('install', (event) => {

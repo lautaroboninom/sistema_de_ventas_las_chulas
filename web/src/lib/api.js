@@ -267,8 +267,10 @@ export const postRetailNotaCredito = (ventaId, payload) => api.post(`/api/retail
 
 // Config
 export const getRetailConfigSettings = () => api.get('/api/retail/config/settings/');
+export const getRetailConfigArcaAccounts = () => api.get('/api/retail/config/arca-accounts/');
 export const getRetailConfigPageSettings = () => api.get('/api/retail/config/page-settings/');
 export const putRetailConfigSettings = (payload) => api.put('/api/retail/config/settings/', payload || {});
+export const putRetailConfigArcaAccounts = (payload) => api.put('/api/retail/config/arca-accounts/', payload || {});
 export const putRetailConfigPageSettings = (payload) => api.put('/api/retail/config/page-settings/', payload || {});
 export const getRetailConfigPaymentAccounts = () => api.get('/api/retail/config/payment-accounts/');
 export const putRetailConfigPaymentAccounts = (payload) =>

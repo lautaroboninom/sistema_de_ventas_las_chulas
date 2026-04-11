@@ -161,6 +161,21 @@ PENDING_SOURCES = {'arca', 'online', 'pos', 'caja', 'inventario', 'alertas', 'po
 PENDING_STATUSES = {'open', 'in_progress', 'acknowledged', 'resolved', 'dismissed'}
 REFUND_MODES = {'cash_return', 'store_credit'}
 EXCHANGE_SETTLEMENTS = {'even', 'customer_owes', 'store_owes', 'store_credit'}
+ARCA_ACCOUNT_SECRET_FIELDS = (
+    'arca_cert_path',
+    'arca_key_path',
+)
+ARCA_ACCOUNT_BUSINESS_FIELDS = {
+    'label',
+    'active',
+    'sort_order',
+    'arca_cuit',
+    'arca_pto_vta_store',
+    'arca_pto_vta_online',
+    'arca_cbte_tipo_store',
+    'arca_cbte_tipo_online',
+}
+ARCA_ACCOUNT_TECHNICAL_FIELDS = set(ARCA_ACCOUNT_SECRET_FIELDS)
 
 
 def _default_ui_page_settings():
@@ -408,18 +423,27 @@ def _doc_digits(value):
     return digits or None
 
 
-def _cbte_tipo_for_channel(cfg, channel):
+def _config_int_for_channel(cfg, channel, store_key, online_key, default=None):
     channel_key = (channel or '').strip().lower()
     if channel_key == 'online':
-        return int(cfg.get('arca_cbte_tipo_online') or cfg.get('arca_cbte_tipo_store') or 6)
-    return int(cfg.get('arca_cbte_tipo_store') or cfg.get('arca_cbte_tipo_online') or 6)
+        val = _safe_int((cfg or {}).get(online_key))
+        if val is None:
+            val = _safe_int((cfg or {}).get(store_key))
+    else:
+        val = _safe_int((cfg or {}).get(store_key))
+        if val is None:
+            val = _safe_int((cfg or {}).get(online_key))
+    if val is None:
+        return default
+    return int(val)
+
+
+def _cbte_tipo_for_channel(cfg, channel):
+    return int(_config_int_for_channel(cfg, channel, 'arca_cbte_tipo_store', 'arca_cbte_tipo_online', default=6) or 6)
 
 
 def _pto_vta_for_channel(cfg, channel):
-    channel_key = (channel or '').strip().lower()
-    if channel_key == 'online':
-        return int(cfg.get('arca_pto_vta_online') or cfg.get('arca_pto_vta_store') or 1)
-    return int(cfg.get('arca_pto_vta_store') or cfg.get('arca_pto_vta_online') or 1)
+    return int(_config_int_for_channel(cfg, channel, 'arca_pto_vta_store', 'arca_pto_vta_online', default=1) or 1)
 
 
 def _credit_note_cbte_tipo_from_invoice(invoice_row, cfg):
@@ -431,11 +455,16 @@ def _credit_note_cbte_tipo_from_invoice(invoice_row, cfg):
     return int(base_tipo or 6) + 2
 
 
-def _arca_runtime_config(cfg):
+def _arca_runtime_config(cfg, account=None):
     env = _arca_normalize_env(_clean_text(cfg.get('arca_env')) or getattr(settings, 'ARCA_WS_ENV', 'homologacion'))
-    cuit = _clean_text(cfg.get('arca_cuit')) or _clean_text(getattr(settings, 'ARCA_CUIT', ''))
-    cert_path = _clean_text(cfg.get('arca_cert_path')) or _clean_text(getattr(settings, 'ARCA_CERT_PATH', ''))
-    key_path = _clean_text(cfg.get('arca_key_path')) or _clean_text(getattr(settings, 'ARCA_KEY_PATH', ''))
+    if account is None:
+        cuit = _clean_text(cfg.get('arca_cuit')) or _clean_text(getattr(settings, 'ARCA_CUIT', ''))
+        cert_path = _clean_text(cfg.get('arca_cert_path')) or _clean_text(getattr(settings, 'ARCA_CERT_PATH', ''))
+        key_path = _clean_text(cfg.get('arca_key_path')) or _clean_text(getattr(settings, 'ARCA_KEY_PATH', ''))
+    else:
+        cuit = _clean_text(account.get('arca_cuit'))
+        cert_path = _clean_text(account.get('arca_cert_path'))
+        key_path = _clean_text(account.get('arca_key_path'))
     wsaa_service = _clean_text(cfg.get('arca_wsaa_service')) or _clean_text(getattr(settings, 'ARCA_WSAA_SERVICE', 'wsfe')) or 'wsfe'
 
     wsaa_url_homo = _clean_text(getattr(settings, 'ARCA_WSAA_URL_HOMO', ''))
@@ -577,6 +606,16 @@ _TECHNICAL_ONLY_SETTINGS_FIELDS = {
 }
 
 
+def _sanitize_secret_fields(row, fields):
+    out = dict(row or {})
+    for field in fields:
+        raw = out.pop(field, None)
+        configured = bool(_clean_text(raw))
+        out[f'{field}_configured'] = configured
+        out[f'{field}_masked'] = _mask_secret_value(raw) if configured else None
+    return out
+
+
 def _mask_secret_value(value):
     raw = _clean_text(value)
     if not raw:
@@ -587,13 +626,132 @@ def _mask_secret_value(value):
 
 
 def _sanitize_retail_settings_response(row):
-    out = dict(row or {})
-    for field in _SENSITIVE_SETTINGS_FIELDS:
-        raw = out.pop(field, None)
-        configured = bool(_clean_text(raw))
-        out[f'{field}_configured'] = configured
-        out[f'{field}_masked'] = _mask_secret_value(raw) if configured else None
+    out = _sanitize_secret_fields(row, _SENSITIVE_SETTINGS_FIELDS)
     return out
+
+
+def _sanitize_arca_account_response(row):
+    out = _sanitize_secret_fields(row, ARCA_ACCOUNT_SECRET_FIELDS)
+    out['issuer_cuit'] = out.get('arca_cuit') or ''
+    return out
+
+
+def _load_arca_accounts(active_only=False):
+    where_sql = 'WHERE active=TRUE' if active_only else ''
+    return q(
+        f'''
+        SELECT *
+        FROM retail_arca_accounts
+        {where_sql}
+        ORDER BY sort_order, id
+        '''
+    ) or []
+
+
+def _load_arca_account_by_id(account_id):
+    aid = _safe_int(account_id)
+    if not aid:
+        return None
+    return q('SELECT * FROM retail_arca_accounts WHERE id=%s', [aid], one=True)
+
+
+def _choose_next_arca_account(active_accounts, last_account_id):
+    rows = [row for row in (active_accounts or []) if _safe_int((row or {}).get('id'))]
+    if not rows:
+        return None
+    last_id = _safe_int(last_account_id)
+    ids = [_safe_int(row.get('id')) for row in rows]
+    if last_id in ids:
+        return rows[(ids.index(last_id) + 1) % len(rows)]
+    return rows[0]
+
+
+def _get_arca_rotation_state(lock=False):
+    suffix = ' FOR UPDATE' if lock else ''
+    return q(f'SELECT * FROM retail_arca_rotation_state WHERE id=1{suffix}', one=True) or {}
+
+
+def _serialize_arca_rotation(accounts=None, state=None):
+    rows = list(accounts or [])
+    state_row = state or _get_arca_rotation_state(lock=False)
+    last_id = _safe_int(state_row.get('last_account_id'))
+    active_rows = [row for row in rows if _to_bool(row.get('active'))]
+    last_row = next((row for row in rows if _safe_int(row.get('id')) == last_id), None)
+    next_row = _choose_next_arca_account(active_rows, last_id)
+    return {
+        'last_account_id': last_id,
+        'last_account_code': _clean_text((last_row or {}).get('code')),
+        'last_account_label': _clean_text((last_row or {}).get('label')),
+        'last_issuer_cuit': _clean_text((last_row or {}).get('arca_cuit')),
+        'next_account_id': _safe_int((next_row or {}).get('id')),
+        'next_account_code': _clean_text((next_row or {}).get('code')),
+        'next_account_label': _clean_text((next_row or {}).get('label')),
+        'next_issuer_cuit': _clean_text((next_row or {}).get('arca_cuit')),
+        'active_accounts_count': len(active_rows),
+    }
+
+
+def _load_arca_accounts_response():
+    rows = _load_arca_accounts(active_only=False)
+    return {
+        'accounts': [_sanitize_arca_account_response(row) for row in rows],
+        'rotation': _serialize_arca_rotation(rows, _get_arca_rotation_state(lock=False)),
+    }
+
+
+def _require_arca_accounts_write_permissions(request, accounts, rotation=None):
+    requested = set()
+    for item in accounts or []:
+        if isinstance(item, dict):
+            requested.update(set(item.keys()) & (ARCA_ACCOUNT_BUSINESS_FIELDS | ARCA_ACCOUNT_TECHNICAL_FIELDS))
+    if isinstance(rotation, dict) and 'last_account_id' in rotation:
+        requested.add('last_account_id')
+    if not requested:
+        raise ValidationError('Sin cambios para guardar')
+    needs_business = any(field not in ARCA_ACCOUNT_TECHNICAL_FIELDS for field in requested)
+    needs_online_credentials = any(field in ARCA_ACCOUNT_TECHNICAL_FIELDS for field in requested)
+    if needs_business:
+        require_permission(request, 'action.config.editar')
+    if needs_online_credentials:
+        require_permission(request, 'action.config.online_credentials')
+
+
+def _assign_next_arca_account(invoice):
+    exec_void('INSERT INTO retail_arca_rotation_state(id) VALUES (1) ON CONFLICT (id) DO NOTHING')
+    state = _get_arca_rotation_state(lock=True)
+    account = _choose_next_arca_account(_load_arca_accounts(active_only=True), state.get('last_account_id'))
+    if not account:
+        return None
+    exec_void(
+        'UPDATE retail_invoices SET arca_account_id=%s, updated_at=NOW() WHERE id=%s AND arca_account_id IS NULL',
+        [account['id'], invoice['id']],
+    )
+    exec_void(
+        'UPDATE retail_arca_rotation_state SET last_account_id=%s, updated_at=NOW() WHERE id=1',
+        [account['id']],
+    )
+    invoice['arca_account_id'] = account['id']
+    return account
+
+
+def _arca_account_label(account):
+    return _clean_text((account or {}).get('label')) or _clean_text((account or {}).get('code')) or 'cuenta ARCA'
+
+
+def _arca_account_missing_fields(account, channel):
+    missing = []
+    if _config_int_for_channel(account, channel, 'arca_pto_vta_store', 'arca_pto_vta_online', default=None) is None:
+        missing.append('punto de venta')
+    if _config_int_for_channel(account, channel, 'arca_cbte_tipo_store', 'arca_cbte_tipo_online', default=None) is None:
+        missing.append('tipo de comprobante')
+    if not _mock_enabled():
+        if not _clean_text((account or {}).get('arca_cuit')):
+            missing.append('CUIT')
+        if not _clean_text((account or {}).get('arca_cert_path')):
+            missing.append('certificado')
+        if not _clean_text((account or {}).get('arca_key_path')):
+            missing.append('clave privada')
+    return missing
 
 
 def _require_settings_write_permissions(request, requested_fields):
@@ -3646,12 +3804,16 @@ class RetailVentasView(APIView):
                    COALESCE(s.source_order_id,'') AS source_order_id,
                    COALESCE(u.nombre,'') AS created_by_name,
                    COALESCE(i.status,'not_required') AS invoice_status,
+                   COALESCE(aa.code,'') AS arca_account_code,
+                   COALESCE(aa.label,'') AS arca_account_label,
+                   COALESCE(aa.arca_cuit,'') AS issuer_cuit,
                    COALESCE((SELECT SUM(si.quantity) FROM retail_sale_items si WHERE si.sale_id=s.id),0)::int AS items_qty,
                    COALESCE((SELECT SUM(si.quantity - si.returned_qty) FROM retail_sale_items si WHERE si.sale_id=s.id),0)::int AS pending_return_qty
             FROM retail_sales s
             LEFT JOIN retail_payment_accounts pa ON pa.id=s.payment_account_id
             LEFT JOIN users u ON u.id=s.created_by
             LEFT JOIN retail_invoices i ON i.sale_id=s.id
+            LEFT JOIN retail_arca_accounts aa ON aa.id=i.arca_account_id
             WHERE {where_sql}
             ORDER BY s.created_at DESC, s.id DESC
             LIMIT %s OFFSET %s
@@ -4754,7 +4916,18 @@ def _load_venta(venta_id, include_costs=False, warranty_settings=None):
         for item in items:
             item['unit_cost_snapshot_ars'] = None
 
-    invoice = q('SELECT * FROM retail_invoices WHERE sale_id=%s', [venta_id], one=True)
+    invoice = q(
+        '''
+        SELECT i.*, COALESCE(aa.code,'') AS arca_account_code,
+               COALESCE(aa.label,'') AS arca_account_label,
+               COALESCE(aa.arca_cuit,'') AS issuer_cuit
+        FROM retail_invoices i
+        LEFT JOIN retail_arca_accounts aa ON aa.id=i.arca_account_id
+        WHERE i.sale_id=%s
+        ''',
+        [venta_id],
+        one=True,
+    )
     promos = q(
         '''
         SELECT *
@@ -5938,15 +6111,15 @@ class RetailVentaDevolverView(APIView):
             )
 
         if requires_credit_note:
-            invoice_row = q('SELECT id FROM retail_invoices WHERE sale_id=%s', [venta_id], one=True) or {}
+            invoice_row = q('SELECT id, arca_account_id FROM retail_invoices WHERE sale_id=%s', [venta_id], one=True) or {}
             exec_void(
                 '''
                 INSERT INTO retail_invoice_credit_notes(
-                  sale_id, return_id, invoice_id, status, amount_total_ars, created_by
+                  sale_id, return_id, invoice_id, arca_account_id, status, amount_total_ars, created_by
                 )
-                VALUES (%s,%s,%s,'pending',%s,%s)
+                VALUES (%s,%s,%s,%s,'pending',%s,%s)
                 ''',
-                [venta_id, rid, invoice_row.get('id'), total_refund, getattr(request.user, 'id', None)],
+                [venta_id, rid, invoice_row.get('id'), invoice_row.get('arca_account_id'), total_refund, getattr(request.user, 'id', None)],
             )
 
         ret = q(
@@ -6382,9 +6555,10 @@ def _arca_messages_to_error(messages):
     return code, (' | '.join(parts)[:1000] if parts else None)
 
 
-def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
-    pto_vta = _pto_vta_for_channel(cfg, sale.get('channel'))
-    cbte_tipo = _cbte_tipo_for_channel(cfg, sale.get('channel'))
+def _build_invoice_outcome(cfg, account, sale, invoice, missing_doc_policy='raise'):
+    account_id = _safe_int((invoice or {}).get('arca_account_id'))
+    pto_vta_raw = _config_int_for_channel(account, sale.get('channel'), 'arca_pto_vta_store', 'arca_pto_vta_online', default=None)
+    cbte_tipo_raw = _config_int_for_channel(account, sale.get('channel'), 'arca_cbte_tipo_store', 'arca_cbte_tipo_online', default=None)
     customer_snapshot = _json_any(sale.get('customer_snapshot')) or {}
     customer_doc = _normalize_customer_doc(customer_snapshot.get('doc'))
     total_ars = _to_decimal(sale.get('total_ars') or 0, 'total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
@@ -6393,12 +6567,18 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
         'channel': sale.get('channel'),
         'payment_method': sale.get('payment_method'),
         'arca_env': cfg.get('arca_env'),
-        'pto_vta': pto_vta,
-        'cbte_tipo': cbte_tipo,
+        'arca_account_id': account_id,
+        'arca_account_code': _clean_text((account or {}).get('code')),
+        'arca_account_label': _clean_text((account or {}).get('label')),
+        'issuer_cuit': _clean_text((account or {}).get('arca_cuit')),
+        'pto_vta': pto_vta_raw,
+        'cbte_tipo': cbte_tipo_raw,
         'total_ars': str(total_ars),
         'issued_at': timezone.now().isoformat(),
         'customer_doc': customer_snapshot.get('doc'),
     }
+    pto_vta = int(pto_vta_raw or 0) if pto_vta_raw is not None else None
+    cbte_tipo = int(cbte_tipo_raw or 0) if cbte_tipo_raw is not None else None
 
     if total_ars <= 0:
         return {
@@ -6412,6 +6592,52 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
             'cbte_nro': invoice.get('cbte_nro'),
             'cae': None,
             'cae_due_date': None,
+        }
+
+    if account_id and not account:
+        return {
+            'status': 'manual_review',
+            'error_message': 'Cuenta ARCA asignada no encontrada',
+            'error_code': 'ARCA_ACCOUNT_NOT_FOUND',
+            'response': {'ok': False, 'reason': 'arca_account_not_found'},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': invoice.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+            'arca_account_id': account_id,
+        }
+
+    if not account:
+        return {
+            'status': 'manual_review',
+            'error_message': 'No hay cuentas ARCA activas configuradas para facturar',
+            'error_code': 'NO_ACTIVE_ARCA_ACCOUNT',
+            'response': {'ok': False, 'reason': 'no_active_arca_account'},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': invoice.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+            'arca_account_id': None,
+        }
+
+    missing_account_fields = _arca_account_missing_fields(account, sale.get('channel'))
+    if missing_account_fields:
+        return {
+            'status': 'manual_review',
+            'error_message': f'Cuenta ARCA "{_arca_account_label(account)}" incompleta: falta {", ".join(missing_account_fields)}',
+            'error_code': 'ARCA_ACCOUNT_INCOMPLETE',
+            'response': {'ok': False, 'reason': 'arca_account_incomplete', 'missing_fields': missing_account_fields},
+            'request_payload': request_payload,
+            'pto_vta': pto_vta,
+            'cbte_tipo': cbte_tipo,
+            'cbte_nro': invoice.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+            'arca_account_id': account_id,
         }
 
     if not customer_doc:
@@ -6428,6 +6654,7 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
                 'cbte_nro': invoice.get('cbte_nro'),
                 'cae': None,
                 'cae_due_date': None,
+                'arca_account_id': account_id,
             }
         raise ValidationError(missing_doc_message)
 
@@ -6446,9 +6673,10 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
             'cbte_nro': cbte_nro,
             'cae': cae,
             'cae_due_date': (timezone.localdate() + dt.timedelta(days=10)).isoformat(),
+            'arca_account_id': account_id,
         }
 
-    runtime_cfg = _arca_runtime_config(cfg)
+    runtime_cfg = _arca_runtime_config(cfg, account=account)
     auth = wsaa_get_ta(runtime_cfg)
     auth_req = {'token': auth.get('token'), 'sign': auth.get('sign'), 'cuit': runtime_cfg.cuit}
     _advisory_lock_sequence(pto_vta, cbte_tipo)
@@ -6494,6 +6722,7 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
                 'cbte_nro': consult.get('cbte_nro') or next_cbte,
                 'cae': consult_cae,
                 'cae_due_date': _fmt_compact_date(consult.get('cae_due_date')),
+                'arca_account_id': account_id,
             }
         return {
             'status': 'retry',
@@ -6506,6 +6735,7 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
             'cbte_nro': next_cbte,
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
     except ArcaConfigError as exc:
         return {
@@ -6519,6 +6749,7 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
             'cbte_nro': next_cbte,
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
     except ArcaError as exc:
         return {
@@ -6532,6 +6763,7 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
             'cbte_nro': next_cbte,
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
 
     messages.extend(fe_out.get('messages') or [])
@@ -6557,6 +6789,7 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
             'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
             'cae': cae,
             'cae_due_date': due,
+            'arca_account_id': account_id,
         }
     if result_code == 'R':
         return {
@@ -6570,6 +6803,7 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
             'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
     return {
         'status': 'manual_review',
@@ -6582,6 +6816,7 @@ def _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy='raise'):
         'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
         'cae': cae,
         'cae_due_date': due,
+        'arca_account_id': account_id,
     }
 
 
@@ -6612,13 +6847,20 @@ def _emitir_factura_core(venta_id, missing_doc_policy='raise'):
             return {'invoice': invoice, 'sale': sale}
 
         cfg = _load_settings()
+        account_id = _safe_int(invoice.get('arca_account_id'))
+        if account_id:
+            account = _load_arca_account_by_id(account_id)
+        else:
+            account = _assign_next_arca_account(invoice)
+            account_id = _safe_int((invoice or {}).get('arca_account_id'))
         attempts = int(invoice.get('attempts') or 0) + 1
-        outcome = _build_invoice_outcome(cfg, sale, invoice, missing_doc_policy=missing_doc_policy)
+        outcome = _build_invoice_outcome(cfg, account, sale, invoice, missing_doc_policy=missing_doc_policy)
 
         exec_void(
             '''
             UPDATE retail_invoices
-            SET status=%s,
+            SET arca_account_id=%s,
+                status=%s,
                 cae=%s,
                 cae_due_date=%s,
                 cbte_tipo=%s,
@@ -6635,6 +6877,7 @@ def _emitir_factura_core(venta_id, missing_doc_policy='raise'):
             WHERE id=%s
             ''',
             [
+                outcome.get('arca_account_id'),
                 outcome.get('status') or 'retry',
                 outcome.get('cae'),
                 _fmt_compact_date(outcome.get('cae_due_date')),
@@ -6666,20 +6909,63 @@ def _emitir_factura(venta_id, request, missing_doc_policy='raise'):
 def _emitir_nota_credito(venta_id, request):
     _emitir_nota_credito_core(venta_id=venta_id)
     return q(
-        'SELECT * FROM retail_invoice_credit_notes WHERE sale_id=%s ORDER BY id DESC',
+        '''
+        SELECT cn.*, COALESCE(aa.code,'') AS arca_account_code,
+               COALESCE(aa.label,'') AS arca_account_label,
+               COALESCE(aa.arca_cuit,'') AS issuer_cuit
+        FROM retail_invoice_credit_notes cn
+        LEFT JOIN retail_arca_accounts aa ON aa.id=cn.arca_account_id
+        WHERE cn.sale_id=%s
+        ORDER BY cn.id DESC
+        ''',
         [venta_id],
     ) or []
 
 
-def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='manual_review'):
+def _build_credit_note_outcome(cfg, account, sale, invoice, note, missing_doc_policy='manual_review'):
+    account_id = _safe_int((invoice or {}).get('arca_account_id') or (note or {}).get('arca_account_id'))
     request_payload = {
         'sale_id': int(sale['id']),
         'credit_note_id': int(note['id']),
         'issued_at': timezone.now().isoformat(),
+        'arca_account_id': account_id,
+        'arca_account_code': _clean_text((account or {}).get('code')),
+        'arca_account_label': _clean_text((account or {}).get('label')),
+        'issuer_cuit': _clean_text((account or {}).get('arca_cuit')),
     }
     base_invoice_tipo = _safe_int(invoice.get('cbte_tipo'))
     base_invoice_nro = _safe_int(invoice.get('cbte_nro'))
     base_invoice_pto = _safe_int(invoice.get('pto_vta'))
+
+    if account_id and not account:
+        return {
+            'status': 'manual_review',
+            'error_message': 'Cuenta ARCA asignada en la factura origen no encontrada',
+            'error_code': 'ARCA_ACCOUNT_NOT_FOUND',
+            'response': {'ok': False, 'reason': 'arca_account_not_found'},
+            'request_payload': request_payload,
+            'pto_vta': _safe_int(base_invoice_pto),
+            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, account or cfg),
+            'cbte_nro': note.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+            'arca_account_id': account_id,
+        }
+
+    if not account_id or not account:
+        return {
+            'status': 'manual_review',
+            'error_message': 'Factura origen sin cuenta ARCA asignada para emitir nota de credito',
+            'error_code': 'MISSING_ARCA_ACCOUNT',
+            'response': {'ok': False, 'reason': 'missing_arca_account'},
+            'request_payload': request_payload,
+            'pto_vta': _safe_int(base_invoice_pto),
+            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, account or cfg),
+            'cbte_nro': note.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+            'arca_account_id': None,
+        }
 
     if not base_invoice_tipo or not base_invoice_nro or base_invoice_pto is None:
         return {
@@ -6688,11 +6974,12 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
             'error_code': 'MISSING_BASE_INVOICE',
             'response': {'ok': False, 'reason': 'missing_base_invoice'},
             'request_payload': request_payload,
-            'pto_vta': _pto_vta_for_channel(cfg, sale.get('channel')),
-            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, cfg),
+            'pto_vta': _pto_vta_for_channel(account or cfg, sale.get('channel')),
+            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, account or cfg),
             'cbte_nro': note.get('cbte_nro'),
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
 
     amount = _to_decimal(note.get('amount_total_ars') or 0, 'amount_total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
@@ -6704,10 +6991,11 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
             'response': {'ok': False, 'reason': 'invalid_amount'},
             'request_payload': request_payload,
             'pto_vta': int(base_invoice_pto),
-            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, cfg),
+            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, account or cfg),
             'cbte_nro': note.get('cbte_nro'),
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
 
     customer_snapshot = _json_any(sale.get('customer_snapshot')) or {}
@@ -6722,14 +7010,31 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
                 'response': {'ok': False, 'reason': 'missing_customer_doc'},
                 'request_payload': request_payload,
                 'pto_vta': int(base_invoice_pto),
-                'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, cfg),
+                'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, account or cfg),
                 'cbte_nro': note.get('cbte_nro'),
                 'cae': None,
                 'cae_due_date': None,
+                'arca_account_id': account_id,
             }
         raise ValidationError(msg)
 
-    cbte_tipo = _credit_note_cbte_tipo_from_invoice(invoice, cfg)
+    missing_account_fields = _arca_account_missing_fields(account, sale.get('channel'))
+    if missing_account_fields:
+        return {
+            'status': 'manual_review',
+            'error_message': f'Cuenta ARCA "{_arca_account_label(account)}" incompleta: falta {", ".join(missing_account_fields)}',
+            'error_code': 'ARCA_ACCOUNT_INCOMPLETE',
+            'response': {'ok': False, 'reason': 'arca_account_incomplete', 'missing_fields': missing_account_fields},
+            'request_payload': request_payload,
+            'pto_vta': int(base_invoice_pto),
+            'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, account),
+            'cbte_nro': note.get('cbte_nro'),
+            'cae': None,
+            'cae_due_date': None,
+            'arca_account_id': account_id,
+        }
+
+    cbte_tipo = _credit_note_cbte_tipo_from_invoice(invoice, account)
     pto_vta = int(base_invoice_pto)
     request_payload.update(
         {
@@ -6759,9 +7064,10 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
             'cbte_nro': cbte_nro,
             'cae': cae,
             'cae_due_date': (timezone.localdate() + dt.timedelta(days=10)).isoformat(),
+            'arca_account_id': account_id,
         }
 
-    runtime_cfg = _arca_runtime_config(cfg)
+    runtime_cfg = _arca_runtime_config(cfg, account=account)
     auth = wsaa_get_ta(runtime_cfg)
     auth_req = {'token': auth.get('token'), 'sign': auth.get('sign'), 'cuit': runtime_cfg.cuit}
     _advisory_lock_sequence(pto_vta, cbte_tipo)
@@ -6806,6 +7112,7 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
                 'cbte_nro': consult.get('cbte_nro') or next_cbte,
                 'cae': consult_cae,
                 'cae_due_date': _fmt_compact_date(consult.get('cae_due_date')),
+                'arca_account_id': account_id,
             }
         return {
             'status': 'retry',
@@ -6818,6 +7125,7 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
             'cbte_nro': next_cbte,
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
     except ArcaConfigError as exc:
         return {
@@ -6831,6 +7139,7 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
             'cbte_nro': next_cbte,
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
     except ArcaError as exc:
         return {
@@ -6844,6 +7153,7 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
             'cbte_nro': next_cbte,
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
 
     messages.extend(fe_out.get('messages') or [])
@@ -6868,6 +7178,7 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
             'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
             'cae': cae,
             'cae_due_date': due,
+            'arca_account_id': account_id,
         }
     if result_code == 'R':
         return {
@@ -6881,6 +7192,7 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
             'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
             'cae': None,
             'cae_due_date': None,
+            'arca_account_id': account_id,
         }
     return {
         'status': 'manual_review',
@@ -6893,6 +7205,7 @@ def _build_credit_note_outcome(cfg, sale, invoice, note, missing_doc_policy='man
         'cbte_nro': fe_out.get('cbte_nro') or next_cbte,
         'cae': cae,
         'cae_due_date': due,
+        'arca_account_id': account_id,
     }
 
 
@@ -6914,7 +7227,8 @@ def _emitir_nota_credito_core(venta_id=None, credit_note_id=None, missing_doc_po
         rows = q(
             f'''
             SELECT cn.*, s.channel AS sale_channel, s.customer_snapshot, s.status AS sale_status,
-                   i.status AS invoice_status, i.cbte_tipo AS invoice_cbte_tipo, i.cbte_nro AS invoice_cbte_nro, i.pto_vta AS invoice_pto_vta
+                   i.status AS invoice_status, i.cbte_tipo AS invoice_cbte_tipo, i.cbte_nro AS invoice_cbte_nro,
+                   i.pto_vta AS invoice_pto_vta, i.arca_account_id AS invoice_arca_account_id
             FROM retail_invoice_credit_notes cn
             JOIN retail_sales s ON s.id=cn.sale_id
             LEFT JOIN retail_invoices i ON i.sale_id=cn.sale_id
@@ -6945,28 +7259,36 @@ def _emitir_nota_credito_core(venta_id=None, credit_note_id=None, missing_doc_po
                 'pto_vta': row.get('invoice_pto_vta'),
                 'status': row.get('invoice_status'),
                 'channel': row.get('sale_channel'),
+                'arca_account_id': row.get('invoice_arca_account_id'),
             }
+            account = _load_arca_account_by_id(invoice.get('arca_account_id'))
             if (invoice.get('status') or '') != 'authorized':
                 outcome = {
                     'status': 'manual_review',
                     'error_message': 'Factura origen no autorizada para emitir nota de credito',
                     'error_code': 'BASE_INVOICE_NOT_AUTHORIZED',
                     'response': {'ok': False, 'reason': 'base_invoice_not_authorized'},
-                    'request_payload': {'credit_note_id': row['id'], 'sale_id': row['sale_id']},
+                    'request_payload': {
+                        'credit_note_id': row['id'],
+                        'sale_id': row['sale_id'],
+                        'arca_account_id': invoice.get('arca_account_id'),
+                    },
                     'pto_vta': invoice.get('pto_vta'),
-                    'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, cfg),
+                    'cbte_tipo': _credit_note_cbte_tipo_from_invoice(invoice, account or cfg),
                     'cbte_nro': row.get('cbte_nro'),
                     'cae': None,
                     'cae_due_date': None,
+                    'arca_account_id': invoice.get('arca_account_id'),
                 }
             else:
-                outcome = _build_credit_note_outcome(cfg, sale, invoice, row, missing_doc_policy=missing_doc_policy)
+                outcome = _build_credit_note_outcome(cfg, account, sale, invoice, row, missing_doc_policy=missing_doc_policy)
 
             attempts = int(row.get('attempts') or 0) + 1
             exec_void(
                 '''
                 UPDATE retail_invoice_credit_notes
-                SET status=%s,
+                SET arca_account_id=%s,
+                    status=%s,
                     pto_vta=%s,
                     cbte_tipo=%s,
                     cbte_nro=%s,
@@ -6981,6 +7303,7 @@ def _emitir_nota_credito_core(venta_id=None, credit_note_id=None, missing_doc_po
                 WHERE id=%s
                 ''',
                 [
+                    outcome.get('arca_account_id'),
                     outcome.get('status') or 'retry',
                     outcome.get('pto_vta'),
                     outcome.get('cbte_tipo'),
@@ -7028,7 +7351,18 @@ class RetailFacturacionDetailView(APIView):
 
     def get(self, request, venta_id):
         _require_staff(request)
-        row = q('SELECT * FROM retail_invoices WHERE sale_id=%s', [venta_id], one=True)
+        row = q(
+            '''
+            SELECT i.*, COALESCE(aa.code,'') AS arca_account_code,
+                   COALESCE(aa.label,'') AS arca_account_label,
+                   COALESCE(aa.arca_cuit,'') AS issuer_cuit
+            FROM retail_invoices i
+            LEFT JOIN retail_arca_accounts aa ON aa.id=i.arca_account_id
+            WHERE i.sale_id=%s
+            ''',
+            [venta_id],
+            one=True,
+        )
         if not row:
             return Response({'detail': 'Factura no encontrada'}, status=404)
         return Response(row)
@@ -10645,6 +10979,99 @@ class RetailConfigSettingsView(APIView):
         return self.get(request)
 
 
+class RetailConfigArcaAccountsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        return Response(_load_arca_accounts_response())
+
+    @transaction.atomic
+    def put(self, request):
+        _set_audit_user(request)
+        data = request.data or {}
+        accounts = data.get('accounts')
+        rotation = data.get('rotation')
+        if not isinstance(accounts, list) or len(accounts) != 2:
+            raise ValidationError('accounts debe contener exactamente 2 cuentas ARCA')
+        if rotation is not None and not isinstance(rotation, dict):
+            raise ValidationError('rotation invalida')
+
+        existing_rows = _load_arca_accounts(active_only=False)
+        if len(existing_rows) != 2:
+            raise ValidationError('La configuracion actual requiere exactamente 2 cuentas ARCA persistidas')
+        existing_by_id = {int(row['id']): row for row in existing_rows if _safe_int(row.get('id'))}
+
+        _require_arca_accounts_write_permissions(request, accounts, rotation)
+
+        seen_ids = set()
+        for item in accounts:
+            if not isinstance(item, dict):
+                raise ValidationError('Cada cuenta ARCA debe ser objeto')
+            account_id = _to_int(item.get('id'), 'id')
+            if account_id in seen_ids:
+                raise ValidationError('No se puede repetir la misma cuenta ARCA')
+            seen_ids.add(account_id)
+            current = existing_by_id.get(account_id)
+            if not current:
+                raise ValidationError('Cuenta ARCA invalida')
+
+            code = _clean_text(item.get('code')) or _clean_text(current.get('code'))
+            if code != _clean_text(current.get('code')):
+                raise ValidationError('code no editable para cuentas ARCA')
+
+            updates = []
+            params = []
+
+            if 'label' in item:
+                label = _clean_text(item.get('label'))
+                if not label:
+                    raise ValidationError('label es requerido')
+                updates.append('label=%s')
+                params.append(label)
+            if 'active' in item:
+                updates.append('active=%s')
+                params.append(_to_bool(item.get('active')))
+            if 'sort_order' in item:
+                updates.append('sort_order=%s')
+                params.append(_to_int(item.get('sort_order'), 'sort_order'))
+            if 'arca_cuit' in item:
+                updates.append('arca_cuit=%s')
+                params.append(_clean_text(item.get('arca_cuit')))
+
+            for field in ('arca_pto_vta_store', 'arca_pto_vta_online', 'arca_cbte_tipo_store', 'arca_cbte_tipo_online'):
+                if field in item:
+                    val = _to_int(item.get(field), field, allow_none=True)
+                    if val is not None and val <= 0:
+                        raise ValidationError(f'{field} debe ser mayor a 0')
+                    updates.append(f'{field}=%s')
+                    params.append(val)
+
+            for field in ARCA_ACCOUNT_SECRET_FIELDS:
+                if field in item:
+                    updates.append(f'{field}=%s')
+                    params.append(_clean_text(item.get(field)))
+
+            if updates:
+                params.append(account_id)
+                exec_void(
+                    f"UPDATE retail_arca_accounts SET {', '.join(updates)} WHERE id=%s",
+                    params,
+                )
+
+        if isinstance(rotation, dict) and 'last_account_id' in rotation:
+            last_account_id = _to_int(rotation.get('last_account_id'), 'last_account_id', allow_none=True)
+            if last_account_id is not None and last_account_id not in existing_by_id:
+                raise ValidationError('last_account_id invalido')
+            exec_void('INSERT INTO retail_arca_rotation_state(id) VALUES (1) ON CONFLICT (id) DO NOTHING')
+            exec_void(
+                'UPDATE retail_arca_rotation_state SET last_account_id=%s, updated_at=NOW() WHERE id=1',
+                [last_account_id],
+            )
+
+        return Response(_load_arca_accounts_response())
+
+
 class RetailConfigPageSettingsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -11998,6 +12425,7 @@ __all__ = [
     'RetailFacturacionDetailView',
     'RetailFacturacionNotaCreditoView',
     'RetailConfigSettingsView',
+    'RetailConfigArcaAccountsView',
     'RetailConfigPageSettingsView',
     'RetailConfigPaymentAccountsView',
     'RetailOnlineImportCatalogoView',
