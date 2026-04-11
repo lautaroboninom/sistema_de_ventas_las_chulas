@@ -387,6 +387,14 @@ export default function ConfigGeneral() {
           label: a.label,
           payment_method: a.payment_method || null,
           provider: a.provider || null,
+          price_modifier_pct:
+            a.price_modifier_pct === '' || a.price_modifier_pct == null
+              ? 0
+              : Number(a.price_modifier_pct),
+          default_arca_account_id:
+            a.default_arca_account_id === '' || a.default_arca_account_id == null
+              ? null
+              : Number(a.default_arca_account_id),
           active: !!a.active,
           sort_order: Number(a.sort_order || 100),
         })),
@@ -521,6 +529,25 @@ export default function ConfigGeneral() {
 
   function updateAccount(idx, patch) {
     setAccounts((prev) => prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)));
+  }
+
+  function addPaymentAccountRow() {
+    setAccounts((prev) => [
+      ...prev,
+      {
+        id: null,
+        code: '',
+        label: '',
+        payment_method: '',
+        provider: '',
+        price_modifier_pct: 0,
+        default_arca_account_id: null,
+        default_arca_account_code: '',
+        default_arca_account_label: '',
+        active: true,
+        sort_order: 100,
+      },
+    ]);
   }
 
   async function ensurePermCatalog() {
@@ -1054,6 +1081,8 @@ export default function ConfigGeneral() {
                   <th className="py-2 pr-3">Label</th>
                   <th className="py-2 pr-3">Metodo</th>
                   <th className="py-2 pr-3">Provider</th>
+                  <th className="py-2 pr-3">% recargo/descuento</th>
+                  <th className="py-2 pr-3">Cuenta ARCA por defecto</th>
                   <th className="py-2 pr-3">Orden</th>
                   <th className="py-2 pr-3">Activa</th>
                 </tr>
@@ -1061,7 +1090,14 @@ export default function ConfigGeneral() {
               <tbody>
                 {accounts.map((row, idx) => (
                   <tr key={row.id || idx} className="border-b last:border-b-0">
-                    <td className="py-2 pr-3">{row.code}</td>
+                    <td className="py-2 pr-3">
+                      <input
+                        className="input"
+                        value={row.code || ''}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateAccount(idx, { code: e.target.value })}
+                      />
+                    </td>
                     <td className="py-2 pr-3">
                       <input
                         className="input"
@@ -1082,6 +1118,7 @@ export default function ConfigGeneral() {
                         <option value="debit">debit</option>
                         <option value="transfer">transfer</option>
                         <option value="credit">credit</option>
+                        <option value="store_credit">store_credit</option>
                       </select>
                     </td>
                     <td className="py-2 pr-3">
@@ -1091,6 +1128,36 @@ export default function ConfigGeneral() {
                         disabled={!canEditBusinessSettings}
                         onChange={(e) => updateAccount(idx, { provider: e.target.value })}
                       />
+                    </td>
+                    <td className="py-2 pr-3">
+                      <input
+                        className="input"
+                        type="number"
+                        step="0.01"
+                        min="-99.99"
+                        value={row.price_modifier_pct ?? 0}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateAccount(idx, { price_modifier_pct: e.target.value })}
+                      />
+                    </td>
+                    <td className="py-2 pr-3">
+                      <select
+                        className="input"
+                        value={row.default_arca_account_id ?? ''}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) =>
+                          updateAccount(idx, {
+                            default_arca_account_id: e.target.value === '' ? null : Number(e.target.value),
+                          })
+                        }
+                      >
+                        <option value="">No facturar por defecto</option>
+                        {arcaAccounts.map((arca) => (
+                          <option key={`arca-payment-${arca.id}`} value={arca.id}>
+                            {arca.label || arca.code}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td className="py-2 pr-3">
                       <input
@@ -1113,12 +1180,20 @@ export default function ConfigGeneral() {
                 ))}
                 {!accounts.length ? (
                   <tr>
-                    <td className="py-3 text-gray-500" colSpan={6}>Sin cuentas</td>
+                    <td className="py-3 text-gray-500" colSpan={8}>Sin cuentas</td>
                   </tr>
                 ) : null}
               </tbody>
             </table>
           </div>
+          <button
+            className="btn-secondary"
+            type="button"
+            onClick={addPaymentAccountRow}
+            disabled={!canEditBusinessSettings}
+          >
+            Agregar cuenta / medio
+          </button>
           <button
             className="btn"
             type="button"

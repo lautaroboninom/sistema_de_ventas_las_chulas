@@ -354,33 +354,66 @@ CREATE TABLE IF NOT EXISTS retail_payment_accounts (
   label            TEXT NOT NULL,
   payment_method   TEXT,
   provider         TEXT,
+  price_modifier_pct NUMERIC(6,2) NOT NULL DEFAULT 0,
+  default_arca_account_id BIGINT REFERENCES retail_arca_accounts(id) ON DELETE SET NULL,
   active           BOOLEAN NOT NULL DEFAULT TRUE,
   sort_order       INTEGER NOT NULL DEFAULT 100,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT chk_payment_method CHECK (payment_method IS NULL OR payment_method IN ('cash', 'debit', 'transfer', 'credit', 'store_credit'))
+  CONSTRAINT chk_payment_method CHECK (payment_method IS NULL OR payment_method IN ('cash', 'debit', 'transfer', 'credit', 'store_credit')),
+  CONSTRAINT chk_retail_payment_accounts_modifier_min CHECK (price_modifier_pct > -100)
 );
+
+ALTER TABLE retail_payment_accounts
+ADD COLUMN IF NOT EXISTS price_modifier_pct NUMERIC(6,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE retail_payment_accounts
+ADD COLUMN IF NOT EXISTS default_arca_account_id BIGINT REFERENCES retail_arca_accounts(id) ON DELETE SET NULL;
+
+ALTER TABLE retail_payment_accounts
+DROP CONSTRAINT IF EXISTS chk_retail_payment_accounts_modifier_min;
+ALTER TABLE retail_payment_accounts
+ADD CONSTRAINT chk_retail_payment_accounts_modifier_min CHECK (price_modifier_pct > -100);
 
 DROP TRIGGER IF EXISTS trg_retail_payment_accounts_updated_at ON retail_payment_accounts;
 CREATE TRIGGER trg_retail_payment_accounts_updated_at
 BEFORE UPDATE ON retail_payment_accounts
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-INSERT INTO retail_payment_accounts(code, label, payment_method, provider, active, sort_order)
+INSERT INTO retail_payment_accounts(code, label, payment_method, provider, price_modifier_pct, active, sort_order)
 VALUES
-  ('cash', 'Caja', 'cash', 'cash', TRUE, 10),
-  ('bbva', 'BBVA', 'transfer', 'bbva', TRUE, 20),
-  ('pbs', 'PBS', 'transfer', 'pbs', TRUE, 30),
-  ('payway', 'Payway', 'credit', 'payway', TRUE, 40),
-  ('transfer_1', 'Transferencia Cuenta 1', 'transfer', 'bank', TRUE, 50),
-  ('transfer_2', 'Transferencia Cuenta 2', 'transfer', 'bank', TRUE, 60),
-  ('store_credit', 'Credito tienda', 'store_credit', 'internal', TRUE, 70)
+  ('cash', 'Caja', 'cash', 'cash', -10, TRUE, 10),
+  ('bbva', 'BBVA', 'transfer', 'bbva', 0, TRUE, 20),
+  ('pbs', 'PBS', 'transfer', 'pbs', 0, TRUE, 30),
+  ('payway', 'Payway', 'credit', 'payway', 10, TRUE, 40),
+  ('transfer_1', 'Transferencia Cuenta 1', 'transfer', 'bank', 0, TRUE, 50),
+  ('transfer_2', 'Transferencia Cuenta 2', 'transfer', 'bank', 0, TRUE, 60),
+  ('store_credit', 'Credito tienda', 'store_credit', 'internal', 0, TRUE, 70)
 ON CONFLICT (code) DO UPDATE
 SET label = EXCLUDED.label,
     payment_method = EXCLUDED.payment_method,
     provider = EXCLUDED.provider,
+    price_modifier_pct = EXCLUDED.price_modifier_pct,
     active = TRUE,
     sort_order = EXCLUDED.sort_order;
+
+DO $$
+DECLARE first_active_arca_id BIGINT;
+BEGIN
+  SELECT id
+  INTO first_active_arca_id
+  FROM retail_arca_accounts
+  WHERE active = TRUE
+  ORDER BY sort_order, id
+  LIMIT 1;
+
+  IF first_active_arca_id IS NOT NULL THEN
+    UPDATE retail_payment_accounts
+    SET default_arca_account_id = first_active_arca_id
+    WHERE default_arca_account_id IS NULL
+      AND LOWER(COALESCE(payment_method, '')) IN ('debit', 'transfer', 'credit');
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS retail_cash_sessions (
   id                           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -1588,6 +1621,7 @@ CREATE INDEX IF NOT EXISTS idx_retail_webhook_provider_created ON retail_webhook
 CREATE INDEX IF NOT EXISTS idx_retail_webhook_order ON retail_webhook_events(provider, external_order_id);
 CREATE INDEX IF NOT EXISTS idx_integration_jobs_status_retry ON integration_jobs(status, next_retry_at, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_integration_jobs_provider_type ON integration_jobs(provider, job_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_retail_payment_accounts_default_arca ON retail_payment_accounts(default_arca_account_id);
 
 -- =============================
 -- Audit triggers on core retail tables
@@ -1631,4 +1665,3 @@ BEGIN
     FOR EACH ROW EXECUTE FUNCTION audit_row_change();
   END IF;
 END $$;
-

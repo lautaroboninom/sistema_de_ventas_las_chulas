@@ -64,7 +64,6 @@ PAYMENT_MODIFIERS = {
     'credit': Decimal('10.00'),
     'store_credit': Decimal('0.00'),
 }
-INVOICE_REQUIRED_METHODS = {'debit', 'transfer', 'credit'}
 DEFAULT_ACCOUNT_BY_METHOD = {
     'cash': 'cash',
     'debit': 'payway',
@@ -72,6 +71,7 @@ DEFAULT_ACCOUNT_BY_METHOD = {
     'transfer': 'transfer_1',
     'store_credit': 'store_credit',
 }
+INVOICE_OVERRIDE_MODES = {'default', 'arca', 'none'}
 DEFAULT_PRODUCT_BRAND = 'Las Chulas'
 PRODUCT_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 PRODUCT_IMAGE_ALLOWED_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
@@ -537,6 +537,104 @@ def _can_manage_promotions(request):
 
 def _can_exchange_sale(request):
     return _user_role(request) == 'admin' or user_has_permission(request, 'action.ventas.cambiar')
+
+
+def _can_override_payment_terms(request):
+    return _user_role(request) == 'admin'
+
+
+def _normalize_invoice_override(raw):
+    if raw is None:
+        return {'mode': 'default', 'arca_account_id': None}
+    if isinstance(raw, str):
+        mode = (_clean_text(raw) or 'default').lower()
+        account_id = None
+    elif isinstance(raw, dict):
+        mode = (_clean_text(raw.get('mode')) or 'default').lower()
+        account_id = _to_int(raw.get('arca_account_id'), 'invoice_override.arca_account_id', allow_none=True)
+    else:
+        raise ValidationError('invoice_override invalido')
+
+    if mode not in INVOICE_OVERRIDE_MODES:
+        raise ValidationError('invoice_override.mode invalido (default|arca|none)')
+    if mode == 'arca' and account_id is None:
+        raise ValidationError('invoice_override.arca_account_id requerido cuando mode=arca')
+    if mode != 'arca':
+        account_id = None
+    return {'mode': mode, 'arca_account_id': account_id}
+
+
+def _default_invoice_from_payments(payments):
+    rows = [row for row in (payments or []) if _safe_int((row or {}).get('default_arca_account_id'))]
+    if not rows:
+        return {
+            'invoice_mode': 'internal',
+            'invoice_required': False,
+            'arca_account_id': None,
+            'arca_account_code': None,
+            'arca_account_label': None,
+            'source': 'default',
+        }
+
+    chosen = sorted(
+        rows,
+        key=lambda row: (
+            _to_decimal((row or {}).get('amount_ars') or 0, 'amount_ars', allow_none=True) or Decimal('0.00'),
+            _to_decimal((row or {}).get('base_amount_ars') or 0, 'base_amount_ars', allow_none=True) or Decimal('0.00'),
+        ),
+        reverse=True,
+    )[0]
+    return {
+        'invoice_mode': 'arca',
+        'invoice_required': True,
+        'arca_account_id': _safe_int(chosen.get('default_arca_account_id')),
+        'arca_account_code': _clean_text(chosen.get('default_arca_account_code')),
+        'arca_account_label': _clean_text(chosen.get('default_arca_account_label')),
+        'source': 'default',
+    }
+
+
+def _resolve_invoice_decision(request, default_invoice, raw_override):
+    base = dict(default_invoice or {})
+    override = _normalize_invoice_override(raw_override)
+    mode = override.get('mode') or 'default'
+    if mode == 'default':
+        return {
+            'invoice_mode': 'arca' if base.get('invoice_mode') == 'arca' and _safe_int(base.get('arca_account_id')) else 'internal',
+            'invoice_required': bool(base.get('invoice_mode') == 'arca' and _safe_int(base.get('arca_account_id'))),
+            'arca_account_id': _safe_int(base.get('arca_account_id')),
+            'arca_account_code': _clean_text(base.get('arca_account_code')),
+            'arca_account_label': _clean_text(base.get('arca_account_label')),
+            'source': 'default',
+        }
+
+    if not _can_override_payment_terms(request):
+        raise PermissionDenied('Solo admin puede modificar la facturacion en la confirmacion')
+
+    if mode == 'none':
+        return {
+            'invoice_mode': 'internal',
+            'invoice_required': False,
+            'arca_account_id': None,
+            'arca_account_code': None,
+            'arca_account_label': None,
+            'source': 'override',
+        }
+
+    account_id = _safe_int(override.get('arca_account_id'))
+    account = _load_arca_account_by_id(account_id)
+    if not account:
+        raise ValidationError('invoice_override.arca_account_id invalido')
+    if not _to_bool(account.get('active')):
+        raise ValidationError('La cuenta ARCA seleccionada esta inactiva')
+    return {
+        'invoice_mode': 'arca',
+        'invoice_required': True,
+        'arca_account_id': _safe_int(account.get('id')),
+        'arca_account_code': _clean_text(account.get('code')),
+        'arca_account_label': _clean_text(account.get('label')),
+        'source': 'override',
+    }
 
 
 def _parse_dates(request):
@@ -1030,16 +1128,24 @@ def _normalize_option_values(data):
 def _ensure_payment_account(payload, payment_method):
     account_id = _to_int(payload.get('payment_account_id'), 'payment_account_id', allow_none=True)
     account_code = _clean_text(payload.get('payment_account_code'))
+    select_sql = '''
+        SELECT pa.id, pa.code, pa.label, pa.payment_method, pa.active,
+               pa.price_modifier_pct, pa.default_arca_account_id,
+               COALESCE(aa.code,'') AS default_arca_account_code,
+               COALESCE(aa.label,'') AS default_arca_account_label
+        FROM retail_payment_accounts pa
+        LEFT JOIN retail_arca_accounts aa ON aa.id=pa.default_arca_account_id
+    '''
     row = None
     if account_id:
         row = q(
-            'SELECT id, code, label, payment_method, active FROM retail_payment_accounts WHERE id=%s',
+            f'{select_sql} WHERE pa.id=%s',
             [account_id],
             one=True,
         )
     elif account_code:
         row = q(
-            'SELECT id, code, label, payment_method, active FROM retail_payment_accounts WHERE LOWER(code)=LOWER(%s)',
+            f'{select_sql} WHERE LOWER(pa.code)=LOWER(%s)',
             [account_code],
             one=True,
         )
@@ -1047,7 +1153,7 @@ def _ensure_payment_account(payload, payment_method):
         default_code = DEFAULT_ACCOUNT_BY_METHOD.get(payment_method)
         if default_code:
             row = q(
-                'SELECT id, code, label, payment_method, active FROM retail_payment_accounts WHERE code=%s',
+                f'{select_sql} WHERE pa.code=%s',
                 [default_code],
                 one=True,
             )
@@ -1108,64 +1214,195 @@ def _load_sale_payments(sale_id, fallback_sale=None):
     ]
 
 
-def _normalize_payments(payload, quote):
-    raw = (payload or {}).get('payments')
-    if raw is None:
-        payment_account = _ensure_payment_account(payload or {}, quote['payment_method'])
-        amount = _to_decimal(quote['total_ars'], 'total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
-        item = {
-            'method': quote['payment_method'],
-            'account_id': payment_account['id'],
-            'account_code': payment_account['code'],
-            'account_label': payment_account['label'],
-            'amount_ars': amount,
-            'metadata': {},
-        }
-        return [item], item
+def _normalize_payment_allocations(request, payload, expected_base_total, default_method):
+    expected_base = _to_decimal(expected_base_total, 'subtotal_after_promotions_ars', allow_none=True) or Decimal('0.00')
+    expected_base = expected_base.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    data = payload or {}
+    raw = data.get('payments')
+    rows = []
 
-    if not isinstance(raw, list) or not raw:
-        raise ValidationError('payments debe ser una lista no vacia')
+    def _modifier_pct_from_account(account):
+        pct = _to_decimal((account or {}).get('price_modifier_pct') or 0, 'price_modifier_pct', allow_none=True) or Decimal('0.00')
+        pct = pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if pct <= Decimal('-100.00'):
+            raise ValidationError('price_modifier_pct invalido: debe ser mayor a -100')
+        return pct
+
+    def _resolve_modifier_pct(raw_value, default_pct):
+        if raw_value is None or (isinstance(raw_value, str) and raw_value.strip() == ''):
+            return default_pct
+        if not _can_override_payment_terms(request):
+            raise PermissionDenied('Solo admin puede editar recargo/descuento por tramo')
+        pct = _pct(raw_value)
+        if pct <= Decimal('-100.00'):
+            raise ValidationError('modifier_pct invalido: debe ser mayor a -100')
+        return pct
+
+    if raw is None:
+        account = _ensure_payment_account(data, default_method)
+        default_pct = _modifier_pct_from_account(account)
+        override_raw = data.get('modifier_pct') if 'modifier_pct' in data else data.get('price_modifier_pct')
+        modifier_pct = _resolve_modifier_pct(override_raw, default_pct)
+        base_amount = expected_base
+        modifier_amount = (base_amount * (modifier_pct / Decimal('100.00'))).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        amount = (base_amount + modifier_amount).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if amount < 0:
+            raise ValidationError('El monto final de pago no puede ser negativo')
+        rows.append(
+            {
+                'method': default_method,
+                'account_id': _to_int(account.get('id'), 'payment_account_id'),
+                'account_code': _clean_text(account.get('code')),
+                'account_label': _clean_text(account.get('label')),
+                'base_amount_ars': base_amount,
+                'modifier_pct': modifier_pct,
+                'modifier_amount_ars': modifier_amount,
+                'amount_ars': amount,
+                'metadata': {},
+                'store_credit_id': None,
+                'default_arca_account_id': _safe_int(account.get('default_arca_account_id')),
+                'default_arca_account_code': _clean_text(account.get('default_arca_account_code')),
+                'default_arca_account_label': _clean_text(account.get('default_arca_account_label')),
+            }
+        )
+    else:
+        if not isinstance(raw, list) or not raw:
+            raise ValidationError('payments debe ser una lista no vacia')
+        total_base = Decimal('0.00')
+        for idx, item in enumerate(raw, start=1):
+            if not isinstance(item, dict):
+                raise ValidationError(f'payments[{idx}] debe ser objeto')
+            method = _normalize_payment_method(item.get('method') or item.get('payment_method'))
+            account = _ensure_payment_account(
+                {
+                    'payment_account_id': item.get('account_id') or item.get('payment_account_id'),
+                    'payment_account_code': item.get('account_code') or item.get('payment_account_code'),
+                },
+                method,
+            )
+            base_amount = _money(item.get('amount_ars'))
+            if base_amount <= 0:
+                raise ValidationError(f'payments[{idx}].amount_ars debe ser mayor a 0')
+            metadata = _json(item.get('metadata')) or {}
+            store_credit_id = _extract_store_credit_id_from_payment(
+                {
+                    'store_credit_id': item.get('store_credit_id'),
+                    'metadata': metadata,
+                }
+            )
+            if method == 'store_credit' and store_credit_id is None:
+                raise ValidationError(f'payments[{idx}].store_credit_id requerido para metodo store_credit')
+            if method != 'store_credit':
+                store_credit_id = None
+            if store_credit_id is not None and 'store_credit_id' not in metadata:
+                metadata['store_credit_id'] = store_credit_id
+            default_pct = _modifier_pct_from_account(account)
+            override_raw = item.get('modifier_pct') if 'modifier_pct' in item else item.get('price_modifier_pct')
+            modifier_pct = _resolve_modifier_pct(override_raw, default_pct)
+            modifier_amount = (base_amount * (modifier_pct / Decimal('100.00'))).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            amount = (base_amount + modifier_amount).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            if amount < 0:
+                raise ValidationError(f'payments[{idx}] genera monto final negativo')
+            row = {
+                'method': method,
+                'account_id': _to_int(account.get('id'), 'payment_account_id'),
+                'account_code': _clean_text(account.get('code')),
+                'account_label': _clean_text(account.get('label')),
+                'base_amount_ars': base_amount,
+                'modifier_pct': modifier_pct,
+                'modifier_amount_ars': modifier_amount,
+                'amount_ars': amount,
+                'metadata': metadata if isinstance(metadata, dict) else {},
+                'store_credit_id': store_credit_id,
+                'default_arca_account_id': _safe_int(account.get('default_arca_account_id')),
+                'default_arca_account_code': _clean_text(account.get('default_arca_account_code')),
+                'default_arca_account_label': _clean_text(account.get('default_arca_account_label')),
+            }
+            rows.append(row)
+            total_base += base_amount
+
+        if total_base.quantize(TWO_DEC, rounding=ROUND_HALF_UP) != expected_base:
+            raise ValidationError('La suma base de payments debe coincidir con subtotal_after_promotions_ars')
+
+    total_modifier = Decimal('0.00')
+    total_final = Decimal('0.00')
+    for row in rows:
+        total_modifier += _to_decimal(row.get('modifier_amount_ars') or 0, 'modifier_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        total_final += _to_decimal(row.get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    total_modifier = total_modifier.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    total_final = total_final.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    effective_pct = _safe_pct(total_modifier, expected_base) or Decimal('0.00')
+
+    primary_idx = 0
+    if rows:
+        primary_idx = max(
+            range(len(rows)),
+            key=lambda idx: (
+                _to_decimal((rows[idx] or {}).get('amount_ars') or 0, 'amount_ars', allow_none=True) or Decimal('0.00'),
+                (rows[idx] or {}).get('method') == default_method,
+            ),
+        )
+    primary = rows[primary_idx] if rows else None
+
+    return {
+        'payments': rows,
+        'primary_payment': primary,
+        'primary_payment_index': primary_idx,
+        'subtotal_base_ars': expected_base,
+        'effective_modifier_pct': effective_pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+        'effective_modifier_amount_ars': total_modifier,
+        'total_final_ars': total_final,
+    }
+
+
+def _normalize_payments(payload, quote):
+    payments = list((quote or {}).get('payment_breakdown') or [])
+    if not payments:
+        raise ValidationError('No se pudo calcular payments para confirmar')
 
     rows = []
-    total = Decimal('0.00')
-    for idx, item in enumerate(raw, start=1):
-        if not isinstance(item, dict):
-            raise ValidationError(f'payments[{idx}] debe ser objeto')
-        method = _normalize_payment_method(item.get('method') or item.get('payment_method'))
-        account = _ensure_payment_account(
+    for row in payments:
+        metadata = _json((row or {}).get('metadata')) or {}
+        metadata.setdefault('base_amount_ars', str(_to_decimal(row.get('base_amount_ars') or 0, 'base_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)))
+        metadata.setdefault('modifier_pct', str(_to_decimal(row.get('modifier_pct') or 0, 'modifier_pct').quantize(TWO_DEC, rounding=ROUND_HALF_UP)))
+        metadata.setdefault('modifier_amount_ars', str(_to_decimal(row.get('modifier_amount_ars') or 0, 'modifier_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)))
+        store_credit_id = _extract_store_credit_id_from_payment(
             {
-                'payment_account_id': item.get('account_id') or item.get('payment_account_id'),
-                'payment_account_code': item.get('account_code') or item.get('payment_account_code'),
-            },
-            method,
+                'store_credit_id': row.get('store_credit_id'),
+                'metadata': metadata,
+            }
         )
-        amount = _money(item.get('amount_ars'))
-        if amount <= 0:
-            raise ValidationError(f'payments[{idx}].amount_ars debe ser mayor a 0')
-        metadata = _json(item.get('metadata')) or {}
-        if method == 'store_credit' and item.get('store_credit_id') is not None and 'store_credit_id' not in metadata:
-            metadata['store_credit_id'] = item.get('store_credit_id')
-        row = {
-            'method': method,
-            'account_id': account['id'],
-            'account_code': account['code'],
-            'account_label': account['label'],
-            'amount_ars': amount.quantize(TWO_DEC, rounding=ROUND_HALF_UP),
-            'metadata': metadata if isinstance(metadata, dict) else {},
-            'store_credit_id': item.get('store_credit_id'),
-        }
-        rows.append(row)
-        total += row['amount_ars']
+        if store_credit_id is not None:
+            metadata['store_credit_id'] = store_credit_id
+        rows.append(
+            {
+                'method': _normalize_payment_method(row.get('method') or row.get('payment_method')),
+                'account_id': _to_int(row.get('account_id') or row.get('payment_account_id'), 'payment_account_id'),
+                'account_code': _clean_text(row.get('account_code') or row.get('payment_account_code')),
+                'account_label': _clean_text(row.get('account_label') or row.get('payment_account_label')),
+                'amount_ars': _to_decimal(row.get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'base_amount_ars': _to_decimal(row.get('base_amount_ars') or 0, 'base_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'modifier_pct': _to_decimal(row.get('modifier_pct') or 0, 'modifier_pct').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'modifier_amount_ars': _to_decimal(row.get('modifier_amount_ars') or 0, 'modifier_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'metadata': metadata,
+                'store_credit_id': store_credit_id,
+                'default_arca_account_id': _safe_int(row.get('default_arca_account_id')),
+                'default_arca_account_code': _clean_text(row.get('default_arca_account_code')),
+                'default_arca_account_label': _clean_text(row.get('default_arca_account_label')),
+            }
+        )
 
-    expected = _to_decimal(quote['total_ars'], 'total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    total = Decimal('0.00')
+    for row in rows:
+        total += _to_decimal(row.get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    expected = _to_decimal((quote or {}).get('total_ars') or 0, 'total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
     if total.quantize(TWO_DEC, rounding=ROUND_HALF_UP) != expected:
-        raise ValidationError('La suma de payments debe coincidir exactamente con total_ars')
+        raise ValidationError('La suma final de payments debe coincidir exactamente con total_ars')
 
-    primary = sorted(
-        rows,
-        key=lambda item: (item['amount_ars'], item['method'] == quote['payment_method']),
-        reverse=True,
-    )[0]
+    primary_idx = _safe_int((quote or {}).get('primary_payment_index'))
+    if primary_idx is None or primary_idx < 0 or primary_idx >= len(rows):
+        primary_idx = 0
+    primary = rows[primary_idx]
     return rows, primary
 
 
@@ -3360,7 +3597,7 @@ def _list_operational_pending_rows(limit_items=60):
                 action_required='Revisar y cerrar draft antiguo',
                 sla_minutes=240,
                 status='open',
-                title=f"Draft abierto sin actividad: {row.get('draft_number') or f'#{row.get('id')}'}",
+                title=f"Draft abierto sin actividad: {row.get('draft_number') or ('#%s' % row.get('id'))}",
                 detail=f"{int(row.get('item_count') or 0)} item(s), total {row.get('total_ars') or 0}",
                 created_at=row.get('last_activity_at'),
                 payload={
@@ -3706,10 +3943,15 @@ class RetailCajaCuentasView(APIView):
         _require_staff(request)
         rows = q(
             '''
-            SELECT id, code, label, payment_method, provider, active, sort_order
-            FROM retail_payment_accounts
+            SELECT pa.id, pa.code, pa.label, pa.payment_method, pa.provider,
+                   pa.price_modifier_pct, pa.default_arca_account_id,
+                   COALESCE(aa.code,'') AS default_arca_account_code,
+                   COALESCE(aa.label,'') AS default_arca_account_label,
+                   pa.active, pa.sort_order
+            FROM retail_payment_accounts pa
+            LEFT JOIN retail_arca_accounts aa ON aa.id=pa.default_arca_account_id
             WHERE active=TRUE
-            ORDER BY sort_order, id
+            ORDER BY pa.sort_order, pa.id
             '''
         ) or []
         return Response(rows)
@@ -4505,9 +4747,6 @@ def _build_quote(request, payload, lock_variants=False):
             raise ValidationError(f"Variante inactiva: {item['variant_id']}")
         variants[item['variant_id']] = row
 
-    modifier_pct = PAYMENT_MODIFIERS[payment_method] if pricing_source == 'local_engine' and channel == 'local' else Decimal('0.00')
-    modifier_ratio = (Decimal('1.00') + (modifier_pct / Decimal('100.00')))
-
     subtotal = Decimal('0.00')
     lines = []
     any_override = False
@@ -4605,7 +4844,6 @@ def _build_quote(request, payload, lock_variants=False):
         subtotal = subtotal.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
 
     promotion_discount_total = Decimal('0.00')
-    total = Decimal('0.00')
     for line in lines:
         line_pre = _to_decimal(line.get('line_pre_modifier_ars') or 0, 'line_pre_modifier_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
         promo_discount = _to_decimal(line.get('promotion_discount_ars') or 0, 'promotion_discount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
@@ -4615,20 +4853,50 @@ def _build_quote(request, payload, lock_variants=False):
             promo_discount = _to_decimal(line['line_subtotal_ars'], 'line_subtotal_ars')
         line['promotion_discount_ars'] = promo_discount
         line['line_pre_modifier_ars'] = line_pre
-        line_total = (line_pre * modifier_ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
-        line['line_total_ars'] = line_total
-        line['unit_price_final_ars'] = (
-            line_total / Decimal(max(1, int(line['quantity'])))
-        ).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
         promotion_discount_total += promo_discount
-        total += line_total
 
     promotion_discount_total = promotion_discount_total.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
     subtotal_after_promotions = (subtotal - promotion_discount_total).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
     if subtotal_after_promotions < 0:
         subtotal_after_promotions = Decimal('0.00')
+
+    payment_ctx = _normalize_payment_allocations(
+        request,
+        payload,
+        subtotal_after_promotions,
+        payment_method,
+    )
+    modifier_pct = _to_decimal(payment_ctx.get('effective_modifier_pct') or 0, 'modifier_pct', allow_none=True) or Decimal('0.00')
+    modifier_pct = modifier_pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    modifier_ratio = (Decimal('1.00') + (modifier_pct / Decimal('100.00')))
+    target_total = _to_decimal(payment_ctx.get('total_final_ars') or 0, 'total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+
+    total = Decimal('0.00')
+    for line in lines:
+        line_pre = _to_decimal(line.get('line_pre_modifier_ars') or 0, 'line_pre_modifier_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        line_total = (line_pre * modifier_ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        line['line_total_ars'] = line_total
+        line['unit_price_final_ars'] = (
+            line_total / Decimal(max(1, int(line['quantity'])))
+        ).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        total += line_total
     total = total.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+
+    if lines and total != target_total:
+        delta = (target_total - total).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        last = lines[-1]
+        adjusted = (_to_decimal(last.get('line_total_ars') or 0, 'line_total_ars') + delta).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        if adjusted < 0:
+            raise ValidationError('No se pudo distribuir el ajuste de pago entre lineas')
+        last['line_total_ars'] = adjusted
+        last['unit_price_final_ars'] = (
+            adjusted / Decimal(max(1, int(last.get('quantity') or 1)))
+        ).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+        total = target_total
+
     modifier_amount = (total - subtotal_after_promotions).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+    invoice_default = _default_invoice_from_payments(payment_ctx.get('payments') or [])
+    invoice_decision = _resolve_invoice_decision(request, invoice_default, payload.get('invoice_override'))
 
     out_lines = []
     for line in lines:
@@ -4644,6 +4912,26 @@ def _build_quote(request, payload, lock_variants=False):
                 'line_subtotal_ars': _to_decimal(line['line_subtotal_ars'], 'line_subtotal_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
                 'promotion_discount_ars': _to_decimal(line['promotion_discount_ars'], 'promotion_discount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
                 'line_total_ars': _to_decimal(line['line_total_ars'], 'line_total_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+            }
+        )
+
+    payment_out = []
+    for row in payment_ctx.get('payments') or []:
+        payment_out.append(
+            {
+                'method': _normalize_payment_method(row.get('method') or row.get('payment_method')),
+                'account_id': _to_int(row.get('account_id') or row.get('payment_account_id'), 'payment_account_id'),
+                'account_code': _clean_text(row.get('account_code') or row.get('payment_account_code')),
+                'account_label': _clean_text(row.get('account_label') or row.get('payment_account_label')),
+                'base_amount_ars': _to_decimal(row.get('base_amount_ars') or 0, 'base_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'modifier_pct': _to_decimal(row.get('modifier_pct') or 0, 'modifier_pct').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'modifier_amount_ars': _to_decimal(row.get('modifier_amount_ars') or 0, 'modifier_amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'amount_ars': _to_decimal(row.get('amount_ars') or 0, 'amount_ars').quantize(TWO_DEC, rounding=ROUND_HALF_UP),
+                'store_credit_id': _extract_store_credit_id_from_payment(row),
+                'default_arca_account_id': _safe_int(row.get('default_arca_account_id')),
+                'default_arca_account_code': _clean_text(row.get('default_arca_account_code')),
+                'default_arca_account_label': _clean_text(row.get('default_arca_account_label')),
+                'metadata': _json(row.get('metadata')) or {},
             }
         )
 
@@ -4676,7 +4964,21 @@ def _build_quote(request, payload, lock_variants=False):
         'promotion_discount_total_ars': promotion_discount_total,
         'subtotal_after_promotions_ars': subtotal_after_promotions,
         'total_ars': total,
-        'invoice_required': payment_method in INVOICE_REQUIRED_METHODS,
+        'invoice_mode': invoice_decision.get('invoice_mode') or 'internal',
+        'invoice_required': bool(invoice_decision.get('invoice_required')),
+        'invoice_arca_account_id': _safe_int(invoice_decision.get('arca_account_id')),
+        'invoice_arca_account_code': _clean_text(invoice_decision.get('arca_account_code')),
+        'invoice_arca_account_label': _clean_text(invoice_decision.get('arca_account_label')),
+        'invoice_source': _clean_text(invoice_decision.get('source')) or 'default',
+        'invoice_default': {
+            'invoice_mode': invoice_default.get('invoice_mode') or 'internal',
+            'invoice_required': bool(invoice_default.get('invoice_required')),
+            'arca_account_id': _safe_int(invoice_default.get('arca_account_id')),
+            'arca_account_code': _clean_text(invoice_default.get('arca_account_code')),
+            'arca_account_label': _clean_text(invoice_default.get('arca_account_label')),
+        },
+        'payment_breakdown': payment_out,
+        'primary_payment_index': _safe_int(payment_ctx.get('primary_payment_index')) or 0,
         'items': out_lines,
         'applied_promotions': promo_out,
         'any_override': any_override,
@@ -5240,20 +5542,25 @@ def _confirm_sale_from_payload(request, payload):
         created_by=getattr(request.user, 'id', None),
     )
 
-    if quote['invoice_required']:
+    invoice_mode = 'arca' if (quote.get('invoice_mode') or '').lower() == 'arca' else 'internal'
+    invoice_account_id = _to_int(quote.get('invoice_arca_account_id'), 'invoice_arca_account_id', allow_none=True)
+    if invoice_mode == 'arca' and invoice_account_id is None:
+        raise ValidationError('No se pudo determinar la cuenta ARCA de facturacion')
+
+    if invoice_mode == 'arca':
         exec_void(
             '''
-            INSERT INTO retail_invoices(sale_id, status, invoice_mode, amount_total_ars)
-            VALUES (%s,'pending','arca',%s)
+            INSERT INTO retail_invoices(sale_id, arca_account_id, status, invoice_mode, amount_total_ars)
+            VALUES (%s,%s,'pending','arca',%s)
             ON CONFLICT (sale_id) DO NOTHING
             ''',
-            [sale_id, quote['total_ars']],
+            [sale_id, invoice_account_id, quote['total_ars']],
         )
     else:
         exec_void(
             '''
-            INSERT INTO retail_invoices(sale_id, status, invoice_mode, amount_total_ars)
-            VALUES (%s,'not_required','internal',%s)
+            INSERT INTO retail_invoices(sale_id, arca_account_id, status, invoice_mode, amount_total_ars)
+            VALUES (%s,NULL,'not_required','internal',%s)
             ON CONFLICT (sale_id) DO NOTHING
             ''',
             [sale_id, quote['total_ars']],
@@ -5264,7 +5571,7 @@ def _confirm_sale_from_payload(request, payload):
         _register_cash_in(cash_session_id, sale_full, getattr(request.user, 'id', None))
 
     auto_emit = bool(data.get('auto_emit_invoice'))
-    if auto_emit and quote['invoice_required']:
+    if auto_emit and invoice_mode == 'arca':
         _emitir_factura(sale_id, request, missing_doc_policy='manual_review')
 
     out = _load_venta(sale_id, include_costs=_can_view_costs(request))
@@ -5297,7 +5604,15 @@ class RetailVentasCotizarView(APIView):
                 'promotion_discount_total_ars': quote.get('promotion_discount_total_ars') or 0,
                 'subtotal_after_promotions_ars': quote.get('subtotal_after_promotions_ars') or quote['subtotal_ars'],
                 'total_ars': quote['total_ars'],
+                'invoice_mode': quote.get('invoice_mode') or 'internal',
                 'invoice_required': quote['invoice_required'],
+                'invoice_arca_account_id': quote.get('invoice_arca_account_id'),
+                'invoice_arca_account_code': quote.get('invoice_arca_account_code'),
+                'invoice_arca_account_label': quote.get('invoice_arca_account_label'),
+                'invoice_source': quote.get('invoice_source') or 'default',
+                'invoice_default': quote.get('invoice_default') or {},
+                'payment_breakdown': quote.get('payment_breakdown') or [],
+                'primary_payment_index': quote.get('primary_payment_index'),
                 'items': items,
                 'applied_promotions': quote.get('applied_promotions') or [],
             }
@@ -5321,6 +5636,7 @@ POS_DRAFT_INLINE_FIELDS = {
     'payment_method',
     'payment_account_id',
     'payment_account_code',
+    'invoice_override',
     'customer_name',
     'customer_doc',
     'customer_email',
@@ -6851,8 +7167,11 @@ def _emitir_factura_core(venta_id, missing_doc_policy='raise'):
         if account_id:
             account = _load_arca_account_by_id(account_id)
         else:
-            account = _assign_next_arca_account(invoice)
-            account_id = _safe_int((invoice or {}).get('arca_account_id'))
+            active_accounts = _load_arca_accounts(active_only=True)
+            account = active_accounts[0] if active_accounts else None
+            account_id = _safe_int((account or {}).get('id'))
+            if account_id:
+                invoice['arca_account_id'] = account_id
         attempts = int(invoice.get('attempts') or 0) + 1
         outcome = _build_invoice_outcome(cfg, account, sale, invoice, missing_doc_policy=missing_doc_policy)
 
@@ -10011,7 +10330,7 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
             items = _extract_online_items(order)
             coupon_codes = _extract_online_coupon_codes(order)
             payment_method = _infer_payment_method_from_online(order)
-            account_code = 'payway' if payment_method in ('debit', 'credit') else ('cash' if payment_method == 'cash' else 'transfer_1')
+            account_code = DEFAULT_ACCOUNT_BY_METHOD.get(payment_method) or 'transfer_1'
 
             customer = order.get('customer') if isinstance(order.get('customer'), dict) else {}
             sale_payload = {
@@ -10115,27 +10434,34 @@ class RetailOnlineWebhookOrdenPagadaView(APIView):
                 )
 
             _persist_sale_promotions(sale_id, quote, persisted_items)
+            payments, _ = _normalize_payments(sale_payload, quote)
+            _persist_sale_payments(sale_id, payments)
 
-            if quote['invoice_required']:
+            invoice_mode = 'arca' if (quote.get('invoice_mode') or '').lower() == 'arca' else 'internal'
+            invoice_account_id = _to_int(quote.get('invoice_arca_account_id'), 'invoice_arca_account_id', allow_none=True)
+            if invoice_mode == 'arca' and invoice_account_id is None:
+                raise ValidationError('No se pudo determinar la cuenta ARCA para facturar online')
+
+            if invoice_mode == 'arca':
                 exec_void(
                     '''
-                    INSERT INTO retail_invoices(sale_id, status, invoice_mode, amount_total_ars)
-                    VALUES (%s,'pending','arca',%s)
+                    INSERT INTO retail_invoices(sale_id, arca_account_id, status, invoice_mode, amount_total_ars)
+                    VALUES (%s,%s,'pending','arca',%s)
                     ON CONFLICT (sale_id) DO NOTHING
                     ''',
-                    [sale_id, quote['total_ars']],
+                    [sale_id, invoice_account_id, quote['total_ars']],
                 )
             else:
                 exec_void(
                     '''
-                    INSERT INTO retail_invoices(sale_id, status, invoice_mode, amount_total_ars)
-                    VALUES (%s,'not_required','internal',%s)
+                    INSERT INTO retail_invoices(sale_id, arca_account_id, status, invoice_mode, amount_total_ars)
+                    VALUES (%s,NULL,'not_required','internal',%s)
                     ON CONFLICT (sale_id) DO NOTHING
                     ''',
                     [sale_id, quote['total_ars']],
                 )
 
-            if sale_payload.get('auto_emit_invoice') and quote['invoice_required']:
+            if sale_payload.get('auto_emit_invoice') and invoice_mode == 'arca':
                 _emitir_factura(sale_id, request, missing_doc_policy='manual_review')
 
             exec_void('UPDATE retail_webhook_events SET processed=TRUE, processed_at=NOW() WHERE id=%s', [event_db_id])
@@ -11104,9 +11430,14 @@ class RetailConfigPaymentAccountsView(APIView):
         _require_staff(request)
         rows = q(
             '''
-            SELECT id, code, label, payment_method, provider, active, sort_order, created_at, updated_at
-            FROM retail_payment_accounts
-            ORDER BY sort_order, id
+            SELECT pa.id, pa.code, pa.label, pa.payment_method, pa.provider,
+                   pa.price_modifier_pct, pa.default_arca_account_id,
+                   COALESCE(aa.code,'') AS default_arca_account_code,
+                   COALESCE(aa.label,'') AS default_arca_account_label,
+                   pa.active, pa.sort_order, pa.created_at, pa.updated_at
+            FROM retail_payment_accounts pa
+            LEFT JOIN retail_arca_accounts aa ON aa.id=pa.default_arca_account_id
+            ORDER BY pa.sort_order, pa.id
             '''
         ) or []
         return Response(rows)
@@ -11119,6 +11450,8 @@ class RetailConfigPaymentAccountsView(APIView):
         accounts = data.get('accounts')
         if not isinstance(accounts, list) or not accounts:
             raise ValidationError('accounts debe ser lista no vacia')
+        arca_rows = _load_arca_accounts(active_only=False)
+        valid_arca_ids = {_to_int(row.get('id'), 'arca_id') for row in arca_rows if _safe_int(row.get('id'))}
 
         for item in accounts:
             if not isinstance(item, dict):
@@ -11134,31 +11467,65 @@ class RetailConfigPaymentAccountsView(APIView):
             provider = _clean_text(item.get('provider'))
             active = bool(item.get('active', True))
             sort_order = _to_int(item.get('sort_order') if item.get('sort_order') is not None else 100, 'sort_order')
+            price_modifier_pct = _to_decimal(item.get('price_modifier_pct') or 0, 'price_modifier_pct', allow_none=True) or Decimal('0.00')
+            price_modifier_pct = price_modifier_pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            if price_modifier_pct <= Decimal('-100.00'):
+                raise ValidationError('price_modifier_pct debe ser mayor a -100')
+            default_arca_account_id = _to_int(item.get('default_arca_account_id'), 'default_arca_account_id', allow_none=True)
+            if default_arca_account_id is not None and default_arca_account_id not in valid_arca_ids:
+                raise ValidationError('default_arca_account_id invalido')
 
             if account_id:
                 exec_void(
                     '''
                     UPDATE retail_payment_accounts
-                    SET code=%s, label=%s, payment_method=%s, provider=%s, active=%s, sort_order=%s
+                    SET code=%s, label=%s, payment_method=%s, provider=%s,
+                        price_modifier_pct=%s, default_arca_account_id=%s,
+                        active=%s, sort_order=%s
                     WHERE id=%s
                     ''',
-                    [code, label, payment_method, provider, active, sort_order, account_id],
+                    [
+                        code,
+                        label,
+                        payment_method,
+                        provider,
+                        price_modifier_pct,
+                        default_arca_account_id,
+                        active,
+                        sort_order,
+                        account_id,
+                    ],
                 )
             else:
                 if not code or not label:
                     raise ValidationError('code y label son requeridos para nuevas cuentas')
                 exec_void(
                     '''
-                    INSERT INTO retail_payment_accounts(code, label, payment_method, provider, active, sort_order)
-                    VALUES (%s,%s,%s,%s,%s,%s)
+                    INSERT INTO retail_payment_accounts(
+                      code, label, payment_method, provider,
+                      price_modifier_pct, default_arca_account_id,
+                      active, sort_order
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (code) DO UPDATE
                     SET label=EXCLUDED.label,
                         payment_method=EXCLUDED.payment_method,
                         provider=EXCLUDED.provider,
+                        price_modifier_pct=EXCLUDED.price_modifier_pct,
+                        default_arca_account_id=EXCLUDED.default_arca_account_id,
                         active=EXCLUDED.active,
                         sort_order=EXCLUDED.sort_order
                     ''',
-                    [code, label, payment_method, provider, active, sort_order],
+                    [
+                        code,
+                        label,
+                        payment_method,
+                        provider,
+                        price_modifier_pct,
+                        default_arca_account_id,
+                        active,
+                        sort_order,
+                    ],
                 )
 
         return self.get(request)
@@ -12456,9 +12823,3 @@ __all__ = [
     'RetailAlertasView',
     'RetailAlertaAckView',
 ]
-
-
-
-
-
-

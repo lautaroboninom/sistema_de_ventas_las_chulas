@@ -2,6 +2,7 @@
 import {
   getRetailCajaActual,
   getRetailCajaCuentas,
+  getRetailConfigArcaAccounts,
   getRetailOperacionPendientes,
   getRetailStoreCredits,
   getRetailGarantiaTicket,
@@ -24,11 +25,11 @@ import { useAuth } from '../context/AuthContext';
 import { can, PERMISSION_CODES } from '../lib/permissions';
 
 const PAYMENT_OPTIONS = [
-  { value: 'cash', label: 'Efectivo (-10%)' },
-  { value: 'debit', label: 'Debito (lista)' },
-  { value: 'transfer', label: 'Transferencia (lista)' },
-  { value: 'credit', label: 'Credito (+10%)' },
-  { value: 'store_credit', label: 'Credito tienda (lista)' },
+  { value: 'cash', label: 'Efectivo' },
+  { value: 'debit', label: 'Debito' },
+  { value: 'transfer', label: 'Transferencia' },
+  { value: 'credit', label: 'Credito' },
+  { value: 'store_credit', label: 'Credito tienda' },
 ];
 
 const ACCOUNT_BY_METHOD = {
@@ -40,13 +41,13 @@ const ACCOUNT_BY_METHOD = {
 };
 
 const FALLBACK_ACCOUNTS = [
-  { code: 'cash', label: 'Caja', payment_method: 'cash', active: true, sort_order: 10 },
-  { code: 'bbva', label: 'BBVA', payment_method: 'transfer', active: true, sort_order: 20 },
-  { code: 'pbs', label: 'PBS', payment_method: 'transfer', active: true, sort_order: 30 },
-  { code: 'payway', label: 'Payway', payment_method: 'credit', active: true, sort_order: 40 },
-  { code: 'transfer_1', label: 'Transferencia Cuenta 1', payment_method: 'transfer', active: true, sort_order: 50 },
-  { code: 'transfer_2', label: 'Transferencia Cuenta 2', payment_method: 'transfer', active: true, sort_order: 60 },
-  { code: 'store_credit', label: 'Credito tienda', payment_method: 'store_credit', active: true, sort_order: 70 },
+  { code: 'cash', label: 'Caja', payment_method: 'cash', price_modifier_pct: -10, active: true, sort_order: 10 },
+  { code: 'bbva', label: 'BBVA', payment_method: 'transfer', price_modifier_pct: 0, active: true, sort_order: 20 },
+  { code: 'pbs', label: 'PBS', payment_method: 'transfer', price_modifier_pct: 0, active: true, sort_order: 30 },
+  { code: 'payway', label: 'Payway', payment_method: 'credit', price_modifier_pct: 10, active: true, sort_order: 40 },
+  { code: 'transfer_1', label: 'Transferencia Cuenta 1', payment_method: 'transfer', price_modifier_pct: 0, active: true, sort_order: 50 },
+  { code: 'transfer_2', label: 'Transferencia Cuenta 2', payment_method: 'transfer', price_modifier_pct: 0, active: true, sort_order: 60 },
+  { code: 'store_credit', label: 'Credito tienda', payment_method: 'store_credit', price_modifier_pct: 0, active: true, sort_order: 70 },
 ];
 
 const moneyFmt = new Intl.NumberFormat('es-AR', {
@@ -99,12 +100,20 @@ function normalizeAccounts(rows) {
   const list = Array.isArray(rows) && rows.length ? rows : FALLBACK_ACCOUNTS;
   const normalized = list
     .filter((row) => !!row && row.active !== false)
+    .map((row) => ({
+      ...row,
+      price_modifier_pct:
+        row?.price_modifier_pct == null || row?.price_modifier_pct === ''
+          ? 0
+          : Number(row.price_modifier_pct),
+    }))
     .sort((a, b) => Number(a.sort_order || 100) - Number(b.sort_order || 100));
   if (!normalized.some((row) => row.code === 'store_credit')) {
     normalized.push({
       code: 'store_credit',
       label: 'Credito tienda',
       payment_method: 'store_credit',
+      price_modifier_pct: 0,
       active: true,
       sort_order: 70,
     });
@@ -120,6 +129,13 @@ function defaultAccountCode(paymentMethod, accounts) {
   const byMethod = list.find((row) => row.payment_method === paymentMethod);
   if (byMethod) return byMethod.code;
   return list[0]?.code || preferred || 'cash';
+}
+
+function accountModifierPct(accountCode, accounts) {
+  const list = normalizeAccounts(accounts);
+  const row = list.find((item) => String(item.code || '') === String(accountCode || ''));
+  const value = Number(row?.price_modifier_pct ?? 0);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function isTextEditableTarget(target) {
@@ -169,6 +185,7 @@ function todayIso() {
 
 export default function PosPage() {
   const { user } = useAuth();
+  const isAdmin = String(user?.rol || '').toLowerCase() === 'admin';
   const canOverridePrice = can(user, PERMISSION_CODES.ACTION_VENTAS_OVERRIDE_PRECIO);
   const canAssistedClose = can(user, PERMISSION_CODES.ACTION_CAJA_CIERRE_ASISTIDO);
 
@@ -190,8 +207,10 @@ export default function PosPage() {
   const [paymentAccountCode, setPaymentAccountCode] = useState('cash');
   const [splitPaymentsEnabled, setSplitPaymentsEnabled] = useState(false);
   const [splitPayments, setSplitPayments] = useState([
-    { method: 'cash', account_code: 'cash', amount_ars: '', store_credit_id: '' },
+    { method: 'cash', account_code: 'cash', amount_ars: '', store_credit_id: '', modifier_pct: '' },
   ]);
+  const [invoiceOverrideMode, setInvoiceOverrideMode] = useState('default');
+  const [invoiceOverrideArcaAccountId, setInvoiceOverrideArcaAccountId] = useState('');
 
   const [customerName, setCustomerName] = useState('');
   const [customerDoc, setCustomerDoc] = useState('');
@@ -208,6 +227,7 @@ export default function PosPage() {
 
   const [cashSession, setCashSession] = useState(null);
   const [accounts, setAccounts] = useState(FALLBACK_ACCOUNTS);
+  const [arcaAccounts, setArcaAccounts] = useState([]);
   const [openingCash, setOpeningCash] = useState('0');
   const [closingCash, setClosingCash] = useState('');
   const [closingDifferenceReason, setClosingDifferenceReason] = useState('');
@@ -264,7 +284,7 @@ export default function PosPage() {
   }, [quote]);
 
   const splitTotals = useMemo(() => {
-    const expected = Number(quote?.total_ars || 0);
+    const expected = Number(quote?.subtotal_after_promotions_ars || 0);
     const current = splitPayments.reduce((acc, row) => {
       const n = Number(row.amount_ars || 0);
       return acc + (Number.isFinite(n) ? n : 0);
@@ -422,13 +442,26 @@ export default function PosPage() {
     return scoped.length ? scoped : rows;
   }
 
-  function buildPaymentsPayload(expectedTotal) {
-    const expected = Number(expectedTotal || 0);
+  function buildInvoiceOverridePayload() {
+    const mode = isAdmin ? String(invoiceOverrideMode || 'default').toLowerCase() : 'default';
+    if (mode === 'default') return undefined;
+    if (mode === 'none') return { mode: 'none' };
+    if (mode !== 'arca') return undefined;
+    const accountId = Number(invoiceOverrideArcaAccountId || 0);
+    if (!Number.isFinite(accountId) || accountId <= 0) {
+      throw new Error('Selecciona una cuenta ARCA valida para override');
+    }
+    return { mode: 'arca', arca_account_id: accountId };
+  }
+
+  function buildPaymentsPayload(expectedBase) {
+    const expected = Number(expectedBase);
+    const hasExpected = Number.isFinite(expected);
 
     if (!splitPaymentsEnabled) {
       if (paymentMethod !== 'store_credit') return undefined;
-      if (!Number.isFinite(expected)) {
-        throw new Error('No se pudo recalcular la cotizacion para confirmar');
+      if (!hasExpected) {
+        return undefined;
       }
       const creditId = Number(selectedStoreCreditId || 0);
       if (!Number.isFinite(creditId) || creditId <= 0) {
@@ -445,15 +478,16 @@ export default function PosPage() {
       ];
     }
 
-    if (!Number.isFinite(expected)) {
-      throw new Error('No se pudo recalcular la cotizacion para confirmar');
-    }
     const rows = splitPayments
       .map((row) => ({
         method: String(row.method || '').trim(),
         account_code: String(row.account_code || '').trim(),
         amount_ars: Number(row.amount_ars || 0),
         store_credit_id: row.store_credit_id ? Number(row.store_credit_id) : undefined,
+        modifier_pct:
+          row.modifier_pct == null || String(row.modifier_pct).trim() === ''
+            ? undefined
+            : Number(row.modifier_pct),
       }))
       .filter((row) => row.method && row.amount_ars > 0);
     if (!rows.length) {
@@ -472,17 +506,25 @@ export default function PosPage() {
         }
         row.metadata = { store_credit_id: Number(row.store_credit_id) };
       }
+      if (row.modifier_pct != null && !Number.isFinite(row.modifier_pct)) {
+        throw new Error(`modifier_pct invalido en pago #${idx + 1}`);
+      }
+      if (!isAdmin) {
+        delete row.modifier_pct;
+      }
     });
-    const sum = rows.reduce((acc, row) => acc + Number(row.amount_ars || 0), 0);
-    const roundedDiff = Math.round((sum - expected) * 100) / 100;
-    if (roundedDiff !== 0) {
-      throw new Error('La suma de pagos debe coincidir con el total cotizado');
+    if (hasExpected) {
+      const sum = rows.reduce((acc, row) => acc + Number(row.amount_ars || 0), 0);
+      const roundedDiff = Math.round((sum - expected) * 100) / 100;
+      if (roundedDiff !== 0) {
+        throw new Error('La suma base de pagos debe coincidir con subtotal base');
+      }
     }
     return rows;
   }
 
   function buildBaseSalePayload() {
-    return {
+    const payload = {
       channel: 'local',
       payment_method: paymentMethod,
       payment_account_code: paymentAccountCode,
@@ -494,6 +536,9 @@ export default function PosPage() {
       auto_emit_invoice: true,
       items: buildItemsPayload(),
     };
+    const invoiceOverride = buildInvoiceOverridePayload();
+    if (invoiceOverride) payload.invoice_override = invoiceOverride;
+    return payload;
   }
 
   function buildDraftPayload() {
@@ -509,12 +554,17 @@ export default function PosPage() {
       auto_emit_invoice: true,
       items: items.map((it) => ({ ...it })),
     };
+    const invoiceOverride = buildInvoiceOverridePayload();
+    if (invoiceOverride) payload.invoice_override = invoiceOverride;
     if (!splitPaymentsEnabled && paymentMethod === 'store_credit' && selectedStoreCreditId) {
       payload.payments = [
         {
           method: 'store_credit',
           account_code: paymentAccountCode || defaultAccountCode('store_credit', accounts),
-          amount_ars: quote?.total_ars != null ? String(quote.total_ars) : '',
+          amount_ars:
+            quote?.subtotal_after_promotions_ars != null
+              ? String(quote.subtotal_after_promotions_ars)
+              : '',
           store_credit_id: selectedStoreCreditId,
           metadata: { store_credit_id: Number(selectedStoreCreditId) },
         },
@@ -525,6 +575,10 @@ export default function PosPage() {
         method: row.method,
         account_code: row.account_code,
         amount_ars: row.amount_ars,
+        modifier_pct:
+          isAdmin && row.modifier_pct !== '' && row.modifier_pct != null
+            ? Number(row.modifier_pct)
+            : undefined,
         store_credit_id: row.store_credit_id || undefined,
         metadata: row.store_credit_id ? { store_credit_id: Number(row.store_credit_id) } : undefined,
       }));
@@ -551,6 +605,14 @@ export default function PosPage() {
     setNotes(String(data.notes || ''));
     setPriceOverrideReason(String(data.price_override_reason || ''));
     setQuote(quoteSnapshot && typeof quoteSnapshot === 'object' ? quoteSnapshot : null);
+    const rawInvoiceOverride = data.invoice_override && typeof data.invoice_override === 'object' ? data.invoice_override : {};
+    const nextInvoiceMode = ['default', 'arca', 'none'].includes(String(rawInvoiceOverride.mode || '').toLowerCase())
+      ? String(rawInvoiceOverride.mode || '').toLowerCase()
+      : 'default';
+    setInvoiceOverrideMode(nextInvoiceMode);
+    setInvoiceOverrideArcaAccountId(
+      rawInvoiceOverride.arca_account_id != null ? String(rawInvoiceOverride.arca_account_id) : ''
+    );
     setTicketLookup(null);
 
     const rawPayments = Array.isArray(data.payments) ? data.payments : [];
@@ -563,6 +625,12 @@ export default function PosPage() {
             defaultAccountCode(String(row.method || row.payment_method || nextMethod), accounts)
         ),
         amount_ars: String(row.amount_ars ?? ''),
+        modifier_pct:
+          row.modifier_pct != null
+            ? String(row.modifier_pct)
+            : row.price_modifier_pct != null
+              ? String(row.price_modifier_pct)
+              : '',
         store_credit_id:
           row.store_credit_id != null
             ? String(row.store_credit_id)
@@ -589,8 +657,12 @@ export default function PosPage() {
         {
           method: nextMethod,
           account_code: nextAccount,
-          amount_ars: quoteSnapshot?.total_ars != null ? String(quoteSnapshot.total_ars) : '',
+          amount_ars:
+            quoteSnapshot?.subtotal_after_promotions_ars != null
+              ? String(quoteSnapshot.subtotal_after_promotions_ars)
+              : '',
           store_credit_id: '',
+          modifier_pct: '',
         },
       ]);
     }
@@ -612,6 +684,19 @@ export default function PosPage() {
       setAccounts(normalized.length ? normalized : FALLBACK_ACCOUNTS);
     } catch {
       setAccounts(FALLBACK_ACCOUNTS);
+    }
+  }
+
+  async function loadArcaAccounts() {
+    try {
+      const resp = await getRetailConfigArcaAccounts();
+      const rows = Array.isArray(resp?.accounts) ? resp.accounts : [];
+      const activeRows = rows
+        .filter((row) => row?.active !== false)
+        .sort((a, b) => Number(a.sort_order || 100) - Number(b.sort_order || 100));
+      setArcaAccounts(activeRows);
+    } catch {
+      setArcaAccounts([]);
     }
   }
 
@@ -723,6 +808,7 @@ export default function PosPage() {
   useEffect(() => {
     loadCashSession();
     loadAccounts();
+    loadArcaAccounts();
     loadDrafts();
     loadRecentSales();
     loadOperationalPending();
@@ -761,8 +847,12 @@ export default function PosPage() {
           {
             method: paymentMethod,
             account_code: paymentAccountCode || defaultAccountCode(paymentMethod, accounts),
-            amount_ars: quote?.total_ars != null ? String(quote.total_ars) : '',
+            amount_ars:
+              quote?.subtotal_after_promotions_ars != null
+                ? String(quote.subtotal_after_promotions_ars)
+                : '',
             store_credit_id: '',
+            modifier_pct: '',
           },
         ];
       }
@@ -770,10 +860,16 @@ export default function PosPage() {
         const method = row.method || paymentMethod;
         const available = accountsByMethod(method);
         const exists = available.some((acc) => acc.code === row.account_code);
+        const nextAccountCode = exists ? row.account_code : defaultAccountCode(method, accounts);
+        const defaultPct = accountModifierPct(nextAccountCode, accounts);
         return {
           ...row,
           method,
-          account_code: exists ? row.account_code : defaultAccountCode(method, accounts),
+          account_code: nextAccountCode,
+          modifier_pct:
+            row?.modifier_pct == null || row?.modifier_pct === ''
+              ? String(defaultPct)
+              : row.modifier_pct,
         };
       });
     });
@@ -786,6 +882,19 @@ export default function PosPage() {
       setSelectedStoreCreditId('');
     }
   }, [customerDoc]);
+
+  useEffect(() => {
+    if (!quote) return;
+    if (invoiceOverrideMode !== 'default') return;
+    if (invoiceOverrideArcaAccountId) return;
+    const suggested =
+      quote?.invoice_arca_account_id ??
+      quote?.invoice_default?.arca_account_id ??
+      '';
+    if (suggested) {
+      setInvoiceOverrideArcaAccountId(String(suggested));
+    }
+  }, [quote, invoiceOverrideMode, invoiceOverrideArcaAccountId]);
 
   useEffect(() => {
     const timer = setTimeout(async () => {
@@ -820,7 +929,18 @@ export default function PosPage() {
       void requestQuote({ showError: true });
     }, 400);
     return () => clearTimeout(timer);
-  }, [items, paymentMethod, paymentAccountCode, couponCodes, cashSession, busy]);
+  }, [
+    items,
+    paymentMethod,
+    paymentAccountCode,
+    couponCodes,
+    splitPaymentsEnabled,
+    splitPayments,
+    invoiceOverrideMode,
+    invoiceOverrideArcaAccountId,
+    cashSession,
+    busy,
+  ]);
 
   useEffect(() => {
     const SCAN_RESET_GAP_MS = 90;
@@ -987,6 +1107,8 @@ export default function PosPage() {
         payment_method: paymentMethod,
         payment_account_code: paymentAccountCode,
         coupon_codes: parseCouponCodes(couponCodes),
+        invoice_override: buildInvoiceOverridePayload(),
+        payments: buildPaymentsPayload(quote?.subtotal_after_promotions_ars),
         items: buildItemsPayload(),
       });
       if (requestId !== quoteRequestSeqRef.current) return null;
@@ -994,7 +1116,12 @@ export default function PosPage() {
       if (splitPaymentsEnabled && splitPayments.length === 1) {
         setSplitPayments((prev) =>
           prev.map((row, idx) =>
-            idx === 0 ? { ...row, amount_ars: String(resp?.total_ars ?? '') } : row
+            idx === 0
+              ? {
+                  ...row,
+                  amount_ars: String(resp?.subtotal_after_promotions_ars ?? ''),
+                }
+              : row
           )
         );
       }
@@ -1051,21 +1178,21 @@ export default function PosPage() {
         throw new Error('No se pudo recalcular la cotizacion antes de confirmar');
       }
       const basePayload = buildBaseSalePayload();
-      const expectedTotal = refreshedQuote?.total_ars;
-      const paymentsPayload = buildPaymentsPayload(expectedTotal);
+      const expectedBase = refreshedQuote?.subtotal_after_promotions_ars;
+      const paymentsPayload = buildPaymentsPayload(expectedBase);
       if (paymentsPayload?.length) {
         basePayload.payments = paymentsPayload;
       }
 
       let sale;
-      if (selectedDraftId) {
-        const resp = await postRetailPosDraftConfirm(selectedDraftId, {
-          payload: { ...buildDraftPayload(), ...basePayload, payments: paymentsPayload },
-          quote_snapshot: quote || undefined,
-        });
-        sale = resp?.sale;
-        setSelectedDraftId(null);
-      } else {
+        if (selectedDraftId) {
+          const resp = await postRetailPosDraftConfirm(selectedDraftId, {
+            payload: { ...buildDraftPayload(), ...basePayload, payments: paymentsPayload },
+            quote_snapshot: refreshedQuote || quote || undefined,
+          });
+          sale = resp?.sale;
+          setSelectedDraftId(null);
+        } else {
         sale = await postRetailVentaConfirmar(basePayload);
       }
 
@@ -1080,9 +1207,17 @@ export default function PosPage() {
       setStoreCredits([]);
       setSelectedStoreCreditId('');
       setNotes('');
+      setInvoiceOverrideMode('default');
+      setInvoiceOverrideArcaAccountId('');
       setSplitPaymentsEnabled(false);
       setSplitPayments([
-        { method: paymentMethod, account_code: paymentAccountCode, amount_ars: '', store_credit_id: '' },
+        {
+          method: paymentMethod,
+          account_code: paymentAccountCode,
+          amount_ars: '',
+          store_credit_id: '',
+          modifier_pct: '',
+        },
       ]);
       setMsg('Venta confirmada');
       await Promise.all([loadCashSession(), loadDrafts(), loadRecentSales(), loadOperationalPending()]);
@@ -1232,6 +1367,12 @@ export default function PosPage() {
         if (patch.method && patch.method !== row.method) {
           next.store_credit_id = patch.method === 'store_credit' ? String(next.store_credit_id || '') : '';
         }
+        if (patch.method || patch.account_code) {
+          const nextCode = String(next.account_code || defaultAccountCode(String(next.method || paymentMethod), accounts));
+          if (next.modifier_pct == null || String(next.modifier_pct).trim() === '') {
+            next.modifier_pct = String(accountModifierPct(nextCode, accounts));
+          }
+        }
         return next;
       })
     );
@@ -1245,6 +1386,7 @@ export default function PosPage() {
         account_code: defaultAccountCode(paymentMethod, accounts),
         amount_ars: '',
         store_credit_id: '',
+        modifier_pct: String(accountModifierPct(defaultAccountCode(paymentMethod, accounts), accounts)),
       },
     ]);
   }
@@ -1537,7 +1679,7 @@ export default function PosPage() {
                   {splitPayments.map((row, idx) => {
                     const scopedAccounts = accountsByMethod(row.method || paymentMethod);
                     return (
-                      <div key={`split-${idx}`} className="grid grid-cols-1 gap-2 md:grid-cols-7">
+                      <div key={`split-${idx}`} className="grid grid-cols-1 gap-2 md:grid-cols-8">
                         <select
                           className="input md:col-span-2"
                           value={row.method}
@@ -1545,6 +1687,9 @@ export default function PosPage() {
                             changeSplitRow(idx, {
                               method: e.target.value,
                               account_code: defaultAccountCode(e.target.value, accounts),
+                              modifier_pct: String(
+                                accountModifierPct(defaultAccountCode(e.target.value, accounts), accounts)
+                              ),
                             })
                           }
                         >
@@ -1557,7 +1702,12 @@ export default function PosPage() {
                         <select
                           className="input md:col-span-2"
                           value={row.account_code}
-                          onChange={(e) => changeSplitRow(idx, { account_code: e.target.value })}
+                          onChange={(e) =>
+                            changeSplitRow(idx, {
+                              account_code: e.target.value,
+                              modifier_pct: String(accountModifierPct(e.target.value, accounts)),
+                            })
+                          }
                         >
                           {scopedAccounts.map((acc) => (
                             <option key={`${idx}-${acc.code}`} value={acc.code}>
@@ -1584,10 +1734,21 @@ export default function PosPage() {
                           type="number"
                           step="0.01"
                           min="0"
-                          placeholder="Monto"
+                          placeholder="Monto base"
                           value={row.amount_ars}
                           onChange={(e) => changeSplitRow(idx, { amount_ars: e.target.value })}
                         />
+                        {isAdmin ? (
+                          <input
+                            className="input"
+                            type="number"
+                            step="0.01"
+                            min="-99.99"
+                            placeholder="% ajuste"
+                            value={row.modifier_pct ?? ''}
+                            onChange={(e) => changeSplitRow(idx, { modifier_pct: e.target.value })}
+                          />
+                        ) : null}
                         <button
                           type="button"
                           className="rounded border border-neutral-300 px-2 py-1 text-xs"
@@ -1617,10 +1778,10 @@ export default function PosPage() {
                   </button>
                   <div className="rounded border border-dashed px-2 py-1 text-xs">
                     <div>
-                      Suma tramos: <strong>{money(splitTotals.current)}</strong>
+                      Suma base tramos: <strong>{money(splitTotals.current)}</strong>
                     </div>
                     <div>
-                      Total cotizado: <strong>{money(splitTotals.expected)}</strong>
+                      Subtotal base: <strong>{money(splitTotals.expected)}</strong>
                     </div>
                     <div className={splitTotals.diff === 0 ? 'text-emerald-700' : 'text-rose-700'}>
                       Diferencia: <strong>{money(splitTotals.diff)}</strong>
@@ -1808,6 +1969,62 @@ export default function PosPage() {
                   Factura requerida:{' '}
                   <strong>{quote.invoice_required ? 'Si' : 'No (comprobante interno)'}</strong>
                 </div>
+                {Array.isArray(quote?.payment_breakdown) && quote.payment_breakdown.length ? (
+                  <div className="rounded border border-dashed px-2 py-1 mt-2">
+                    <p className="text-xs uppercase tracking-wide text-neutral-500">Desglose de cobro</p>
+                    <div className="space-y-1 mt-1">
+                      {quote.payment_breakdown.map((row, idx) => (
+                        <div key={`quote-pay-${idx}`} className="text-xs">
+                          <strong>{row.account_label || row.account_code || row.method}</strong> | base{' '}
+                          {money(row.base_amount_ars)} | {Number(row.modifier_pct || 0)}% ({money(row.modifier_amount_ars)}) | final{' '}
+                          <strong>{money(row.amount_ars)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="rounded border border-neutral-200 bg-neutral-50 p-2 mt-2 space-y-2">
+                  <p className="text-xs uppercase tracking-wide text-neutral-500">Facturacion de la venta</p>
+                  <p className="text-xs">
+                    Default: <strong>{quote?.invoice_default?.invoice_required ? (quote?.invoice_default?.arca_account_label || quote?.invoice_default?.arca_account_code || 'Cuenta ARCA') : 'No facturar'}</strong>
+                  </p>
+                  {isAdmin ? (
+                    <div className="grid grid-cols-1 gap-2">
+                      <select
+                        className="input"
+                        value={invoiceOverrideMode}
+                        onChange={(e) => setInvoiceOverrideMode(e.target.value)}
+                      >
+                        <option value="default">Usar default</option>
+                        <option value="none">No facturar</option>
+                        <option value="arca">Forzar cuenta ARCA</option>
+                      </select>
+                      {invoiceOverrideMode === 'arca' ? (
+                        <select
+                          className="input"
+                          value={invoiceOverrideArcaAccountId}
+                          onChange={(e) => setInvoiceOverrideArcaAccountId(e.target.value)}
+                        >
+                          <option value="">Seleccionar cuenta ARCA</option>
+                          {arcaAccounts.map((arca) => (
+                            <option key={`override-arca-${arca.id}`} value={String(arca.id)}>
+                              {arca.label || arca.code}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-neutral-600">
+                      Modo aplicado:{' '}
+                      <strong>
+                        {quote.invoice_required
+                          ? quote.invoice_arca_account_label || quote.invoice_arca_account_code || 'Cuenta ARCA'
+                          : 'No facturar'}
+                      </strong>
+                    </p>
+                  )}
+                </div>
               </div>
             ) : (
               <p className="text-sm text-gray-500">
@@ -1837,7 +2054,7 @@ export default function PosPage() {
             </div>
             {splitMismatch ? (
               <p className="text-xs text-rose-700">
-                La suma de pagos mixtos no coincide con el total cotizado.
+                La suma base de pagos mixtos no coincide con el subtotal base cotizado.
               </p>
             ) : null}
             {storeCreditSelectionMissing ? (
