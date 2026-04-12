@@ -102,11 +102,32 @@ function Assert-Admin {
 }
 
 function Assert-Internet {
-  try {
-    Invoke-WebRequest -Uri "https://www.msftconnecttest.com/connecttest.txt" -UseBasicParsing -TimeoutSec 15 | Out-Null
-  } catch {
-    throw "No hay conectividad a Internet. Verifica red/proxy y reintenta."
+  $connectivityTargets = @(
+    "https://github.com"
+    "https://www.msftconnecttest.com/connecttest.txt"
+    "http://www.msftconnecttest.com/connecttest.txt"
+  )
+
+  $lastErrors = New-Object System.Collections.Generic.List[string]
+  foreach ($target in $connectivityTargets) {
+    try {
+      Invoke-WebRequest -Uri $target -UseBasicParsing -TimeoutSec 15 | Out-Null
+      Write-Log "Conectividad validada usando $target."
+      return
+    } catch {
+      $msg = $_.Exception.Message
+      if ([string]::IsNullOrWhiteSpace($msg)) {
+        $msg = "error desconocido"
+      }
+      $lastErrors.Add("$target => $msg") | Out-Null
+    }
   }
+
+  $details = ""
+  if ($lastErrors.Count -gt 0) {
+    $details = " Detalle: " + ($lastErrors -join " | ")
+  }
+  throw "No hay conectividad saliente a Internet (HTTPS/HTTP). Verifica red/proxy/certificados y reintenta.$details"
 }
 
 function Warn-VirtualizationState {
