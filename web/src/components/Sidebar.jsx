@@ -12,8 +12,6 @@ const DEFAULT_LABELS = {
   inventario: 'Inventario ciclico',
   reportes: 'Reportes',
   online: 'Online',
-  config_general: 'Config general',
-  config_paginas: 'Config páginas',
 };
 
 const LinkItem = ({ to, children, onClick, indicator = null }) => (
@@ -55,7 +53,6 @@ export default function Sidebar({
   const canInventario = canProductos && can(user, PERMISSION_CODES.ACTION_INVENTARIO_CONTEO);
   const canReportes = String(user?.rol || '').toLowerCase() === 'admin';
   const canOnline = can(user, PERMISSION_CODES.PAGE_ONLINE);
-  const canConfig = can(user, PERMISSION_CODES.PAGE_CONFIG);
 
   const handleNavigate = () => {
     if (onClose) onClose();
@@ -76,12 +73,12 @@ export default function Sidebar({
         }`}
       >
         <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-3 md:hidden">
-          <span className="text-xs font-semibold uppercase tracking-[0.14em] text-neutral-500">Menú</span>
+          <span className="text-xs font-semibold uppercase tracking-[0.14em] text-neutral-500">Menu</span>
           <button
             type="button"
             onClick={onClose}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-300 text-neutral-700 hover:bg-neutral-100"
-            aria-label="Cerrar menú"
+            aria-label="Cerrar menu"
           >
             X
           </button>
@@ -125,8 +122,6 @@ export default function Sidebar({
               {navLabels.online}
             </LinkItem>
           ) : null}
-          {canConfig ? <LinkItem to="/config" onClick={handleNavigate}>{navLabels.config_general}</LinkItem> : null}
-          {canConfig ? <LinkItem to="/config/paginas" onClick={handleNavigate}>{navLabels.config_paginas}</LinkItem> : null}
         </div>
       </aside>
     </>

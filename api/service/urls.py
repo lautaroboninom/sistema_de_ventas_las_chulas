@@ -6,6 +6,8 @@ from .views import (
     LogoutView,
     SessionView,
     ResetPasswordView,
+    SystemUpdateStatusView,
+    SystemUpdateCheckView,
     ping,
     csrf,
     UsuariosView,
@@ -100,6 +102,8 @@ from .views import (
 
 urlpatterns = [
     path('ping/', ping),
+    path('system/update/status/', SystemUpdateStatusView.as_view()),
+    path('system/update/check/', SystemUpdateCheckView.as_view()),
     path('auth/csrf/', csrf),
     path('auth/login/', LoginView.as_view()),
     path('auth/logout/', LogoutView.as_view()),

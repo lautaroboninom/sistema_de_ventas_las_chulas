@@ -10,6 +10,11 @@ from .auth_views import (
     ResetPasswordView,
 )
 
+from .system_update_views import (
+    SystemUpdateStatusView,
+    SystemUpdateCheckView,
+)
+
 from .usuarios_views import (
     UsuariosView,
     UsuarioActivoView,
@@ -112,6 +117,8 @@ __all__ = [
     'SessionView',
     'ForgotPasswordView',
     'ResetPasswordView',
+    'SystemUpdateStatusView',
+    'SystemUpdateCheckView',
     'UsuariosView',
     'UsuarioActivoView',
     'UsuarioResetPassView',
