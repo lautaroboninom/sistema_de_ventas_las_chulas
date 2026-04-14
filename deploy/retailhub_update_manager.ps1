@@ -326,17 +326,23 @@ function Invoke-ApplyOnStart {
   $applied = $false
   $errorMessage = $null
   try {
+    Invoke-GitText -Args @('fetch', '--prune', 'origin', $script:Channel) | Out-Null
+    $State.last_check_at = Get-IsoUtcNow
+    $State.channel = $script:Channel
+    $State.installed_commit = Get-HeadCommit
+    $remote = Get-RemoteCommit
+    if (-not [string]::IsNullOrWhiteSpace($remote)) {
+      $State.remote_commit = $remote
+    } elseif ([string]::IsNullOrWhiteSpace([string]$State.remote_commit)) {
+      $State.remote_commit = $State.installed_commit
+    }
+    $State.pending = [bool]($State.installed_commit -ne $State.remote_commit)
+
     if (-not [bool]$State.pending) {
-      $State.installed_commit = Get-HeadCommit
-      $remote = Get-RemoteCommit
-      if (-not [string]::IsNullOrWhiteSpace($remote)) {
-        $State.remote_commit = $remote
-      }
-      $State.channel = $script:Channel
       $State.last_error = $null
       Write-State -State $State
       return @{
-        Checked = $false
+        Checked = $true
         Applied = $false
         ErrorMessage = $null
       }
