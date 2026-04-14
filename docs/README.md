@@ -15,6 +15,7 @@ Este manual cubre operacion diaria y administracion practica, con criterio estri
 - [Checklist ARCA](CHECKLIST_ARCA_PASO_A_PASO.md) (alta fiscal ARCA)
 - [Operacion ARCA](ARCA_OPERACION.md) (operacion y reintentos ARCA)
 - [Apply DB facturacion por cuenta 2026-04](APPLY_DB_FACTURACION_CUENTAS_2026-04.md) (pasos de migracion y verificacion)
+- [Apply DB probe minimo 2026-04](APPLY_DB_PROBE_2026-04.md) (validacion de apply en servidor)
 - [Auditoria ARCA 2026-04-02](AUDITORIA_FLUJO_ARCA_2026-04-02.md) (auditoria tecnica ARCA)
 - [Seguridad y rotacion de secretos](SEGURIDAD_ROTACION_SECRETOS.md) (rotacion de secretos)
 - [Pendientes](PENDIENTES.md) (pendientes de negocio y dependencias externas)

@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS retail_settings (
   return_warranty_size_days     INTEGER NOT NULL DEFAULT 30,
   return_warranty_breakage_days INTEGER NOT NULL DEFAULT 90,
   ui_page_settings              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  db_apply_probe_marker         TEXT,
   created_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT chk_retail_settings_singleton CHECK (id = 1),
@@ -215,6 +216,9 @@ ADD COLUMN IF NOT EXISTS arca_cbte_tipo_store INTEGER;
 ALTER TABLE retail_settings
 ADD COLUMN IF NOT EXISTS arca_cbte_tipo_online INTEGER;
 
+ALTER TABLE retail_settings
+ADD COLUMN IF NOT EXISTS db_apply_probe_marker TEXT;
+
 UPDATE retail_settings
 SET purchase_default_markup_pct = 100.00
 WHERE purchase_default_markup_pct IS NULL OR purchase_default_markup_pct < 0;
@@ -228,6 +232,11 @@ UPDATE retail_settings
 SET ean_country_prefix = COALESCE(NULLIF(TRIM(ean_country_prefix), ''), '779'),
     ean_generic_supplier_code = COALESCE(NULLIF(TRIM(ean_generic_supplier_code), ''), '0000')
 WHERE id = 1;
+
+UPDATE retail_settings
+SET db_apply_probe_marker = 'v2026_04_probe'
+WHERE id = 1
+  AND (db_apply_probe_marker IS NULL OR TRIM(db_apply_probe_marker) = '');
 
 DO $$
 BEGIN
