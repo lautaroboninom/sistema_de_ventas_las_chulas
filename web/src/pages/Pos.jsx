@@ -1827,11 +1827,93 @@ export default function PosPage() {
                 placeholder="Notas"
               />
             </div>
+
+            <div className="card space-y-3">
+              <h2 className="text-lg font-semibold">Borradores en espera</h2>
+              <input
+                className="input"
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                placeholder="Nombre borrador (ej: Cliente en probador)"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" className="btn-secondary" onClick={handleSaveDraft} disabled={busy || !items.length}>
+                  Guardar nuevo
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleUpdateDraft}
+                  disabled={busy || !items.length || !selectedDraftId}
+                >
+                  Actualizar actual
+                </button>
+              </div>
+              <button type="button" className="btn-secondary !py-2" onClick={loadDrafts} disabled={draftsLoading}>
+                {draftsLoading ? 'Actualizando...' : 'Refrescar borradores'}
+              </button>
+
+              <div className="max-h-64 overflow-auto rounded-lg border border-neutral-200">
+                {!drafts.length ? (
+                  <p className="px-3 py-2 text-sm text-gray-500">No hay borradores abiertos.</p>
+                ) : (
+                  <div className="divide-y">
+                    {drafts.map((row) => (
+                      <div
+                        key={row.id}
+                        className={`flex items-center justify-between gap-2 px-3 py-2 ${
+                          Number(row.id) === Number(selectedDraftId) ? 'bg-amber-50' : ''
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold">
+                            {row.name || row.draft_number || `#${row.id}`}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {row.item_count || 0} items | {money(row.total_ars)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-secondary !px-2.5 !py-1.5 !text-xs"
+                          onClick={() => handleLoadDraft(row.id)}
+                          disabled={busy}
+                        >
+                          Cargar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="card space-y-2">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Ventas recientes (hoy)</h2>
+                <button type="button" className="btn-secondary !px-2.5 !py-1.5 !text-xs" onClick={loadRecentSales}>
+                  Refrescar
+                </button>
+              </div>
+              {recentLoading ? (
+                <p className="text-sm text-gray-500">Cargando ventas...</p>
+              ) : recentSales.length ? (
+                <div className="space-y-1 text-sm">
+                  {recentSales.map((row) => (
+                    <div key={row.id} className="flex items-center justify-between rounded border border-neutral-200 px-2 py-1.5">
+                      <span className="truncate">{row.sale_number || `#${row.id}`}</span>
+                      <strong>{money(row.total_ars)}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">Sin ventas registradas hoy.</p>
+              )}
+            </div>
           </div>
         </div>
         <div className="space-y-4">
-          <div className="space-y-4 xl:sticky xl:top-20 xl:self-start">
-            <div className="card space-y-3">
+          <div className="card space-y-3">
             <h2 className="text-lg font-semibold">Caja</h2>
             <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-2 text-sm">
               {cashSession ? (
@@ -1945,223 +2027,141 @@ export default function PosPage() {
             </div>
           </div>
 
+          <div className="xl:sticky xl:top-20 xl:self-start">
             <div className="card space-y-3">
-            <h2 className="text-lg font-semibold">Totales y cierre de venta</h2>
-            {quote ? (
-              <div className="space-y-1 text-sm">
-                <div>
-                  Subtotal: <strong>{money(quote.subtotal_ars)}</strong>
-                </div>
-                <div>
-                  Promociones: <strong>{money(quote.promotion_discount_total_ars)}</strong>
-                </div>
-                <div>
-                  Subtotal promos: <strong>{money(quote.subtotal_after_promotions_ars)}</strong>
-                </div>
-                <div>
-                  Modificador ({quote.price_modifier_pct}%):{' '}
-                  <strong>{money(quote.modifier_amount_ars)}</strong>
-                </div>
-                <div className="text-base">
-                  Total: <strong>{money(quote.total_ars)}</strong>
-                </div>
-                <div>
-                  Factura requerida:{' '}
-                  <strong>{quote.invoice_required ? 'Si' : 'No (comprobante interno)'}</strong>
-                </div>
-                {Array.isArray(quote?.payment_breakdown) && quote.payment_breakdown.length ? (
-                  <div className="rounded border border-dashed px-2 py-1 mt-2">
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Desglose de cobro</p>
-                    <div className="space-y-1 mt-1">
-                      {quote.payment_breakdown.map((row, idx) => (
-                        <div key={`quote-pay-${idx}`} className="text-xs">
-                          <strong>{row.account_label || row.account_code || row.method}</strong> | base{' '}
-                          {money(row.base_amount_ars)} | {Number(row.modifier_pct || 0)}% ({money(row.modifier_amount_ars)}) | final{' '}
-                          <strong>{money(row.amount_ars)}</strong>
-                        </div>
-                      ))}
-                    </div>
+              <h2 className="text-lg font-semibold">Totales y cierre de venta</h2>
+              {quote ? (
+                <div className="space-y-1 text-sm">
+                  <div>
+                    Subtotal: <strong>{money(quote.subtotal_ars)}</strong>
                   </div>
-                ) : null}
-                <div className="rounded border border-neutral-200 bg-neutral-50 p-2 mt-2 space-y-2">
-                  <p className="text-xs uppercase tracking-wide text-neutral-500">Facturacion de la venta</p>
-                  <p className="text-xs">
-                    Default: <strong>{quote?.invoice_default?.invoice_required ? (quote?.invoice_default?.arca_account_label || quote?.invoice_default?.arca_account_code || 'Cuenta ARCA') : 'No facturar'}</strong>
-                  </p>
-                  {isAdmin ? (
-                    <div className="grid grid-cols-1 gap-2">
-                      <select
-                        className="input"
-                        value={invoiceOverrideMode}
-                        onChange={(e) => setInvoiceOverrideMode(e.target.value)}
-                      >
-                        <option value="default">Usar default</option>
-                        <option value="none">No facturar</option>
-                        <option value="arca">Forzar cuenta ARCA</option>
-                      </select>
-                      {invoiceOverrideMode === 'arca' ? (
+                  <div>
+                    Promociones: <strong>{money(quote.promotion_discount_total_ars)}</strong>
+                  </div>
+                  <div>
+                    Subtotal promos: <strong>{money(quote.subtotal_after_promotions_ars)}</strong>
+                  </div>
+                  <div>
+                    Modificador ({quote.price_modifier_pct}%):{' '}
+                    <strong>{money(quote.modifier_amount_ars)}</strong>
+                  </div>
+                  <div className="text-base">
+                    Total: <strong>{money(quote.total_ars)}</strong>
+                  </div>
+                  <div>
+                    Factura requerida:{' '}
+                    <strong>{quote.invoice_required ? 'Si' : 'No (comprobante interno)'}</strong>
+                  </div>
+                  {Array.isArray(quote?.payment_breakdown) && quote.payment_breakdown.length ? (
+                    <div className="rounded border border-dashed px-2 py-1 mt-2">
+                      <p className="text-xs uppercase tracking-wide text-neutral-500">Desglose de cobro</p>
+                      <div className="space-y-1 mt-1">
+                        {quote.payment_breakdown.map((row, idx) => (
+                          <div key={`quote-pay-${idx}`} className="text-xs">
+                            <strong>{row.account_label || row.account_code || row.method}</strong> | base{' '}
+                            {money(row.base_amount_ars)} | {Number(row.modifier_pct || 0)}% ({money(row.modifier_amount_ars)}) | final{' '}
+                            <strong>{money(row.amount_ars)}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="rounded border border-neutral-200 bg-neutral-50 p-2 mt-2 space-y-2">
+                    <p className="text-xs uppercase tracking-wide text-neutral-500">Facturacion de la venta</p>
+                    <p className="text-xs">
+                      Default: <strong>{quote?.invoice_default?.invoice_required ? (quote?.invoice_default?.arca_account_label || quote?.invoice_default?.arca_account_code || 'Cuenta ARCA') : 'No facturar'}</strong>
+                    </p>
+                    {isAdmin ? (
+                      <div className="grid grid-cols-1 gap-2">
                         <select
                           className="input"
-                          value={invoiceOverrideArcaAccountId}
-                          onChange={(e) => setInvoiceOverrideArcaAccountId(e.target.value)}
+                          value={invoiceOverrideMode}
+                          onChange={(e) => setInvoiceOverrideMode(e.target.value)}
                         >
-                          <option value="">Seleccionar cuenta ARCA</option>
-                          {arcaAccounts.map((arca) => (
-                            <option key={`override-arca-${arca.id}`} value={String(arca.id)}>
-                              {arca.label || arca.code}
-                            </option>
-                          ))}
+                          <option value="default">Usar default</option>
+                          <option value="none">No facturar</option>
+                          <option value="arca">Forzar cuenta ARCA</option>
                         </select>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-neutral-600">
-                      Modo aplicado:{' '}
-                      <strong>
-                        {quote.invoice_required
-                          ? quote.invoice_arca_account_label || quote.invoice_arca_account_code || 'Cuenta ARCA'
-                          : 'No facturar'}
-                      </strong>
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-500">
-                {quoteBusy && items.length && cashSession
-                  ? 'Calculando cotizacion...'
-                  : 'Sin cotizacion activa.'}
-              </p>
-            )}
-            {quoteBusy && items.length && cashSession ? (
-              <p className="text-xs text-neutral-500">Recalculando cotizacion en segundo plano...</p>
-            ) : null}
-            {!cashSession ? (
-              <p className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
-                {cashRequiredNotice}
-              </p>
-            ) : null}
-
-            <div className="grid grid-cols-1 gap-2">
-              <button
-                type="button"
-                className="btn"
-                onClick={handleConfirm}
-                disabled={confirmActionDisabled}
-              >
-                Confirmar venta
-              </button>
-            </div>
-            {splitMismatch ? (
-              <p className="text-xs text-rose-700">
-                La suma base de pagos mixtos no coincide con el subtotal base cotizado.
-              </p>
-            ) : null}
-            {storeCreditSelectionMissing ? (
-              <p className="text-xs text-rose-700">
-                Falta seleccionar credito tienda para uno o mas tramos de pago.
-              </p>
-            ) : null}
-
-            {err ? <p className="rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-700">{err}</p> : null}
-            {msg ? <p className="rounded border border-emerald-300 bg-emerald-50 p-2 text-sm text-emerald-700">{msg}</p> : null}
-            {lastSale ? (
-              <div className="rounded border border-green-300 bg-green-50 p-3 text-sm">
-                Venta confirmada: <strong>{lastSale.sale_number || `#${lastSale.id}`}</strong> por{' '}
-                <strong>{money(lastSale.total_ars)}</strong>. Estado factura:{' '}
-                <strong>{lastSale?.invoice?.status || 'sin generar'}</strong>.
-                {lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code ? (
-                  <>
-                    {' '}Cuenta ARCA:{' '}
-                    <strong>{lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code}</strong>.
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-            </div>
-          </div>
-
-          <div className="card space-y-3">
-            <h2 className="text-lg font-semibold">Borradores en espera</h2>
-            <input
-              className="input"
-              value={draftName}
-              onChange={(e) => setDraftName(e.target.value)}
-              placeholder="Nombre borrador (ej: Cliente en probador)"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" className="btn-secondary" onClick={handleSaveDraft} disabled={busy || !items.length}>
-                Guardar nuevo
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleUpdateDraft}
-                disabled={busy || !items.length || !selectedDraftId}
-              >
-                Actualizar actual
-              </button>
-            </div>
-            <button type="button" className="btn-secondary !py-2" onClick={loadDrafts} disabled={draftsLoading}>
-              {draftsLoading ? 'Actualizando...' : 'Refrescar borradores'}
-            </button>
-
-            <div className="max-h-64 overflow-auto rounded-lg border border-neutral-200">
-              {!drafts.length ? (
-                <p className="px-3 py-2 text-sm text-gray-500">No hay borradores abiertos.</p>
-              ) : (
-                <div className="divide-y">
-                  {drafts.map((row) => (
-                    <div
-                      key={row.id}
-                      className={`flex items-center justify-between gap-2 px-3 py-2 ${
-                        Number(row.id) === Number(selectedDraftId) ? 'bg-amber-50' : ''
-                      }`}
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">
-                          {row.name || row.draft_number || `#${row.id}`}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {row.item_count || 0} items | {money(row.total_ars)}
-                        </p>
+                        {invoiceOverrideMode === 'arca' ? (
+                          <select
+                            className="input"
+                            value={invoiceOverrideArcaAccountId}
+                            onChange={(e) => setInvoiceOverrideArcaAccountId(e.target.value)}
+                          >
+                            <option value="">Seleccionar cuenta ARCA</option>
+                            {arcaAccounts.map((arca) => (
+                              <option key={`override-arca-${arca.id}`} value={String(arca.id)}>
+                                {arca.label || arca.code}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
                       </div>
-                      <button
-                        type="button"
-                        className="btn-secondary !px-2.5 !py-1.5 !text-xs"
-                        onClick={() => handleLoadDraft(row.id)}
-                        disabled={busy}
-                      >
-                        Cargar
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="card space-y-2">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Ventas recientes (hoy)</h2>
-              <button type="button" className="btn-secondary !px-2.5 !py-1.5 !text-xs" onClick={loadRecentSales}>
-                Refrescar
-              </button>
-            </div>
-            {recentLoading ? (
-              <p className="text-sm text-gray-500">Cargando ventas...</p>
-            ) : recentSales.length ? (
-              <div className="space-y-1 text-sm">
-                {recentSales.map((row) => (
-                  <div key={row.id} className="flex items-center justify-between rounded border border-neutral-200 px-2 py-1.5">
-                    <span className="truncate">{row.sale_number || `#${row.id}`}</span>
-                    <strong>{money(row.total_ars)}</strong>
+                    ) : (
+                      <p className="text-xs text-neutral-600">
+                        Modo aplicado:{' '}
+                        <strong>
+                          {quote.invoice_required
+                            ? quote.invoice_arca_account_label || quote.invoice_arca_account_code || 'Cuenta ARCA'
+                            : 'No facturar'}
+                        </strong>
+                      </p>
+                    )}
                   </div>
-                ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  {quoteBusy && items.length && cashSession
+                    ? 'Calculando cotizacion...'
+                    : 'Sin cotizacion activa.'}
+                </p>
+              )}
+              {quoteBusy && items.length && cashSession ? (
+                <p className="text-xs text-neutral-500">Recalculando cotizacion en segundo plano...</p>
+              ) : null}
+              {!cashSession ? (
+                <p className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+                  {cashRequiredNotice}
+                </p>
+              ) : null}
+
+              <div className="grid grid-cols-1 gap-2">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleConfirm}
+                  disabled={confirmActionDisabled}
+                >
+                  Confirmar venta
+                </button>
               </div>
-            ) : (
-              <p className="text-sm text-gray-500">Sin ventas registradas hoy.</p>
-            )}
+              {splitMismatch ? (
+                <p className="text-xs text-rose-700">
+                  La suma base de pagos mixtos no coincide con el subtotal base cotizado.
+                </p>
+              ) : null}
+              {storeCreditSelectionMissing ? (
+                <p className="text-xs text-rose-700">
+                  Falta seleccionar credito tienda para uno o mas tramos de pago.
+                </p>
+              ) : null}
+
+              {err ? <p className="rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-700">{err}</p> : null}
+              {msg ? <p className="rounded border border-emerald-300 bg-emerald-50 p-2 text-sm text-emerald-700">{msg}</p> : null}
+              {lastSale ? (
+                <div className="rounded border border-green-300 bg-green-50 p-3 text-sm">
+                  Venta confirmada: <strong>{lastSale.sale_number || `#${lastSale.id}`}</strong> por{' '}
+                  <strong>{money(lastSale.total_ars)}</strong>. Estado factura:{' '}
+                  <strong>{lastSale?.invoice?.status || 'sin generar'}</strong>.
+                  {lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code ? (
+                    <>
+                      {' '}Cuenta ARCA:{' '}
+                      <strong>{lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code}</strong>.
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
