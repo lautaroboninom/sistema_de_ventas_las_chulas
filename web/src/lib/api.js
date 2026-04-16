@@ -101,6 +101,7 @@ export const getAuthSession = () => api.get('/api/auth/session/');
 export const postAuthLogout = () => api.post('/api/auth/logout/', {});
 export const getSystemUpdateStatus = () => api.get('/api/system/update/status/');
 export const postSystemUpdateCheck = (payload = {}) => api.post('/api/system/update/check/', payload || {});
+export const postSystemUpdateRestart = (payload = {}) => api.post('/api/system/update/restart/', payload || {});
 
 // Usuarios y permisos
 export const getUsuarios = () => api.get('/api/usuarios/');

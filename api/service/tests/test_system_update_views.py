@@ -9,7 +9,11 @@ from rest_framework.exceptions import PermissionDenied
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'app.settings')
 django.setup()
 
-from service.views.system_update_views import SystemUpdateCheckView, SystemUpdateStatusView
+from service.views.system_update_views import (
+    SystemUpdateCheckView,
+    SystemUpdateRestartView,
+    SystemUpdateStatusView,
+)
 
 
 def _user(role='empleado'):
@@ -100,6 +104,73 @@ class SystemUpdateCheckViewTests(unittest.TestCase):
         response = SystemUpdateCheckView().post(request)
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.data.get('last_error'), 'git fetch fallo')
+
+
+class SystemUpdateRestartViewTests(unittest.TestCase):
+    def test_post_requires_admin(self):
+        request = SimpleNamespace(data={}, user=_user('empleado'), method='POST')
+
+        with self.assertRaises(PermissionDenied):
+            SystemUpdateRestartView().post(request)
+
+    def test_post_returns_202_and_schedules_restart_when_pending(self):
+        request = SimpleNamespace(data={}, user=_user('admin'), method='POST')
+        with (
+            patch('service.views.system_update_views.get_update_status') as status_mock,
+            patch('service.views.system_update_views.LOCAL_RESTART_SCRIPT') as script_mock,
+            patch('service.views.system_update_views.schedule_local_update_restart') as restart_mock,
+        ):
+            status_mock.return_value = {'pending': True}
+            script_mock.exists.return_value = True
+            restart_mock.return_value = {
+                'ok': True,
+                'scheduled': True,
+                'pending': True,
+                'last_error': None,
+            }
+
+            response = SystemUpdateRestartView().post(request)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.data.get('ok'))
+        self.assertTrue(response.data.get('scheduled'))
+        restart_mock.assert_called_once_with(delay_seconds=2)
+
+    def test_post_returns_409_when_no_pending_update(self):
+        request = SimpleNamespace(data={}, user=_user('admin'), method='POST')
+        with (
+            patch('service.views.system_update_views.get_update_status') as status_mock,
+            patch('service.views.system_update_views.schedule_local_update_restart') as restart_mock,
+        ):
+            status_mock.return_value = {'pending': False}
+            response = SystemUpdateRestartView().post(request)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.data.get('ok'))
+        self.assertFalse(response.data.get('scheduled'))
+        restart_mock.assert_not_called()
+
+    def test_post_returns_500_when_scheduler_fails(self):
+        request = SimpleNamespace(data={}, user=_user('admin'), method='POST')
+        with (
+            patch('service.views.system_update_views.get_update_status') as status_mock,
+            patch('service.views.system_update_views.LOCAL_RESTART_SCRIPT') as script_mock,
+            patch('service.views.system_update_views.schedule_local_update_restart') as restart_mock,
+        ):
+            status_mock.return_value = {'pending': True}
+            script_mock.exists.return_value = True
+            restart_mock.return_value = {
+                'ok': False,
+                'scheduled': False,
+                'pending': True,
+                'last_error': 'fallo al programar',
+            }
+
+            response = SystemUpdateRestartView().post(request)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data.get('last_error'), 'fallo al programar')
+        restart_mock.assert_called_once_with(delay_seconds=2)
 
 
 if __name__ == '__main__':

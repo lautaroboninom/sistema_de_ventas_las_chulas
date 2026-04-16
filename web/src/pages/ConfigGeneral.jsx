@@ -68,6 +68,44 @@ const ACTION_MENU_WIDTH = 192;
 const ACTION_MENU_HEIGHT = 188;
 const ACTION_MENU_GAP = 6;
 const ACTION_MENU_MARGIN = 8;
+const CONFIG_SECTION_IDS = {
+  SETTINGS: 'settings',
+  PAYMENT_ACCOUNTS: 'payment_accounts',
+  NEW_USER: 'new_user',
+  USERS: 'users',
+};
+
+function CollapsibleCard({ sectionId, title, isOpen, onToggle, children }) {
+  const panelId = `config-section-panel-${sectionId}`;
+  return (
+    <section className="card">
+      <button
+        type="button"
+        className={`flex w-full items-center gap-2 text-left ${isOpen ? 'border-b border-neutral-200 pb-3' : ''}`}
+        onClick={() => onToggle(sectionId)}
+        aria-expanded={isOpen}
+        aria-controls={panelId}
+      >
+        <span
+          aria-hidden="true"
+          className={`inline-flex h-5 w-5 items-center justify-center text-neutral-600 transition-transform ${
+            isOpen ? 'rotate-90' : ''
+          }`}
+        >
+          <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 3.5L11 8L6 12.5" />
+          </svg>
+        </span>
+        <span className="text-lg font-semibold">{title}</span>
+      </button>
+      {isOpen ? (
+        <div id={panelId} className="mt-3">
+          {children}
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 export default function ConfigGeneral() {
   const { user, refreshSession } = useAuth();
@@ -101,6 +139,12 @@ export default function ConfigGeneral() {
     webhook_secret: '',
   });
   const [oauthSaving, setOauthSaving] = useState(false);
+  const [openSections, setOpenSections] = useState({
+    [CONFIG_SECTION_IDS.SETTINGS]: false,
+    [CONFIG_SECTION_IDS.PAYMENT_ACCOUNTS]: false,
+    [CONFIG_SECTION_IDS.NEW_USER]: false,
+    [CONFIG_SECTION_IDS.USERS]: false,
+  });
 
   const canEditBusinessSettings = can(user, PERMISSION_CODES.ACTION_CONFIG_EDITAR);
   const canEditOnlineCredentials = can(user, PERMISSION_CODES.ACTION_CONFIG_ONLINE_CREDENTIALS);
@@ -109,6 +153,10 @@ export default function ConfigGeneral() {
     () => rows.find((row) => Number(row.id) === Number(actionMenuUserId)) || null,
     [rows, actionMenuUserId],
   );
+
+  function toggleSection(sectionId) {
+    setOpenSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
+  }
 
   function closeActionMenu() {
     setActionMenuUserId(null);
@@ -695,95 +743,127 @@ export default function ConfigGeneral() {
           </Link>
         </div>
 
-        <form className="card space-y-4" onSubmit={saveSettings}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">Parametros del negocio e integraciones</h2>
-              <p className="text-sm text-gray-600">Facturacion y Tienda Nube quedaron en bloques separados para una carga mas clara.</p>
-              {!canSaveSettings ? (
-                <p className="mt-1 text-xs text-amber-700">
-                  Tu usuario tiene acceso de lectura en esta seccion. Para editar, se requiere permiso tecnico.
-                </p>
-              ) : null}
+        <CollapsibleCard
+          sectionId={CONFIG_SECTION_IDS.SETTINGS}
+          title="Parametros del negocio e integraciones"
+          isOpen={!!openSections[CONFIG_SECTION_IDS.SETTINGS]}
+          onToggle={toggleSection}
+        >
+          <form className="space-y-4" onSubmit={saveSettings}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Facturacion y Tienda Nube quedaron en bloques separados para una carga mas clara.</p>
+                {!canSaveSettings ? (
+                  <p className="mt-1 text-xs text-amber-700">
+                    Tu usuario tiene acceso de lectura en esta seccion. Para editar, se requiere permiso tecnico.
+                  </p>
+                ) : null}
+              </div>
+              <button className="btn" type="submit" disabled={saving || !canSaveSettings}>
+                Guardar parametros
+              </button>
             </div>
-            <button className="btn" type="submit" disabled={saving || !canSaveSettings}>
-              Guardar parametros
-            </button>
-          </div>
 
           <section className="space-y-3 rounded-xl border border-gray-200 bg-white/60 p-3">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-600">Negocio y operacion</h3>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <input
-                className="input"
-                placeholder="Nombre comercial"
-                value={settings?.business_name || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, business_name: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder="Condicion IVA"
-                value={settings?.iva_condition || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, iva_condition: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder="Impresora ticket"
-                value={settings?.ticket_printer_name || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, ticket_printer_name: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder="Impresora etiquetas"
-                value={settings?.label_printer_name || ''}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, label_printer_name: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder="Prefijo pais EAN-13 (ej 779)"
-                value={settings?.ean_country_prefix || '779'}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, ean_country_prefix: e.target.value }))}
-              />
-              <input
-                className="input"
-                placeholder="Codigo proveedor generico (0000)"
-                value={settings?.ean_generic_supplier_code || '0000'}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, ean_generic_supplier_code: e.target.value }))}
-              />
-              <input
-                className="input"
-                type="number"
-                min="1"
-                placeholder="Garantia cambio de talle (dias)"
-                value={settings?.return_warranty_size_days ?? 30}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, return_warranty_size_days: e.target.value }))}
-              />
-              <input
-                className="input"
-                type="number"
-                min="1"
-                placeholder="Garantia por roturas (dias)"
-                value={settings?.return_warranty_breakage_days ?? 90}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, return_warranty_breakage_days: e.target.value }))}
-              />
-              <input
-                className="input"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="Margen compras por defecto (%)"
-                value={settings?.purchase_default_markup_pct ?? 100}
-                disabled={!canEditBusinessSettings}
-                onChange={(e) => setSettings((v) => ({ ...v, purchase_default_markup_pct: e.target.value }))}
-              />
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Nombre comercial</p>
+                <input
+                  className="input"
+                  placeholder="Ej: Las Chulas"
+                  value={settings?.business_name || ''}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, business_name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Condicion IVA</p>
+                <input
+                  className="input"
+                  placeholder="Ej: Monotributo"
+                  value={settings?.iva_condition || ''}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, iva_condition: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Impresora ticket</p>
+                <input
+                  className="input"
+                  placeholder="Ej: Epson TM-T20"
+                  value={settings?.ticket_printer_name || ''}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, ticket_printer_name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Impresora etiquetas</p>
+                <input
+                  className="input"
+                  placeholder="Ej: Zebra GK420d"
+                  value={settings?.label_printer_name || ''}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, label_printer_name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Prefijo pais EAN-13</p>
+                <input
+                  className="input"
+                  placeholder="Ej: 779"
+                  value={settings?.ean_country_prefix || '779'}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, ean_country_prefix: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Codigo proveedor generico</p>
+                <input
+                  className="input"
+                  placeholder="Ej: 0000"
+                  value={settings?.ean_generic_supplier_code || '0000'}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, ean_generic_supplier_code: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Garantia cambio de talle (dias)</p>
+                <input
+                  className="input"
+                  type="number"
+                  min="1"
+                  placeholder="Ej: 30"
+                  value={settings?.return_warranty_size_days ?? 30}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, return_warranty_size_days: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Garantia por roturas (dias)</p>
+                <input
+                  className="input"
+                  type="number"
+                  min="1"
+                  placeholder="Ej: 90"
+                  value={settings?.return_warranty_breakage_days ?? 90}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, return_warranty_breakage_days: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Margen compras por defecto (%)</p>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Ej: 100"
+                  value={settings?.purchase_default_markup_pct ?? 100}
+                  disabled={!canEditBusinessSettings}
+                  onChange={(e) => setSettings((v) => ({ ...v, purchase_default_markup_pct: e.target.value }))}
+                />
+              </div>
             </div>
           </section>
 
@@ -836,6 +916,21 @@ export default function ConfigGeneral() {
                 <strong>{arcaRotation?.next_account_label || arcaRotation?.next_account_code || 'sin cuenta activa'}</strong>.
               </div>
             </div>
+            <div className="space-y-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-600">
+              <p className="font-semibold text-gray-700">Referencia de campos ARCA</p>
+              <p>`Etiqueta visible`: nombre de la cuenta dentro de RetailHub.</p>
+              <p>`CUIT emisor`: CUIT fiscal de la titular que emite.</p>
+              <p>`Pto vta local/online`: numero de punto de venta ARCA (sin ceros a la izquierda, ej: `5`).</p>
+              <p>`Cbte tipo`: codigo ARCA del comprobante (ejemplos: `1` Factura A, `6` Factura B, `11` Factura C).</p>
+              <p>`Orden`: prioridad de rotacion (menor numero = se usa antes).</p>
+              <p>`Cert path` y `Key path`: ruta completa al `.pem` y `.key` de esa cuenta ARCA.</p>
+              {!canEditOnlineCredentials ? (
+                <p className="text-amber-700">
+                  Tu usuario no tiene permiso para editar credenciales sensibles (`action.config.online_credentials`), por eso esos
+                  campos aparecen bloqueados.
+                </p>
+              ) : null}
+            </div>
 
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               {arcaAccounts.map((account, idx) => (
@@ -858,86 +953,113 @@ export default function ConfigGeneral() {
                   </div>
 
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <input
-                      className="input"
-                      placeholder="Etiqueta visible"
-                      value={account.label || ''}
-                      disabled={!canEditBusinessSettings}
-                      onChange={(e) => updateArcaAccount(idx, { label: e.target.value })}
-                    />
-                    <input
-                      className="input"
-                      placeholder="CUIT emisor"
-                      value={account.arca_cuit || ''}
-                      disabled={!canEditBusinessSettings}
-                      onChange={(e) => updateArcaAccount(idx, { arca_cuit: e.target.value })}
-                    />
-                    <input
-                      className="input"
-                      type="number"
-                      placeholder="Pto vta local"
-                      value={account.arca_pto_vta_store ?? ''}
-                      disabled={!canEditBusinessSettings}
-                      onChange={(e) => updateArcaAccount(idx, { arca_pto_vta_store: e.target.value })}
-                    />
-                    <input
-                      className="input"
-                      type="number"
-                      placeholder="Pto vta online"
-                      value={account.arca_pto_vta_online ?? ''}
-                      disabled={!canEditBusinessSettings}
-                      onChange={(e) => updateArcaAccount(idx, { arca_pto_vta_online: e.target.value })}
-                    />
-                    <input
-                      className="input"
-                      type="number"
-                      placeholder="Cbte tipo local"
-                      value={account.arca_cbte_tipo_store ?? ''}
-                      disabled={!canEditBusinessSettings}
-                      onChange={(e) => updateArcaAccount(idx, { arca_cbte_tipo_store: e.target.value })}
-                    />
-                    <input
-                      className="input"
-                      type="number"
-                      placeholder="Cbte tipo online"
-                      value={account.arca_cbte_tipo_online ?? ''}
-                      disabled={!canEditBusinessSettings}
-                      onChange={(e) => updateArcaAccount(idx, { arca_cbte_tipo_online: e.target.value })}
-                    />
-                    <input
-                      className="input"
-                      type="number"
-                      placeholder="Orden"
-                      value={account.sort_order ?? 100}
-                      disabled={!canEditBusinessSettings}
-                      onChange={(e) => updateArcaAccount(idx, { sort_order: e.target.value })}
-                    />
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Etiqueta visible</p>
+                      <input
+                        className="input"
+                        placeholder="Ej: Cuenta ARCA Maria Fernanda"
+                        value={account.label || ''}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateArcaAccount(idx, { label: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">CUIT emisor</p>
+                      <input
+                        className="input"
+                        placeholder="Ej: 27344979540"
+                        value={account.arca_cuit || ''}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateArcaAccount(idx, { arca_cuit: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Pto vta local</p>
+                      <input
+                        className="input"
+                        type="number"
+                        placeholder="Ej: 5"
+                        value={account.arca_pto_vta_store ?? ''}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateArcaAccount(idx, { arca_pto_vta_store: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Pto vta online</p>
+                      <input
+                        className="input"
+                        type="number"
+                        placeholder="Ej: 5"
+                        value={account.arca_pto_vta_online ?? ''}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateArcaAccount(idx, { arca_pto_vta_online: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Cbte tipo local</p>
+                      <input
+                        className="input"
+                        type="number"
+                        placeholder="Ej: 6 (Factura B)"
+                        value={account.arca_cbte_tipo_store ?? ''}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateArcaAccount(idx, { arca_cbte_tipo_store: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Cbte tipo online</p>
+                      <input
+                        className="input"
+                        type="number"
+                        placeholder="Ej: 6 (Factura B)"
+                        value={account.arca_cbte_tipo_online ?? ''}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateArcaAccount(idx, { arca_cbte_tipo_online: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Orden</p>
+                      <input
+                        className="input"
+                        type="number"
+                        placeholder="Ej: 10"
+                        value={account.sort_order ?? 100}
+                        disabled={!canEditBusinessSettings}
+                        onChange={(e) => updateArcaAccount(idx, { sort_order: e.target.value })}
+                      />
+                    </div>
                     <div className="rounded-lg border border-dashed border-gray-200 px-3 py-2 text-xs text-gray-500">
                       Emisor fiscal:{' '}
                       <strong>{account.issuer_cuit || account.arca_cuit || 'sin configurar'}</strong>
                     </div>
-                    <input
-                      className="input md:col-span-2"
-                      placeholder={
-                        account?.arca_cert_path_configured
-                          ? `Cert path (actual: ${account?.arca_cert_path_masked || 'configurado'})`
-                          : 'Cert path'
-                      }
-                      value={account.arca_cert_path || ''}
-                      disabled={!canEditOnlineCredentials}
-                      onChange={(e) => updateArcaAccount(idx, { arca_cert_path: e.target.value })}
-                    />
-                    <input
-                      className="input md:col-span-2"
-                      placeholder={
-                        account?.arca_key_path_configured
-                          ? `Key path (actual: ${account?.arca_key_path_masked || 'configurado'})`
-                          : 'Key path'
-                      }
-                      value={account.arca_key_path || ''}
-                      disabled={!canEditOnlineCredentials}
-                      onChange={(e) => updateArcaAccount(idx, { arca_key_path: e.target.value })}
-                    />
+                    <div className="space-y-1 md:col-span-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Cert path (.pem)</p>
+                      <input
+                        className="input"
+                        placeholder={
+                          account?.arca_cert_path_configured
+                            ? `Ruta actual: ${account?.arca_cert_path_masked || 'configurada'}`
+                            : 'Ej: C:/Users/Las Chulas/Documents/RetailHub/certs/retailhubHomoFer.pem'
+                        }
+                        value={account.arca_cert_path || ''}
+                        disabled={!canEditOnlineCredentials}
+                        onChange={(e) => updateArcaAccount(idx, { arca_cert_path: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1 md:col-span-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Key path (.key)</p>
+                      <input
+                        className="input"
+                        placeholder={
+                          account?.arca_key_path_configured
+                            ? `Ruta actual: ${account?.arca_key_path_masked || 'configurada'}`
+                            : 'Ej: C:/Users/Las Chulas/Documents/RetailHub/certs/retailhubHomoFer.key'
+                        }
+                        value={account.arca_key_path || ''}
+                        disabled={!canEditOnlineCredentials}
+                        onChange={(e) => updateArcaAccount(idx, { arca_key_path: e.target.value })}
+                      />
+                    </div>
                   </div>
                 </section>
               ))}
@@ -1069,11 +1191,17 @@ export default function ConfigGeneral() {
           <button className="btn" type="submit" disabled={saving || !canSaveSettings}>
             Guardar parametros
           </button>
-        </form>
+          </form>
+        </CollapsibleCard>
 
-        <div className="card space-y-3">
-          <h2 className="text-lg font-semibold">Cuentas de cobro</h2>
-          <div className="overflow-auto">
+        <CollapsibleCard
+          sectionId={CONFIG_SECTION_IDS.PAYMENT_ACCOUNTS}
+          title="Cuentas de cobro"
+          isOpen={!!openSections[CONFIG_SECTION_IDS.PAYMENT_ACCOUNTS]}
+          onToggle={toggleSection}
+        >
+          <div className="space-y-3">
+            <div className="overflow-auto">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="text-left border-b">
@@ -1185,128 +1313,146 @@ export default function ConfigGeneral() {
                 ) : null}
               </tbody>
             </table>
+            </div>
+            <button
+              className="btn-secondary"
+              type="button"
+              onClick={addPaymentAccountRow}
+              disabled={!canEditBusinessSettings}
+            >
+              Agregar cuenta / medio
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={saveAccounts}
+              disabled={saving || !accounts.length || !canEditBusinessSettings}
+            >
+              Guardar cuentas
+            </button>
           </div>
-          <button
-            className="btn-secondary"
-            type="button"
-            onClick={addPaymentAccountRow}
-            disabled={!canEditBusinessSettings}
-          >
-            Agregar cuenta / medio
-          </button>
-          <button
-            className="btn"
-            type="button"
-            onClick={saveAccounts}
-            disabled={saving || !accounts.length || !canEditBusinessSettings}
-          >
-            Guardar cuentas
-          </button>
-        </div>
+        </CollapsibleCard>
 
         {canEditBusinessSettings ? (
           <>
-        <form className="card space-y-3" onSubmit={createUser}>
-          <h2 className="text-lg font-semibold">Nuevo usuario</h2>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <input
-              className="input"
-              placeholder="Nombre"
-              value={form.nombre}
-              onChange={(e) => setForm((v) => ({ ...v, nombre: e.target.value }))}
-              required
-            />
-            <input
-              className="input"
-              type="email"
-              placeholder="Email"
-              value={form.email}
-              onChange={(e) => setForm((v) => ({ ...v, email: e.target.value }))}
-              required
-            />
-            <select className="input" value={form.rol} onChange={(e) => setForm((v) => ({ ...v, rol: e.target.value }))}>
-              <option value="empleado">Empleado</option>
-              <option value="admin">Admin</option>
-            </select>
-            <button className="btn" type="submit" disabled={saving}>
-              Guardar usuario
-            </button>
-          </div>
-        </form>
+            <CollapsibleCard
+              sectionId={CONFIG_SECTION_IDS.NEW_USER}
+              title="Nuevo usuario"
+              isOpen={!!openSections[CONFIG_SECTION_IDS.NEW_USER]}
+              onToggle={toggleSection}
+            >
+              <form className="space-y-3" onSubmit={createUser}>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                  <input
+                    className="input"
+                    placeholder="Nombre"
+                    value={form.nombre}
+                    onChange={(e) => setForm((v) => ({ ...v, nombre: e.target.value }))}
+                    required
+                  />
+                  <input
+                    className="input"
+                    type="email"
+                    placeholder="Email"
+                    value={form.email}
+                    onChange={(e) => setForm((v) => ({ ...v, email: e.target.value }))}
+                    required
+                  />
+                  <select className="input" value={form.rol} onChange={(e) => setForm((v) => ({ ...v, rol: e.target.value }))}>
+                    <option value="empleado">Empleado</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button className="btn" type="submit" disabled={saving}>
+                    Guardar usuario
+                  </button>
+                </div>
+              </form>
+            </CollapsibleCard>
 
-        <div className="card">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-lg font-semibold">Usuarios</h2>
-            <button className="px-3 py-2 rounded border" type="button" onClick={loadAll} disabled={loading}>
-              Actualizar
-            </button>
-          </div>
-          <div className="overflow-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="text-left border-b">
-                  <th className="py-2 pr-3">Nombre</th>
-                  <th className="py-2 pr-3">Email</th>
-                  <th className="py-2 pr-3">Rol</th>
-                  <th className="py-2 pr-3">Perm.</th>
-                  <th className="py-2 pr-3">Activo</th>
-                  <th className="py-2 pr-3">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id} className="border-b last:border-b-0">
-                    <td className="py-2 pr-3">{row.nombre}</td>
-                    <td className="py-2 pr-3">{row.email}</td>
-                    <td className="py-2 pr-3">
-                      <select
-                        className="input"
-                        value={row.rol}
-                        onChange={(e) => changeRole(row, e.target.value)}
-                        disabled={saving}
-                      >
-                        <option value="empleado">Empleado</option>
-                        <option value="admin">Admin</option>
-                      </select>
-                    </td>
-                    <td className="py-2 pr-3">
-                      <span className="inline-flex min-w-8 justify-center rounded border bg-neutral-100 px-2 py-1 text-xs font-semibold">
-                        {Number(row?.permisos_personalizados || 0)}
-                      </span>
-                    </td>
-                    <td className="py-2 pr-3">{row.activo ? 'Si' : 'No'}</td>
-                    <td className="py-2 pr-3">
-                      <div className="relative inline-block" data-user-actions-menu="true">
-                        <button
-                          type="button"
-                          className="h-8 w-8 rounded border text-lg leading-none hover:bg-neutral-100"
-                          aria-label="Abrir menu de acciones"
-                          aria-expanded={Number(actionMenuUserId) === Number(row.id)}
-                          onClick={(e) => toggleActionMenu(row.id, e.currentTarget)}
-                          disabled={saving}
-                        >
-                          {'\u22EE'}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {!rows.length ? (
-                  <tr>
-                    <td className="py-3 text-gray-500" colSpan={6}>Sin usuarios</td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
+            <CollapsibleCard
+              sectionId={CONFIG_SECTION_IDS.USERS}
+              title="Usuarios"
+              isOpen={!!openSections[CONFIG_SECTION_IDS.USERS]}
+              onToggle={toggleSection}
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-end">
+                  <button className="rounded border px-3 py-2" type="button" onClick={loadAll} disabled={loading}>
+                    Actualizar
+                  </button>
+                </div>
+                <div className="overflow-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left">
+                        <th className="py-2 pr-3">Nombre</th>
+                        <th className="py-2 pr-3">Email</th>
+                        <th className="py-2 pr-3">Rol</th>
+                        <th className="py-2 pr-3">Perm.</th>
+                        <th className="py-2 pr-3">Activo</th>
+                        <th className="py-2 pr-3">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => (
+                        <tr key={row.id} className="border-b last:border-b-0">
+                          <td className="py-2 pr-3">{row.nombre}</td>
+                          <td className="py-2 pr-3">{row.email}</td>
+                          <td className="py-2 pr-3">
+                            <select
+                              className="input"
+                              value={row.rol}
+                              onChange={(e) => changeRole(row, e.target.value)}
+                              disabled={saving}
+                            >
+                              <option value="empleado">Empleado</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                          </td>
+                          <td className="py-2 pr-3">
+                            <span className="inline-flex min-w-8 justify-center rounded border bg-neutral-100 px-2 py-1 text-xs font-semibold">
+                              {Number(row?.permisos_personalizados || 0)}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-3">{row.activo ? 'Si' : 'No'}</td>
+                          <td className="py-2 pr-3">
+                            <div className="relative inline-block" data-user-actions-menu="true">
+                              <button
+                                type="button"
+                                className="h-8 w-8 rounded border text-lg leading-none hover:bg-neutral-100"
+                                aria-label="Abrir menu de acciones"
+                                aria-expanded={Number(actionMenuUserId) === Number(row.id)}
+                                onClick={(e) => toggleActionMenu(row.id, e.currentTarget)}
+                                disabled={saving}
+                              >
+                                {'\u22EE'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {!rows.length ? (
+                        <tr>
+                          <td className="py-3 text-gray-500" colSpan={6}>Sin usuarios</td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </CollapsibleCard>
           </>
         ) : (
-          <div className="card">
+          <CollapsibleCard
+            sectionId={CONFIG_SECTION_IDS.USERS}
+            title="Usuarios"
+            isOpen={!!openSections[CONFIG_SECTION_IDS.USERS]}
+            onToggle={toggleSection}
+          >
             <p className="text-sm text-gray-600">
               La gestion de usuarios y permisos queda reservada para perfiles con edicion de configuracion.
             </p>
-          </div>
+          </CollapsibleCard>
         )}
 
         {err ? <p className="text-sm text-red-700">{err}</p> : null}

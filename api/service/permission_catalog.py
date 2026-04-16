@@ -42,7 +42,6 @@ PERMISSION_CODES_SET = set(PERMISSION_CODES)
 ROLE_DEFAULTS = {
     'admin': {
         **{code: True for code in PERMISSION_CODES},
-        'action.config.online_credentials': False,
     },
     'empleado': {
         'page.pos': True,

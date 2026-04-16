@@ -8,6 +8,7 @@ import {
   getRetailOnlineFailedJobsSummary,
   getSystemUpdateStatus,
   postSystemUpdateCheck,
+  postSystemUpdateRestart,
 } from './lib/api';
 import { isAdmin } from './lib/authz';
 import { can, PERMISSION_CODES } from './lib/permissions';
@@ -36,6 +37,7 @@ export default function App() {
   const [onlineAlertCount, setOnlineAlertCount] = useState(0);
   const [updateStatus, setUpdateStatus] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [restartBusy, setRestartBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
 
   useEffect(() => {
@@ -116,6 +118,7 @@ export default function App() {
     if (!user) {
       setUpdateStatus(null);
       setUpdateMessage('');
+      setRestartBusy(false);
       return undefined;
     }
 
@@ -191,7 +194,7 @@ export default function App() {
   };
 
   const handleManualUpdateCheck = async () => {
-    if (!admin || updateBusy) return;
+    if (!admin || updateBusy || restartBusy) return;
     setUpdateBusy(true);
     setUpdateMessage('');
     try {
@@ -209,6 +212,35 @@ export default function App() {
       setUpdateMessage(err?.data?.last_error || err?.message || 'No se pudo buscar actualizaciones.');
     } finally {
       setUpdateBusy(false);
+    }
+  };
+
+  const handleRestartForUpdate = async () => {
+    if (!admin || !showPendingUpdate || updateBusy || restartBusy) return;
+    const confirmed = window.confirm(
+      'Se reiniciara RetailHub para aplicar la actualizacion pendiente. Deseas continuar?',
+    );
+    if (!confirmed) return;
+
+    setRestartBusy(true);
+    setUpdateMessage('');
+    try {
+      const payload = await postSystemUpdateRestart({});
+      if (payload && typeof payload === 'object') {
+        setUpdateStatus((prev) => ({ ...(prev || {}), ...payload }));
+      }
+      if (payload?.ok && payload?.scheduled) {
+        setUpdateMessage('Reinicio programado. RetailHub se reiniciara en unos segundos para aplicar la actualizacion.');
+      } else {
+        setUpdateMessage(payload?.last_error || 'No se pudo programar el reinicio para actualizar.');
+      }
+    } catch (err) {
+      if (err?.data && typeof err.data === 'object') {
+        setUpdateStatus((prev) => ({ ...(prev || {}), ...err.data }));
+      }
+      setUpdateMessage(err?.data?.last_error || err?.message || 'No se pudo programar el reinicio para actualizar.');
+    } finally {
+      setRestartBusy(false);
     }
   };
 
@@ -294,11 +326,21 @@ export default function App() {
                     {admin ? (
                       <button
                         type="button"
-                        disabled={updateBusy}
+                        disabled={updateBusy || restartBusy}
                         onClick={handleManualUpdateCheck}
                         className="mx-3 my-2 rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {updateBusy ? 'Buscando...' : 'Buscar actualizaciones'}
+                      </button>
+                    ) : null}
+                    {admin && showPendingUpdate ? (
+                      <button
+                        type="button"
+                        disabled={restartBusy || updateBusy}
+                        onClick={handleRestartForUpdate}
+                        className="mx-3 mb-2 rounded-md border border-amber-400 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {restartBusy ? 'Programando reinicio...' : 'Reiniciar y actualizar'}
                       </button>
                     ) : null}
                     {updateMessage ? <div className="px-3 pb-2 text-xs text-neutral-600">{updateMessage}</div> : null}

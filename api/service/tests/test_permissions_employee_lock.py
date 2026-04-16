@@ -99,6 +99,7 @@ class EmpleadoPermissionLockTests(unittest.TestCase):
         self.assertTrue(admin.get('action.postventa.credito_tienda'))
         self.assertTrue(admin.get('action.inventario.conteo'))
         self.assertTrue(admin.get('action.alertas.gestionar'))
+        self.assertTrue(admin.get('action.config.online_credentials'))
 
 
 class RetailVentaOperacionSolicitudViewTests(unittest.TestCase):
