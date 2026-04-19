@@ -23,7 +23,7 @@ VIEW_PERMISSION_MATRIX = {
     'RetailVarianteBarcodeGenerateView': {'POST': 'action.config.editar'},
     'RetailVarianteBarcodeAssociateView': {'POST': 'action.config.editar'},
     'RetailVarianteBarcodePrimaryView': {'POST': 'action.config.editar'},
-    'RetailVarianteBarcodeLabelsPdfView': {'GET': 'page.productos'},
+    'RetailVarianteBarcodeLabelsPdfView': {'GET': ['page.productos', 'page.compras']},
 
     # Compras / caja
     'RetailComprasConfigView': {'GET': 'page.compras'},

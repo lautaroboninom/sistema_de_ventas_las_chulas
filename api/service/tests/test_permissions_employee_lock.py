@@ -53,7 +53,7 @@ class EmpleadoPermissionLockTests(unittest.TestCase):
         )
         self.assertEqual(
             VIEW_PERMISSION_MATRIX.get('RetailVarianteBarcodeLabelsPdfView', {}).get('GET'),
-            'page.productos',
+            ['page.productos', 'page.compras'],
         )
         self.assertEqual(
             VIEW_PERMISSION_MATRIX.get('RetailVentaOperacionSolicitudView', {}).get('POST'),

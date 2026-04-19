@@ -2570,9 +2570,10 @@ class RetailVarianteDetailView(APIView):
             if sync_price or sync_stock or sync_catalog:
                 _tiendanube_schedule_local_variants_sync(
                     [variante_id],
-                    # Con sync_catalog forzamos ensure-mapping aunque no haya cambio de precio.
-                    sync_price=(sync_price or sync_catalog),
+                    # sync_catalog actualiza estructura de atributos/valores/SKU en remoto.
+                    sync_price=sync_price,
                     sync_stock=sync_stock,
+                    sync_catalog=sync_catalog,
                     reason='variant_patch',
                 )
 
@@ -3154,11 +3155,10 @@ class RetailComprasView(APIView):
         if not isinstance(items, list) or not items:
             raise ValidationError('items requerido')
         cfg = q('SELECT purchase_default_markup_pct FROM retail_settings WHERE id=1', one=True) or {}
-        suggested_markup_pct = _to_decimal(cfg.get('purchase_default_markup_pct') or 100, 'purchase_default_markup_pct', allow_none=True) or Decimal('100')
-        if suggested_markup_pct < 0:
-            suggested_markup_pct = Decimal('100')
-        suggested_markup_pct = suggested_markup_pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
-        suggested_ratio = (Decimal('1.00') + (suggested_markup_pct / Decimal('100.00')))
+        default_suggested_markup_pct = _to_decimal(cfg.get('purchase_default_markup_pct') or 100, 'purchase_default_markup_pct', allow_none=True) or Decimal('100')
+        if default_suggested_markup_pct < 0:
+            default_suggested_markup_pct = Decimal('100')
+        default_suggested_markup_pct = default_suggested_markup_pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
 
         purchase_id = exec_returning(
             '''
@@ -3193,7 +3193,14 @@ class RetailComprasView(APIView):
                 raise ValidationError('unit_cost_currency no puede ser negativo')
             unit_cost_ars = unit_cost_currency if currency == 'ARS' else (unit_cost_currency * fx_rate)
             unit_cost_ars = unit_cost_ars.quantize(FOUR_DEC, rounding=ROUND_HALF_UP)
-            unit_price_suggested_ars = (unit_cost_ars * suggested_ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            item_suggested_markup_pct = _to_decimal(item.get('suggested_markup_pct'), 'suggested_markup_pct', allow_none=True)
+            if item_suggested_markup_pct is None:
+                item_suggested_markup_pct = default_suggested_markup_pct
+            if item_suggested_markup_pct < 0:
+                raise ValidationError('suggested_markup_pct no puede ser negativo')
+            item_suggested_markup_pct = item_suggested_markup_pct.quantize(TWO_DEC, rounding=ROUND_HALF_UP)
+            item_suggested_ratio = (Decimal('1.00') + (item_suggested_markup_pct / Decimal('100.00')))
+            unit_price_suggested_ars = (unit_cost_ars * item_suggested_ratio).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
             unit_price_final_ars = _money(
                 item.get('unit_price_final_ars')
                 or item.get('precio_final_ars')
@@ -3229,7 +3236,7 @@ class RetailComprasView(APIView):
                   unit_price_suggested_ars, unit_price_final_ars, real_margin_pct,
                   line_total_ars
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ''',
                 [
                     purchase_id,
@@ -3237,7 +3244,7 @@ class RetailComprasView(APIView):
                     qty,
                     unit_cost_currency,
                     unit_cost_ars,
-                    suggested_markup_pct,
+                    item_suggested_markup_pct,
                     unit_price_suggested_ars,
                     unit_price_final_ars,
                     real_margin_pct,
@@ -8067,7 +8074,7 @@ def _tiendanube_extract_size_color(option_values):
 def _tiendanube_extract_variant_attributes(option_values):
     size_tokens = {'talle', 'size', 'tamano'}
     color_tokens = {'color', 'colour'}
-    out = {'color': None, 'attributes': []}
+    out = {'attributes': []}
     seen = set()
 
     for opt in option_values or []:
@@ -8085,17 +8092,17 @@ def _tiendanube_extract_variant_attributes(option_values):
         token = code_token or name_token
 
         if code_token in color_tokens or name_token in color_tokens:
-            if not out['color']:
-                out['color'] = value
-            continue
-
-        display_name = raw_name or raw_code
-        if not display_name:
-            continue
-        if code_token in size_tokens or name_token in size_tokens:
+            display_name = 'Color'
+            key = 'color'
+        elif code_token in size_tokens or name_token in size_tokens:
             display_name = 'Talle'
+            key = 'talle'
+        else:
+            display_name = raw_name or raw_code
+            if not display_name:
+                continue
+            key = token or _tiendanube_option_token(display_name)
 
-        key = token or _tiendanube_option_token(display_name)
         if key and key in seen:
             continue
         if key:
@@ -8104,18 +8111,6 @@ def _tiendanube_extract_variant_attributes(option_values):
         out['attributes'].append({'name': display_name, 'value': value})
 
     return out
-
-
-def _tiendanube_product_name_with_color(base_name, color_value):
-    name = _clean_text(base_name) or 'Producto RH'
-    color = _clean_text(color_value)
-    if not color:
-        return name
-    name_token = _tiendanube_option_token(name)
-    color_token = _tiendanube_option_token(color)
-    if color_token and color_token in name_token:
-        return name
-    return f'{name} {color}'.strip()
 
 
 def _tiendanube_build_create_product_payload_from_local_variant(local_variant):
@@ -8127,7 +8122,7 @@ def _tiendanube_build_create_product_payload_from_local_variant(local_variant):
     options = row.get('option_values') or []
     attributes_info = _tiendanube_extract_variant_attributes(options)
     name_base = _clean_text(row.get('producto')) or _clean_text(row.get('display_name')) or f"Producto RH {row.get('id') or _random_suffix(4)}"
-    product_name = _tiendanube_product_name_with_color(name_base, attributes_info.get('color'))
+    product_name = name_base
 
     price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
     cost = _to_decimal(row.get('cost_avg_ars') or 0, 'cost_avg_ars', allow_none=True) or Decimal('0')
@@ -8159,6 +8154,67 @@ def _tiendanube_build_create_product_payload_from_local_variant(local_variant):
         variant_payload['values'] = [{'es': item['value']} for item in attrs]
 
     return payload
+
+
+def _tiendanube_sync_remote_catalog_for_local_variant(
+    cfg,
+    local_variant,
+    *,
+    product_id_remote=None,
+    variant_id_remote=None,
+):
+    row = local_variant if isinstance(local_variant, dict) else {}
+    product_id = _safe_int(product_id_remote or row.get('tiendanube_product_id'))
+    variant_id = _safe_int(variant_id_remote or row.get('tiendanube_variant_id'))
+    if not product_id or not variant_id:
+        raise ValidationError('Variante local sin mapping remoto para sync de catalogo')
+
+    payload = _tiendanube_build_create_product_payload_from_local_variant(row)
+    remote_product = _tiendanube_request(
+        cfg,
+        'GET',
+        f'products/{product_id}',
+        timeout_cap=20,
+        allow_404=True,
+    )
+    if remote_product is None:
+        raise ValidationError(f'Producto remoto no encontrado (product_id={product_id})')
+
+    remote_variants = [v for v in _tiendanube_listify((remote_product or {}).get('variants')) if isinstance(v, dict)]
+    if len(remote_variants) > 1:
+        raise ValidationError(
+            f'No se sincroniza catalogo estructural en producto remoto con multiples variantes (product_id={product_id})'
+        )
+
+    remote_variant_ids = {_safe_int(v.get('id')) for v in remote_variants if _safe_int(v.get('id'))}
+    if variant_id not in remote_variant_ids:
+        raise ValidationError(
+            f'Variante remota no encontrada en producto remoto (product_id={product_id}, variant_id={variant_id})'
+        )
+
+    _tiendanube_request(
+        cfg,
+        'PUT',
+        f'products/{product_id}',
+        payload={
+            'id': product_id,
+            'name': payload.get('name') or {'es': _clean_text(row.get('producto')) or 'Producto RH'},
+            'published': bool(payload.get('published')),
+            'attributes': payload.get('attributes') or [],
+        },
+        timeout_cap=20,
+    )
+    variant_payload = dict((_tiendanube_listify(payload.get('variants')) or [{}])[0] or {})
+    variant_payload['id'] = variant_id
+    _tiendanube_request(
+        cfg,
+        'PUT',
+        f'products/{product_id}/variants/{variant_id}',
+        payload=variant_payload,
+        timeout_cap=20,
+    )
+
+    return {'ok': True, 'product_id': product_id, 'variant_id': variant_id}
 
 
 def _tiendanube_pick_variant_id_by_sku(remote_product, sku):
@@ -8557,7 +8613,7 @@ def _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=False, sync_stock=Fal
     return {'synced': len(synced_local), 'failed': len(failed_local), 'errors': errors}
 
 
-def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, sync_stock=False, reason='manual'):
+def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, sync_stock=False, sync_catalog=False, reason='manual'):
     ids = []
     seen = set()
     for raw_id in local_variant_ids or []:
@@ -8568,7 +8624,7 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
         ids.append(vid)
     if not ids:
         return {'synced': 0, 'failed': 0, 'errors': []}
-    if not (sync_price or sync_stock):
+    if not (sync_price or sync_stock or sync_catalog):
         return {'synced': 0, 'failed': 0, 'errors': []}
 
     cfg = _tiendanube_cfg()
@@ -8577,9 +8633,12 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
 
     rows = q(
         '''
-        SELECT v.id, v.sku, v.stock_on_hand, v.price_online_ars,
+        SELECT v.id, v.sku, v.barcode_internal, v.display_name, v.active,
+               v.stock_on_hand, v.price_online_ars, v.cost_avg_ars,
+               p.name AS producto,
                v.tiendanube_product_id, v.tiendanube_variant_id
         FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
         WHERE v.id = ANY(%s)
           AND v.active=TRUE
         ORDER BY v.id
@@ -8589,43 +8648,89 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
     if not rows:
         return {'synced': 0, 'failed': 0, 'errors': []}
 
+    if sync_catalog:
+        opt_rows = q(
+            '''
+            SELECT ov.variant_id, a.code AS attribute_code, a.name AS attribute_name, ov.option_value
+            FROM retail_variant_option_values ov
+            JOIN retail_variant_attributes a ON a.id=ov.attribute_id
+            WHERE ov.variant_id = ANY(%s)
+            ORDER BY ov.variant_id, a.sort_order, a.code
+            ''',
+            [ids],
+        ) or []
+        by_variant = {}
+        for opt in opt_rows:
+            by_variant.setdefault(opt['variant_id'], []).append(opt)
+        for row in rows:
+            row['option_values'] = by_variant.get(row['id'], [])
+
     mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason=reason)
+    catalog_synced = 0
+    catalog_failed = 0
+    catalog_errors = []
+    if sync_catalog:
+        for row in rows:
+            pid = _safe_int(row.get('tiendanube_product_id'))
+            vid = _safe_int(row.get('tiendanube_variant_id'))
+            if not pid or not vid:
+                continue
+            try:
+                _tiendanube_sync_remote_catalog_for_local_variant(
+                    cfg,
+                    row,
+                    product_id_remote=pid,
+                    variant_id_remote=vid,
+                )
+                catalog_synced += 1
+            except ValidationError as exc:
+                catalog_failed += 1
+                sku = _clean_text(row.get('sku')) or f"variante {row.get('id')}"
+                catalog_errors.append(f'SKU {sku}: {exc}')
+            except Exception as exc:
+                catalog_failed += 1
+                sku = _clean_text(row.get('sku')) or f"variante {row.get('id')}"
+                catalog_errors.append(f'SKU {sku}: {exc}')
+
     ops = []
-    for row in rows:
-        pid = _safe_int(row.get('tiendanube_product_id'))
-        vid = _safe_int(row.get('tiendanube_variant_id'))
-        if not pid or not vid:
-            continue
-        payload = {
-            'local_variant_id': _safe_int(row.get('id')),
-            'product_id': pid,
-            'variant_id': vid,
-        }
-        if sync_price:
-            price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
-            payload['price'] = float(price.quantize(TWO_DEC, rounding=ROUND_HALF_UP))
-        if sync_stock:
-            payload['stock'] = max(0, int(_safe_int(row.get('stock_on_hand')) or 0))
-        ops.append(payload)
+    if sync_price or sync_stock:
+        for row in rows:
+            pid = _safe_int(row.get('tiendanube_product_id'))
+            vid = _safe_int(row.get('tiendanube_variant_id'))
+            if not pid or not vid:
+                continue
+            payload = {
+                'local_variant_id': _safe_int(row.get('id')),
+                'product_id': pid,
+                'variant_id': vid,
+            }
+            if sync_price:
+                price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
+                payload['price'] = float(price.quantize(TWO_DEC, rounding=ROUND_HALF_UP))
+            if sync_stock:
+                payload['stock'] = max(0, int(_safe_int(row.get('stock_on_hand')) or 0))
+            ops.append(payload)
 
     if not ops:
         pending = int(mapping_info.get('pending_mapping') or 0)
-        errors = list(mapping_info.get('errors') or [])
+        errors = list(mapping_info.get('errors') or []) + list(catalog_errors)
         if pending > 0 and not errors:
             errors = [f'{pending} variantes sin mapping Tienda Nube']
         return {
-            'synced': 0,
-            'failed': pending,
+            'synced': catalog_synced,
+            'failed': pending + catalog_failed,
             'errors': _tiendanube_dedup_errors(errors),
             'created_remote': int(mapping_info.get('created_remote') or 0),
             'creation_failed': int(mapping_info.get('creation_failed') or 0),
+            'catalog_synced': catalog_synced,
+            'catalog_failed': catalog_failed,
         }
 
     result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=sync_price, sync_stock=sync_stock)
     pending = int(mapping_info.get('pending_mapping') or 0)
-    sync_errors = list(mapping_info.get('errors') or []) + list(result.get('errors') or [])
+    sync_errors = list(mapping_info.get('errors') or []) + list(result.get('errors') or []) + list(catalog_errors)
     dedup = _tiendanube_dedup_errors(sync_errors)
-    failed_total = int(result.get('failed') or 0) + pending
+    failed_total = int(result.get('failed') or 0) + pending + catalog_failed
 
     if dedup:
         security_logger.warning(
@@ -8640,10 +8745,12 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
         'errors': dedup,
         'created_remote': int(mapping_info.get('created_remote') or 0),
         'creation_failed': int(mapping_info.get('creation_failed') or 0),
+        'catalog_synced': catalog_synced,
+        'catalog_failed': catalog_failed,
     }
 
 
-def _tiendanube_schedule_local_variants_sync(local_variant_ids, *, sync_price=False, sync_stock=False, reason='auto'):
+def _tiendanube_schedule_local_variants_sync(local_variant_ids, *, sync_price=False, sync_stock=False, sync_catalog=False, reason='auto'):
     ids = []
     seen = set()
     for raw_id in local_variant_ids or []:
@@ -8654,7 +8761,7 @@ def _tiendanube_schedule_local_variants_sync(local_variant_ids, *, sync_price=Fa
         ids.append(vid)
     if not ids:
         return
-    if not (sync_price or sync_stock):
+    if not (sync_price or sync_stock or sync_catalog):
         return
 
     def _runner():
@@ -8663,6 +8770,7 @@ def _tiendanube_schedule_local_variants_sync(local_variant_ids, *, sync_price=Fa
                 ids,
                 sync_price=sync_price,
                 sync_stock=sync_stock,
+                sync_catalog=sync_catalog,
                 reason=reason,
             )
         except Exception as exc:

@@ -4,6 +4,7 @@ import {
   getRetailComprasConfig,
   getRetailComprasProveedores,
   getRetailProductos,
+  getRetailVarianteBarcodeLabelsUrl,
   getRetailVariantes,
   postRetailCompra,
   postRetailProducto,
@@ -14,14 +15,71 @@ function errMsg(error) {
   return error?.message || 'Ocurrio un error inesperado';
 }
 
-const EMPTY_ITEM = {
-  variant_id: '',
-  variant_query: '',
-  variant_name: '',
-  quantity: '1',
-  unit_cost_currency: '',
-  unit_price_final_ars: '',
+function parseNum(value) {
+  if (value == null) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+const BARCODE_PRINT_PREFS_KEY = 'las_chulas_barcode_print_prefs_v1';
+const PRINT_LAYOUTS = {
+  A4: 'a4_grid',
+  THERMAL: 'thermal_custom',
 };
+const DEFAULT_PRINT_PREFS = {
+  layout: PRINT_LAYOUTS.THERMAL,
+  labelWidthMm: '50',
+  labelHeightMm: '30',
+};
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizePrintLayout(value) {
+  return value === PRINT_LAYOUTS.A4 ? PRINT_LAYOUTS.A4 : PRINT_LAYOUTS.THERMAL;
+}
+
+function normalizePrintMm(value, fallback) {
+  const n = clampNumber(value, 10, 200, Number(fallback));
+  return String(Math.round((n + Number.EPSILON) * 100) / 100);
+}
+
+function normalizeBarcodePrintPrefs(raw) {
+  const source = raw || {};
+  return {
+    layout: normalizePrintLayout(source.layout),
+    labelWidthMm: normalizePrintMm(source.labelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm),
+    labelHeightMm: normalizePrintMm(source.labelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm),
+  };
+}
+
+function loadBarcodePrintPrefs() {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return { ...DEFAULT_PRINT_PREFS };
+    const raw = window.localStorage.getItem(BARCODE_PRINT_PREFS_KEY);
+    if (!raw) return { ...DEFAULT_PRINT_PREFS };
+    return normalizeBarcodePrintPrefs(JSON.parse(raw));
+  } catch (_error) {
+    return { ...DEFAULT_PRINT_PREFS };
+  }
+}
+
+function makeEmptyItem(markupPct = '') {
+  return {
+    variant_id: '',
+    variant_query: '',
+    variant_name: '',
+    barcode_internal: '',
+    quantity: '1',
+    unit_cost_currency: '',
+    suggested_markup_pct: markupPct === '' ? '' : String(markupPct),
+    unit_price_final_ars: '',
+  };
+}
 
 const EMPTY_CREATE_PRODUCT = {
   name: '',
@@ -100,11 +158,19 @@ function payloadItems(items) {
     if (!Number.isFinite(finalPrice) || finalPrice < 0) {
       throw new Error(`Precio final invalido en la fila ${idx + 1}`);
     }
+    const suggestedMarkupPct = parseNum(it.suggested_markup_pct);
+    if (suggestedMarkupPct == null) {
+      throw new Error(`Margen objetivo invalido en la fila ${idx + 1}`);
+    }
+    if (suggestedMarkupPct < 0) {
+      throw new Error(`Margen objetivo no puede ser negativo en la fila ${idx + 1}`);
+    }
 
     return {
       variant_id: variantId,
       quantity,
       unit_cost_currency: unitCost,
+      suggested_markup_pct: suggestedMarkupPct,
       unit_price_final_ars: finalPrice,
     };
   });
@@ -119,7 +185,7 @@ export default function ComprasPage() {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
 
-  const [items, setItems] = useState([{ ...EMPTY_ITEM }]);
+  const [items, setItems] = useState([makeEmptyItem()]);
 
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
@@ -186,9 +252,38 @@ export default function ComprasPage() {
         const cfg = await getRetailComprasConfig();
         if (cancelled) return;
         const pct = Number(cfg?.purchase_default_markup_pct);
-        setDefaultMarkupPct(Number.isFinite(pct) && pct >= 0 ? pct : 100);
+        const nextDefaultPct = Number.isFinite(pct) && pct >= 0 ? pct : 100;
+        setDefaultMarkupPct(nextDefaultPct);
+        setItems((prev) => {
+          const markupTxt = nextDefaultPct.toFixed(2);
+          let changed = false;
+          const next = prev.map((row) => {
+            if (String(row?.suggested_markup_pct ?? '').trim() !== '') return row;
+            changed = true;
+            return {
+              ...row,
+              suggested_markup_pct: markupTxt,
+              unit_price_final_ars: row.unit_price_final_ars || '0.00',
+            };
+          });
+          return changed ? next : prev;
+        });
       } catch {
-        if (!cancelled) setDefaultMarkupPct(100);
+        if (cancelled) return;
+        setDefaultMarkupPct(100);
+        setItems((prev) => {
+          let changed = false;
+          const next = prev.map((row) => {
+            if (String(row?.suggested_markup_pct ?? '').trim() !== '') return row;
+            changed = true;
+            return {
+              ...row,
+              suggested_markup_pct: '100.00',
+              unit_price_final_ars: row.unit_price_final_ars || '0.00',
+            };
+          });
+          return changed ? next : prev;
+        });
       }
     })();
     return () => {
@@ -265,8 +360,15 @@ export default function ComprasPage() {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
   }
 
+  function newItemFromGeneralMarkup() {
+    return {
+      ...makeEmptyItem(toNum(defaultMarkupPct).toFixed(2)),
+      unit_price_final_ars: '0.00',
+    };
+  }
+
   function addItem() {
-    setItems((prev) => [...prev, { ...EMPTY_ITEM }]);
+    setItems((prev) => [...prev, newItemFromGeneralMarkup()]);
   }
 
   function removeItem(idx) {
@@ -289,8 +391,12 @@ export default function ComprasPage() {
   }
 
   function toNum(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : 0;
+    const n = parseNum(value);
+    return n == null ? 0 : n;
+  }
+
+  function toFixed2(value) {
+    return toNum(value).toFixed(2);
   }
 
   function fmtMoney(value) {
@@ -306,17 +412,40 @@ export default function ComprasPage() {
     }
   }
 
-  function itemUnitCostArs(item) {
+  function itemUnitCostArs(item, ctx = {}) {
     const base = toNum(item?.unit_cost_currency);
-    if (currencyCode === 'USD') {
-      return base * toNum(fxRate);
+    const effectiveCurrency = ctx.currencyCode || currencyCode;
+    if (effectiveCurrency === 'USD') {
+      return base * toNum(ctx.fxRate ?? fxRate);
     }
     return base;
   }
 
+  function itemSuggestedMarkupPct(item) {
+    const pct = parseNum(item?.suggested_markup_pct);
+    if (pct != null) return pct;
+    return toNum(defaultMarkupPct);
+  }
+
+  function calcFinalFromMarkup(item, ctx = {}) {
+    const unitCostArs = itemUnitCostArs(item, ctx);
+    const markupPct = itemSuggestedMarkupPct(item);
+    return (unitCostArs * (1 + (markupPct / 100)));
+  }
+
+  function recalcFinalPriceKeepingMarkup(item, ctx = {}) {
+    const nextPrice = toFixed2(calcFinalFromMarkup(item, ctx));
+    if (String(item?.unit_price_final_ars || '') === nextPrice) {
+      return item;
+    }
+    return {
+      ...item,
+      unit_price_final_ars: nextPrice,
+    };
+  }
+
   function itemSuggestedPrice(item) {
-    const unitCostArs = itemUnitCostArs(item);
-    return unitCostArs * (1 + (toNum(defaultMarkupPct) / 100));
+    return calcFinalFromMarkup(item);
   }
 
   function itemMarginPct(item) {
@@ -326,11 +455,127 @@ export default function ComprasPage() {
     return ((finalPrice - unitCostArs) / unitCostArs) * 100;
   }
 
+  function applyGeneralMarkupToAll() {
+    const generalMarkupTxt = toFixed2(defaultMarkupPct);
+    setItems((prev) =>
+      prev.map((item) =>
+        recalcFinalPriceKeepingMarkup(
+          {
+            ...item,
+            suggested_markup_pct: generalMarkupTxt,
+          },
+        )
+      )
+    );
+  }
+
+  function onItemCostChange(idx, value) {
+    setItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        return recalcFinalPriceKeepingMarkup({
+          ...item,
+          unit_cost_currency: value,
+        });
+      })
+    );
+  }
+
+  function onItemMarkupChange(idx, value) {
+    setItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        return recalcFinalPriceKeepingMarkup({
+          ...item,
+          suggested_markup_pct: value,
+        });
+      })
+    );
+  }
+
+  function onItemFinalPriceChange(idx, value) {
+    setItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        const next = {
+          ...item,
+          unit_price_final_ars: value,
+        };
+        const finalPrice = parseNum(value);
+        if (finalPrice == null) {
+          return next;
+        }
+        const unitCostArs = itemUnitCostArs(next);
+        const nextMarkupPct = unitCostArs > 0 ? ((finalPrice - unitCostArs) / unitCostArs) * 100 : 0;
+        return {
+          ...next,
+          suggested_markup_pct: toFixed2(nextMarkupPct),
+        };
+      })
+    );
+  }
+
+  function itemPrintCopies(item) {
+    const qtyRaw = parseNum(item?.quantity);
+    if (qtyRaw == null) return null;
+    const qtyInt = Math.trunc(qtyRaw);
+    if (!Number.isFinite(qtyInt) || qtyInt <= 0) return null;
+    return Math.min(qtyInt, 200);
+  }
+
+  function canPrintItemLabel(item) {
+    const variantId = Number(item?.variant_id);
+    return Number.isInteger(variantId) && variantId > 0 && itemPrintCopies(item) != null;
+  }
+
+  function onPrintItemLabel(idx) {
+    setErr('');
+    const item = items[idx] || {};
+    const variantId = Number(item?.variant_id);
+    if (!Number.isInteger(variantId) || variantId <= 0) {
+      setErr(`Selecciona una variante valida en la fila ${idx + 1} para imprimir etiqueta.`);
+      return;
+    }
+    const copies = itemPrintCopies(item);
+    if (copies == null) {
+      setErr(`Cantidad invalida en la fila ${idx + 1} para imprimir etiqueta.`);
+      return;
+    }
+    const prefs = loadBarcodePrintPrefs();
+    const layout = normalizePrintLayout(prefs.layout);
+    const params = {
+      scope: 'primary',
+      copies,
+      layout,
+    };
+    if (layout === PRINT_LAYOUTS.THERMAL) {
+      params.label_width_mm = normalizePrintMm(prefs.labelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm);
+      params.label_height_mm = normalizePrintMm(prefs.labelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm);
+    }
+    const url = getRetailVarianteBarcodeLabelsUrl(variantId, {
+      ...params,
+    });
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  useEffect(() => {
+    setItems((prev) => {
+      let changed = false;
+      const next = prev.map((item) => {
+        const updated = recalcFinalPriceKeepingMarkup(item, { currencyCode, fxRate });
+        if (updated !== item) changed = true;
+        return updated;
+      });
+      return changed ? next : prev;
+    });
+  }, [currencyCode, fxRate]);
+
   function onVariantQueryChange(idx, value) {
     updateItem(idx, {
       variant_query: value,
       variant_id: '',
       variant_name: '',
+      barcode_internal: '',
     });
     setLookupIndex(idx);
   }
@@ -341,6 +586,7 @@ export default function ComprasPage() {
       variant_id: String(row.id),
       variant_name: name,
       variant_query: name,
+      barcode_internal: String(row?.barcode_internal || '').trim(),
     });
     setLookupRows([]);
     setLookupIndex(null);
@@ -499,7 +745,7 @@ export default function ComprasPage() {
       setFxRate('');
       setInvoiceNumber('');
       setNotes('');
-      setItems([{ ...EMPTY_ITEM }]);
+      setItems([newItemFromGeneralMarkup()]);
       setLookupIndex(null);
       setLookupRows([]);
       fetchSuppliers(suppliersQuery);
@@ -558,12 +804,33 @@ export default function ComprasPage() {
         </div>
 
         <div className="space-y-2">
-          <p className="text-xs text-gray-500">
-            Margen general activo: <strong>{defaultMarkupPct}%</strong> (precio sugerido).
-          </p>
+          <div className="flex flex-wrap items-end gap-2">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Margen general (%)</label>
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="0.01"
+                value={defaultMarkupPct}
+                onChange={(e) => setDefaultMarkupPct(toNum(e.target.value))}
+              />
+            </div>
+            <button
+              type="button"
+              className="px-3 py-2 rounded border"
+              onClick={applyGeneralMarkupToAll}
+            >
+              Aplicar margen general a todos
+            </button>
+            <p className="text-xs text-gray-500">
+              El margen general es local a esta pantalla y no cambia la configuracion global.
+            </p>
+          </div>
           <h2 className="text-lg font-semibold">Items</h2>
           {items.map((it, idx) => {
             const marginPct = itemMarginPct(it);
+            const printCopies = itemPrintCopies(it);
             return (
             <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start rounded border border-gray-200 p-2">
               <div className="md:col-span-1">
@@ -576,7 +843,7 @@ export default function ComprasPage() {
                 />
               </div>
 
-              <div className="md:col-span-3 relative">
+              <div className="md:col-span-2 relative">
                 <label className="block text-xs text-gray-500 mb-1">Nombre variante</label>
                 <input
                   className="input"
@@ -639,6 +906,24 @@ export default function ComprasPage() {
               </div>
 
               <div className="md:col-span-1">
+                <label className="block text-xs text-gray-500 mb-1">Codigo de barras</label>
+                <input
+                  className="input bg-gray-100 text-gray-500"
+                  value={it.barcode_internal || '-'}
+                  readOnly
+                  disabled
+                />
+                <button
+                  type="button"
+                  className="mt-1 w-full px-2 py-1 rounded border text-xs font-semibold hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => onPrintItemLabel(idx)}
+                  disabled={!canPrintItemLabel(it)}
+                >
+                  {printCopies ? `Imprimir etiqueta (${printCopies})` : 'Imprimir etiqueta'}
+                </button>
+              </div>
+
+              <div className="md:col-span-1">
                 <label className="block text-xs text-gray-500 mb-1">Cantidad</label>
                 <input
                   className="input"
@@ -660,7 +945,7 @@ export default function ComprasPage() {
                   step="0.0001"
                   placeholder="Costo en moneda"
                   value={it.unit_cost_currency}
-                  onChange={(e) => updateItem(idx, { unit_cost_currency: e.target.value })}
+                  onChange={(e) => onItemCostChange(idx, e.target.value)}
                   required
                 />
               </div>
@@ -668,6 +953,19 @@ export default function ComprasPage() {
               <div className="md:col-span-1">
                 <label className="block text-xs text-gray-500 mb-1">Costo ARS</label>
                 <input className="input bg-gray-100 text-gray-500" value={fmtMoney(itemUnitCostArs(it))} readOnly disabled />
+              </div>
+
+              <div className="md:col-span-1">
+                <label className="block text-xs text-gray-500 mb-1">Margen objetivo</label>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={it.suggested_markup_pct}
+                  onChange={(e) => onItemMarkupChange(idx, e.target.value)}
+                  required
+                />
               </div>
 
               <div className="md:col-span-1">
@@ -684,7 +982,7 @@ export default function ComprasPage() {
                   step="0.01"
                   placeholder="ARS"
                   value={it.unit_price_final_ars}
-                  onChange={(e) => updateItem(idx, { unit_price_final_ars: e.target.value })}
+                  onChange={(e) => onItemFinalPriceChange(idx, e.target.value)}
                   required
                 />
               </div>
