@@ -6,10 +6,13 @@ import {
   getRetailProductos,
   getRetailVarianteBarcodeLabelsUrl,
   getRetailVariantes,
+  patchRetailProducto,
+  patchRetailVariante,
   postRetailCompra,
   postRetailProducto,
   postRetailVariante,
 } from '../lib/api';
+import VariantBatchCreator from '../components/VariantBatchCreator';
 
 function errMsg(error) {
   return error?.message || 'Ocurrio un error inesperado';
@@ -98,6 +101,28 @@ const EMPTY_CREATE_VARIANT = {
   stock_min: '0',
 };
 
+const EMPTY_CREATE_PRODUCT_EDIT = {
+  id: '',
+  name: '',
+  sku_prefix: '',
+  active: true,
+};
+
+const EMPTY_CREATE_VARIANT_EDIT = {
+  id: '',
+  sku: '',
+  barcode_internal: '',
+  price_store_ars: '0',
+  price_online_ars: '0',
+  stock_min: '0',
+  active: true,
+};
+
+const EMPTY_QUICK_ATTR_ROW = {
+  attribute_code: '',
+  values_text: '',
+};
+
 function variantName(row) {
   const producto = String(row?.producto || row?.display_name || '').trim();
   const firma = String(row?.option_signature || '').trim();
@@ -136,6 +161,118 @@ function buildOptionValues(rows) {
   }
 
   return out;
+}
+
+function splitValues(raw) {
+  return String(raw || '')
+    .split(/[,\n;]+/)
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+}
+
+function dedupValues(values) {
+  const out = [];
+  const seen = new Set();
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const clean = String(value || '').trim();
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) return;
+    seen.add(key);
+    out.push(clean);
+  });
+  return out;
+}
+
+function cartesianProduct(groups) {
+  if (!groups.length) return [];
+  return groups.reduce(
+    (acc, group) => {
+      const out = [];
+      acc.forEach((partial) => {
+        group.values.forEach((value) => {
+          out.push([...partial, { attribute_code: group.attribute_code, value }]);
+        });
+      });
+      return out;
+    },
+    [[]],
+  );
+}
+
+function normalizeOptionSignature(optionValues) {
+  const normalized = (Array.isArray(optionValues) ? optionValues : [])
+    .map((option) => ({
+      attribute_code: attrCode(option?.attribute_code),
+      value: String(option?.value ?? option?.option_value ?? '')
+        .trim()
+        .toLowerCase(),
+    }))
+    .filter((option) => option.attribute_code && option.value);
+
+  normalized.sort((a, b) =>
+    a.attribute_code.localeCompare(b.attribute_code) || a.value.localeCompare(b.value)
+  );
+  return normalized.map((option) => `${option.attribute_code}=${option.value}`).join('|');
+}
+
+function parseOptionSignature(rawSignature) {
+  const text = String(rawSignature || '').trim();
+  if (!text) return '';
+  const pairs = text
+    .split('|')
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map((token) => {
+      const [left, ...rest] = token.split('=');
+      return {
+        attribute_code: left,
+        value: rest.join('='),
+      };
+    });
+  return normalizeOptionSignature(pairs);
+}
+
+function signatureFromVariantRow(row) {
+  const fromOptions = normalizeOptionSignature(row?.option_values || []);
+  if (fromOptions) return fromOptions;
+  return parseOptionSignature(row?.option_signature);
+}
+
+function variantMatchScore(row, queryText) {
+  const q = String(queryText || '').trim().toLowerCase();
+  if (!q) return 9;
+  const sku = String(row?.sku || '').trim().toLowerCase();
+  const barcode = String(row?.barcode_internal || '').trim().toLowerCase();
+  const product = String(row?.producto || '').trim().toLowerCase();
+  const sig = String(row?.option_signature || '').trim().toLowerCase();
+  if (sku === q || barcode === q) return 0;
+  if (sku.startsWith(q) || barcode.startsWith(q)) return 1;
+  if (sku.includes(q) || barcode.includes(q)) return 2;
+  if (product.startsWith(q) || sig.startsWith(q)) return 3;
+  if (product.includes(q) || sig.includes(q)) return 4;
+  return 8;
+}
+
+function productMatchScore(row, queryText) {
+  const q = String(queryText || '').trim().toLowerCase();
+  if (!q) return 10;
+  const name = String(row?.name || '').trim().toLowerCase();
+  if (name === q) return 0;
+  if (name.startsWith(q)) return 1;
+  if (name.includes(q)) return 2;
+  return 8;
+}
+
+function buildLookupItems(variantRows, productRows, queryText = '') {
+  const variants = (Array.isArray(variantRows) ? variantRows : [])
+    .map((row) => ({ kind: 'variant', key: `v-${row.id}`, score: variantMatchScore(row, queryText), row }))
+    .sort((a, b) => a.score - b.score || Number(a.row?.id || 0) - Number(b.row?.id || 0));
+
+  const products = (Array.isArray(productRows) ? productRows : [])
+    .map((row) => ({ kind: 'product', key: `p-${row.id}`, score: productMatchScore(row, queryText), row }))
+    .sort((a, b) => a.score - b.score || Number(a.row?.id || 0) - Number(b.row?.id || 0));
+
+  return [...variants.slice(0, 25), ...products.slice(0, 15)];
 }
 
 function payloadItems(items) {
@@ -208,8 +345,23 @@ export default function ComprasPage() {
   const [createLoadingData, setCreateLoadingData] = useState(false);
   const [createProductSaving, setCreateProductSaving] = useState(false);
   const [createVariantSaving, setCreateVariantSaving] = useState(false);
+  const [createProductEditForm, setCreateProductEditForm] = useState({ ...EMPTY_CREATE_PRODUCT_EDIT });
+  const [createProductEditSaving, setCreateProductEditSaving] = useState(false);
+  const [createProductVariants, setCreateProductVariants] = useState([]);
+  const [createProductVariantsLoading, setCreateProductVariantsLoading] = useState(false);
+  const [createVariantEditForm, setCreateVariantEditForm] = useState({ ...EMPTY_CREATE_VARIANT_EDIT });
+  const [createVariantEditSaving, setCreateVariantEditSaving] = useState(false);
   const [createErr, setCreateErr] = useState('');
   const [createMsg, setCreateMsg] = useState('');
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [quickTargetIndex, setQuickTargetIndex] = useState(null);
+  const [quickProduct, setQuickProduct] = useState(null);
+  const [quickAttrRows, setQuickAttrRows] = useState([{ ...EMPTY_QUICK_ATTR_ROW }]);
+  const [quickApplying, setQuickApplying] = useState(false);
+  const [quickErr, setQuickErr] = useState('');
+  const [quickMsg, setQuickMsg] = useState('');
+  const [itemsFlowMsg, setItemsFlowMsg] = useState('');
+  const [itemsFlowMsgTone, setItemsFlowMsgTone] = useState('ok');
 
   const moneyFmt = useMemo(
     () =>
@@ -226,7 +378,13 @@ export default function ComprasPage() {
     return String(items[lookupIndex]?.variant_query || '').trim();
   }, [items, lookupIndex]);
 
-  const createBusy = createLoadingData || createProductSaving || createVariantSaving;
+  const createBusy =
+    createLoadingData ||
+    createProductSaving ||
+    createVariantSaving ||
+    createProductEditSaving ||
+    createVariantEditSaving ||
+    createProductVariantsLoading;
 
   async function fetchSuppliers(queryText = '') {
     setSuppliersLoading(true);
@@ -302,24 +460,26 @@ export default function ComprasPage() {
     }
 
     const query = activeLookupQuery;
-    if (!query) {
-      setLookupRows([]);
-      return;
-    }
-
     let cancelled = false;
     const timer = setTimeout(async () => {
       setLookupLoading(true);
       try {
-        const rows = await getRetailVariantes({ q: query, active: 1 });
+        const [variantRows, productRows] = await Promise.all([
+          query
+            ? getRetailVariantes({ q: query, active: 1, limit: 25 })
+            : getRetailVariantes({ active: 1, limit: 25 }),
+          query
+            ? getRetailProductos({ q: query, active: 1, limit: 15 })
+            : getRetailProductos({ active: 1, limit: 15 }),
+        ]);
         if (cancelled) return;
-        setLookupRows(Array.isArray(rows) ? rows.slice(0, 25) : []);
+        setLookupRows(buildLookupItems(variantRows, productRows, query));
       } catch {
         if (!cancelled) setLookupRows([]);
       } finally {
         if (!cancelled) setLookupLoading(false);
       }
-    }, 220);
+    }, query ? 220 : 0);
 
     return () => {
       cancelled = true;
@@ -328,7 +488,7 @@ export default function ComprasPage() {
   }, [activeLookupQuery, lookupIndex]);
 
   useEffect(() => {
-    if (!createOpen) return;
+    if (!createOpen && !quickOpen) return;
     let cancelled = false;
 
     (async () => {
@@ -354,7 +514,45 @@ export default function ComprasPage() {
     return () => {
       cancelled = true;
     };
-  }, [createOpen]);
+  }, [createOpen, quickOpen]);
+
+  useEffect(() => {
+    if (!createOpen) return;
+    const pid = Number(createVariantForm.product_id || 0);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      setCreateProductVariants([]);
+      setCreateVariantEditForm({ ...EMPTY_CREATE_VARIANT_EDIT });
+      return;
+    }
+
+    const selectedProduct = (createProducts || []).find((p) => Number(p.id) === pid);
+    if (selectedProduct) {
+      setCreateProductEditForm({
+        id: selectedProduct.id,
+        name: selectedProduct.name || '',
+        sku_prefix: selectedProduct.sku_prefix || '',
+        active: !!selectedProduct.active,
+      });
+    }
+
+    let cancelled = false;
+    (async () => {
+      setCreateProductVariantsLoading(true);
+      try {
+        const rows = await getRetailVariantes({ product_id: pid, active: 1, limit: 300 });
+        if (cancelled) return;
+        setCreateProductVariants(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setCreateProductVariants([]);
+      } finally {
+        if (!cancelled) setCreateProductVariantsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [createOpen, createVariantForm.product_id, createProducts]);
 
   function updateItem(idx, patch) {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -387,6 +585,13 @@ export default function ComprasPage() {
     }
     if (createTargetIndex != null && idx < createTargetIndex) {
       setCreateTargetIndex((current) => (current == null ? current : current - 1));
+    }
+
+    if (quickTargetIndex === idx) {
+      closeQuickModal();
+    }
+    if (quickTargetIndex != null && idx < quickTargetIndex) {
+      setQuickTargetIndex((current) => (current == null ? current : current - 1));
     }
   }
 
@@ -577,32 +782,306 @@ export default function ComprasPage() {
       variant_name: '',
       barcode_internal: '',
     });
+    setItemsFlowMsg('');
     setLookupIndex(idx);
+  }
+
+  function applyVariantHistoryDefaults(baseItem, variantRow) {
+    let next = { ...(baseItem || {}) };
+    let touchedPricing = false;
+
+    const lastQty = parseNum(variantRow?.last_purchase_quantity);
+    if (lastQty != null && lastQty > 0) {
+      next.quantity = String(Math.max(1, Math.trunc(lastQty)));
+    }
+
+    const rawCost = String(variantRow?.last_purchase_unit_cost_currency ?? '').trim();
+    const parsedCost = parseNum(rawCost);
+    if (rawCost !== '' && parsedCost != null && parsedCost >= 0) {
+      next.unit_cost_currency = rawCost;
+      touchedPricing = true;
+    }
+
+    const rawMarkup = String(variantRow?.last_purchase_suggested_markup_pct ?? '').trim();
+    const parsedMarkup = parseNum(rawMarkup);
+    if (rawMarkup !== '' && parsedMarkup != null && parsedMarkup >= 0) {
+      next.suggested_markup_pct = rawMarkup;
+      touchedPricing = true;
+    }
+
+    return touchedPricing ? recalcFinalPriceKeepingMarkup(next) : next;
+  }
+
+  function describeDefaultsApplied(row) {
+    const chunks = [];
+    const qty = parseNum(row?.last_purchase_quantity);
+    if (qty != null && qty > 0) chunks.push(`Cantidad ${Math.max(1, Math.trunc(qty))}`);
+    const cost = String(row?.last_purchase_unit_cost_currency ?? '').trim();
+    if (cost) chunks.push(`Costo ${cost}`);
+    const markup = String(row?.last_purchase_suggested_markup_pct ?? '').trim();
+    if (markup) chunks.push(`Margen ${markup}%`);
+    return chunks.join(' | ');
   }
 
   function onSelectVariant(idx, row) {
     const name = variantName(row);
-    updateItem(idx, {
-      variant_id: String(row.id),
-      variant_name: name,
-      variant_query: name,
-      barcode_internal: String(row?.barcode_internal || '').trim(),
-    });
+    setItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        return applyVariantHistoryDefaults(
+          {
+            ...item,
+            variant_id: String(row.id),
+            variant_name: name,
+            variant_query: name,
+            barcode_internal: String(row?.barcode_internal || '').trim(),
+          },
+          row,
+        );
+      })
+    );
+    const defaultsText = describeDefaultsApplied(row);
+    if (defaultsText) {
+      setItemsFlowMsg(`Defaults aplicados desde ultima compra. ${defaultsText}.`);
+      setItemsFlowMsgTone('ok');
+    } else {
+      setItemsFlowMsg('');
+    }
     setLookupRows([]);
     setLookupIndex(null);
   }
 
-  function openCreateModal(idx) {
+  function buildItemFromVariant(baseItem, variantRow) {
+    const name = variantName(variantRow);
+    return applyVariantHistoryDefaults(
+      {
+        ...(baseItem || newItemFromGeneralMarkup()),
+        variant_id: String(variantRow?.id || ''),
+        variant_name: name,
+        variant_query: name,
+        barcode_internal: String(variantRow?.barcode_internal || '').trim(),
+      },
+      variantRow,
+    );
+  }
+
+  function openQuickModal(idx, product) {
+    if (!product?.id) return;
+    setQuickErr('');
+    setQuickMsg('');
+    setCreateErr('');
+    setCreateMsg('');
+    setItemsFlowMsg('');
+    setQuickTargetIndex(idx);
+    setQuickProduct(product);
+    setQuickAttrRows([{ ...EMPTY_QUICK_ATTR_ROW }]);
+    setQuickOpen(true);
+    setLookupRows([]);
+    setLookupIndex(null);
+  }
+
+  function closeQuickModal() {
+    setQuickOpen(false);
+    setQuickTargetIndex(null);
+    setQuickProduct(null);
+    setQuickAttrRows([{ ...EMPTY_QUICK_ATTR_ROW }]);
+    setQuickErr('');
+    setQuickMsg('');
+    setQuickApplying(false);
+  }
+
+  function availableQuickAttrsForRow(idx) {
+    const rows = Array.isArray(quickAttrRows) ? quickAttrRows : [];
+    const current = attrCode(rows[idx]?.attribute_code);
+    const selected = new Set(
+      rows
+        .filter((_, i) => i !== idx)
+        .map((row) => attrCode(row.attribute_code))
+        .filter(Boolean)
+    );
+
+    return (createAttributes || []).filter((a) => {
+      if (a?.active === false) return false;
+      const code = attrCode(a.code);
+      return !selected.has(code) || code === current;
+    });
+  }
+
+  function updateQuickAttrRow(idx, patch) {
+    setQuickAttrRows((prev) => (prev || []).map((row, i) => (i === idx ? { ...row, ...patch } : row)));
+  }
+
+  function addQuickAttrRow() {
+    setQuickAttrRows((prev) => {
+      const list = prev || [];
+      const used = new Set(list.map((row) => attrCode(row.attribute_code)).filter(Boolean));
+      const firstFree = (createAttributes || []).find((a) => a?.active !== false && !used.has(attrCode(a.code)));
+      return [...list, { attribute_code: firstFree ? firstFree.code : '', values_text: '' }];
+    });
+  }
+
+  function removeQuickAttrRow(idx) {
+    setQuickAttrRows((prev) => {
+      const next = (prev || []).filter((_, i) => i !== idx);
+      return next.length ? next : [{ ...EMPTY_QUICK_ATTR_ROW }];
+    });
+  }
+
+  function buildQuickCombinations() {
+    const parsedGroups = [];
+    const seenCodes = new Set();
+
+    for (let i = 0; i < quickAttrRows.length; i += 1) {
+      const row = quickAttrRows[i] || {};
+      const code = attrCode(row.attribute_code);
+      const values = dedupValues(splitValues(row.values_text));
+      if (!code && !values.length) continue;
+      if (!code || !values.length) {
+        throw new Error(`Completa atributo y valores en la fila ${i + 1}.`);
+      }
+      if (seenCodes.has(code)) {
+        throw new Error(`No se puede repetir atributo en la fila ${i + 1}.`);
+      }
+      seenCodes.add(code);
+      parsedGroups.push({ attribute_code: code, values });
+    }
+
+    if (!parsedGroups.length) {
+      throw new Error('Carga al menos un atributo con valores.');
+    }
+
+    const rawCombos = cartesianProduct(parsedGroups);
+    if (!rawCombos.length) {
+      throw new Error('No se pudieron generar combinaciones.');
+    }
+    if (rawCombos.length > 250) {
+      throw new Error('Demasiadas combinaciones. Reduce valores por atributo (max 250 por lote).');
+    }
+
+    const unique = [];
+    const seenSignatures = new Set();
+    rawCombos.forEach((optionValues) => {
+      const signature = normalizeOptionSignature(optionValues);
+      if (!signature || seenSignatures.has(signature)) return;
+      seenSignatures.add(signature);
+      unique.push({ option_values: optionValues, signature });
+    });
+    return unique;
+  }
+
+  async function applyQuickCombinations() {
+    if (quickApplying) return;
+    setQuickErr('');
+    setQuickMsg('');
+    setErr('');
+
+    const productId = Number(quickProduct?.id || 0);
+    if (!Number.isInteger(productId) || productId <= 0) {
+      setQuickErr('Producto invalido para generar combinaciones.');
+      return;
+    }
+    if (quickTargetIndex == null || quickTargetIndex < 0 || quickTargetIndex >= items.length) {
+      setQuickErr('La fila de destino ya no existe. Vuelve a seleccionar el producto.');
+      return;
+    }
+
+    let combos = [];
+    try {
+      combos = buildQuickCombinations();
+    } catch (error) {
+      setQuickErr(errMsg(error));
+      return;
+    }
+
+    setQuickApplying(true);
+    try {
+      const existing = await getRetailVariantes({ product_id: productId, limit: 500 });
+      const bySignature = new Map();
+      (Array.isArray(existing) ? existing : []).forEach((row) => {
+        const signature = signatureFromVariantRow(row);
+        if (!signature) return;
+        const prev = bySignature.get(signature);
+        if (!prev || (!prev.active && row.active)) {
+          bySignature.set(signature, row);
+        }
+      });
+
+      const resolved = [];
+      let createdCount = 0;
+      let reusedCount = 0;
+      let errorCount = 0;
+
+      for (const combo of combos) {
+        const reused = bySignature.get(combo.signature);
+        if (reused) {
+          resolved.push(reused);
+          reusedCount += 1;
+          continue;
+        }
+
+        try {
+          const created = await postRetailVariante({
+            product_id: productId,
+            option_values: combo.option_values,
+          });
+          bySignature.set(combo.signature, created);
+          resolved.push(created);
+          createdCount += 1;
+        } catch (_error) {
+          errorCount += 1;
+        }
+      }
+
+      if (!resolved.length) {
+        setQuickErr('No se pudo aplicar ninguna combinacion. Revisa valores e intenta nuevamente.');
+        setQuickMsg(`Creadas: ${createdCount}. Reusadas: ${reusedCount}. Con error: ${errorCount}.`);
+        return;
+      }
+
+      const targetIndex = quickTargetIndex;
+      setItems((prev) => {
+        if (targetIndex == null || targetIndex < 0 || targetIndex >= prev.length) return prev;
+        const source = prev[targetIndex] || newItemFromGeneralMarkup();
+        const nextRows = resolved.map((row) => buildItemFromVariant(source, row));
+        return [...prev.slice(0, targetIndex), ...nextRows, ...prev.slice(targetIndex + 1)];
+      });
+
+      setItemsFlowMsg(`Combinaciones aplicadas. Creadas: ${createdCount}. Reusadas: ${reusedCount}. Con error: ${errorCount}.`);
+      setItemsFlowMsgTone(errorCount ? 'warn' : 'ok');
+      closeQuickModal();
+    } catch (error) {
+      setQuickErr(errMsg(error));
+    } finally {
+      setQuickApplying(false);
+    }
+  }
+
+  function openCreateModal(idx, options = {}) {
     const seed = String(items[idx]?.variant_query || '').trim();
+    const selectedProduct = options?.product || null;
 
     setCreateErr('');
     setCreateMsg('');
+    setItemsFlowMsg('');
     setCreateTargetIndex(idx);
     setCreateProductForm({
       ...EMPTY_CREATE_PRODUCT,
-      name: seed.slice(0, 80),
+      name: selectedProduct?.name ? String(selectedProduct.name).slice(0, 80) : seed.slice(0, 80),
     });
-    setCreateVariantForm({ ...EMPTY_CREATE_VARIANT });
+    setCreateVariantForm({
+      ...EMPTY_CREATE_VARIANT,
+      product_id: selectedProduct?.id ? String(selectedProduct.id) : '',
+    });
+    setCreateProductEditForm(selectedProduct
+      ? {
+          id: selectedProduct.id,
+          name: selectedProduct.name || '',
+          sku_prefix: selectedProduct.sku_prefix || '',
+          active: !!selectedProduct.active,
+        }
+      : { ...EMPTY_CREATE_PRODUCT_EDIT });
+    setCreateProductVariants([]);
+    setCreateVariantEditForm({ ...EMPTY_CREATE_VARIANT_EDIT });
     setCreateOpen(true);
   }
 
@@ -613,6 +1092,9 @@ export default function ComprasPage() {
     setCreateMsg('');
     setCreateProductForm({ ...EMPTY_CREATE_PRODUCT });
     setCreateVariantForm({ ...EMPTY_CREATE_VARIANT });
+    setCreateProductEditForm({ ...EMPTY_CREATE_PRODUCT_EDIT });
+    setCreateProductVariants([]);
+    setCreateVariantEditForm({ ...EMPTY_CREATE_VARIANT_EDIT });
   }
 
   function availableCreateAttrsForRow(idx) {
@@ -680,6 +1162,12 @@ export default function ComprasPage() {
         ...prev,
         product_id: String(created?.id || ''),
       }));
+      setCreateProductEditForm({
+        id: created?.id || '',
+        name: created?.name || '',
+        sku_prefix: created?.sku_prefix || '',
+        active: true,
+      });
       setCreateMsg(`Producto creado (#${created?.id || ''}).`);
     } catch (error) {
       setCreateErr(errMsg(error));
@@ -720,10 +1208,110 @@ export default function ComprasPage() {
     }
   }
 
+  async function saveCreateProductEdit(e) {
+    e.preventDefault();
+    if (!createProductEditForm?.id) return;
+    setCreateErr('');
+    setCreateMsg('');
+    setCreateProductEditSaving(true);
+    try {
+      const updated = await patchRetailProducto(createProductEditForm.id, {
+        name: createProductEditForm.name,
+        sku_prefix: createProductEditForm.sku_prefix || undefined,
+        active: !!createProductEditForm.active,
+      });
+      setCreateProducts((prev) =>
+        (prev || []).map((p) => (Number(p.id) === Number(updated?.id) ? { ...p, ...updated } : p))
+      );
+      setCreateMsg('Producto actualizado.');
+    } catch (error) {
+      setCreateErr(errMsg(error));
+    } finally {
+      setCreateProductEditSaving(false);
+    }
+  }
+
+  function startEditCreateVariant(row) {
+    if (!row?.id) return;
+    setCreateVariantEditForm({
+      id: row.id,
+      sku: row.sku || '',
+      barcode_internal: row.barcode_internal || '',
+      price_store_ars: String(row.price_store_ars ?? 0),
+      price_online_ars: String(row.price_online_ars ?? 0),
+      stock_min: String(row.stock_min ?? 0),
+      active: !!row.active,
+    });
+  }
+
+  async function saveCreateVariantEdit(e) {
+    e.preventDefault();
+    if (!createVariantEditForm?.id) return;
+    setCreateErr('');
+    setCreateMsg('');
+    setCreateVariantEditSaving(true);
+    try {
+      await patchRetailVariante(createVariantEditForm.id, {
+        sku: createVariantEditForm.sku,
+        barcode_internal: createVariantEditForm.barcode_internal || undefined,
+        price_store_ars: Number(createVariantEditForm.price_store_ars || 0),
+        price_online_ars: Number(createVariantEditForm.price_online_ars || 0),
+        stock_min: Number(createVariantEditForm.stock_min || 0),
+        active: !!createVariantEditForm.active,
+      });
+      const pid = Number(createVariantForm.product_id || 0);
+      if (Number.isInteger(pid) && pid > 0) {
+        const rows = await getRetailVariantes({ product_id: pid, active: 1, limit: 300 });
+        setCreateProductVariants(Array.isArray(rows) ? rows : []);
+      }
+      setCreateVariantEditForm({ ...EMPTY_CREATE_VARIANT_EDIT });
+      setCreateMsg('Variante actualizada.');
+    } catch (error) {
+      setCreateErr(errMsg(error));
+    } finally {
+      setCreateVariantEditSaving(false);
+    }
+  }
+
+  function useVariantFromCreateList(row) {
+    if (!row?.id || createTargetIndex == null) return;
+    onSelectVariant(createTargetIndex, row);
+    closeCreateModal();
+  }
+
+  async function onCreateBatchFinished(rows) {
+    const created = Array.isArray(rows) ? rows : [];
+    if (!created.length) return;
+    const pid = Number(createVariantForm.product_id || 0);
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        const refreshed = await getRetailVariantes({ product_id: pid, active: 1, limit: 300 });
+        setCreateProductVariants(Array.isArray(refreshed) ? refreshed : []);
+      } catch {
+        // no-op
+      }
+    }
+    if (createTargetIndex != null) {
+      onSelectVariant(createTargetIndex, created[0]);
+    }
+  }
+
+  function onSelectLookupItem(idx, item) {
+    if (!item) return;
+    if (item.kind === 'variant') {
+      onSelectVariant(idx, item.row);
+      return;
+    }
+    if (item.kind === 'product') {
+      openQuickModal(idx, item.row);
+    }
+  }
+
   async function onSubmit(e) {
     e.preventDefault();
     setErr('');
     setResult(null);
+    setItemsFlowMsg('');
     setSaving(true);
 
     try {
@@ -748,6 +1336,7 @@ export default function ComprasPage() {
       setItems([newItemFromGeneralMarkup()]);
       setLookupIndex(null);
       setLookupRows([]);
+      setItemsFlowMsg('');
       fetchSuppliers(suppliersQuery);
     } catch (error) {
       setErr(errMsg(error));
@@ -760,6 +1349,12 @@ export default function ComprasPage() {
     (createVariantForm.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean)
   );
   const canAddCreateOptionRow = createAttributes.length === 0 || usedCreateAttrs.size < createAttributes.length;
+  const quickAvailableAttributes = (createAttributes || []).filter((a) => a?.active !== false);
+  const usedQuickAttrs = new Set(
+    (quickAttrRows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean)
+  );
+  const canAddQuickAttrRow =
+    quickAvailableAttributes.length === 0 || usedQuickAttrs.size < quickAvailableAttributes.length;
 
   return (
     <div className="space-y-4">
@@ -770,7 +1365,7 @@ export default function ComprasPage() {
         </p>
       </div>
 
-      <form className="card space-y-4" onSubmit={onSubmit}>
+      <form className="card relative z-30 isolate space-y-4" onSubmit={onSubmit}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
             <label className="block text-xs text-gray-500 mb-1">Proveedor</label>
@@ -832,7 +1427,10 @@ export default function ComprasPage() {
             const marginPct = itemMarginPct(it);
             const printCopies = itemPrintCopies(it);
             return (
-            <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start rounded border border-gray-200 p-2">
+            <div
+              key={idx}
+              className="grid grid-cols-1 md:[grid-template-columns:minmax(0,0.75fr)_minmax(0,1.65fr)_minmax(0,1.65fr)_minmax(0,1.65fr)_minmax(0,1.2fr)_minmax(0,0.55fr)_minmax(0,0.95fr)_minmax(0,0.95fr)_minmax(0,0.75fr)_minmax(0,0.95fr)_minmax(0,0.95fr)_minmax(0,0.8fr)_minmax(0,0.9fr)] gap-2 items-start rounded border border-gray-200 p-2"
+            >
               <div className="md:col-span-1">
                 <label className="block text-xs text-gray-500 mb-1">Variante ID</label>
                 <input
@@ -843,7 +1441,7 @@ export default function ComprasPage() {
                 />
               </div>
 
-              <div className="md:col-span-2 relative">
+              <div className="md:col-span-3 relative">
                 <label className="block text-xs text-gray-500 mb-1">Nombre variante</label>
                 <input
                   className="input"
@@ -863,44 +1461,53 @@ export default function ComprasPage() {
                 ) : null}
 
                 {lookupIndex === idx ? (
-                  <div className="absolute z-20 mt-1 w-full rounded border bg-white shadow-lg">
-                    <div className="grid grid-cols-[120px_1fr] gap-2 border-b bg-gray-50 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-600">
-                      <span>Variante ID</span>
+                  <div className="absolute z-[70] mt-1 w-full rounded border bg-white shadow-lg overflow-hidden">
+                    <div className="grid grid-cols-[100px_1fr_90px] gap-2 border-b bg-gray-50 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                      <span>ID</span>
                       <span>Nombre</span>
+                      <span>Tipo</span>
                     </div>
-
-                    {lookupLoading ? (
-                      <div className="px-2 py-2 text-xs text-gray-500">Buscando...</div>
-                    ) : lookupRows.length ? (
-                      <div className="max-h-56 overflow-auto">
-                        {lookupRows.map((row) => (
-                          <button
-                            key={row.id}
-                            type="button"
-                            className="grid w-full grid-cols-[120px_1fr] gap-2 border-b px-2 py-2 text-left text-sm hover:bg-gray-50"
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => onSelectVariant(idx, row)}
-                          >
-                            <span className="font-semibold text-gray-700">{row.id}</span>
-                            <span className="text-gray-700">{variantName(row)}</span>
-                          </button>
-                        ))}
+                    <div className="max-h-80 min-h-[240px] flex flex-col">
+                      <div className="min-h-0 flex-1 overflow-auto">
+                        {lookupLoading ? (
+                          <div className="px-2 py-2 text-xs text-gray-500">Buscando...</div>
+                        ) : lookupRows.length ? (
+                          lookupRows.map((item) => (
+                            <button
+                              key={item.key}
+                              type="button"
+                              className="grid w-full grid-cols-[100px_1fr_90px] gap-2 border-b px-2 py-2 text-left text-sm hover:bg-gray-50"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => onSelectLookupItem(idx, item)}
+                            >
+                              <span className="font-semibold text-gray-700">{item.row?.id}</span>
+                              <span className="text-gray-700">
+                                {item.kind === 'variant' ? variantName(item.row) : (item.row?.name || 'Producto')}
+                              </span>
+                              <span className="text-gray-500">{item.kind === 'variant' ? 'Variante' : 'Producto'}</span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-2 py-2 text-xs text-gray-600">
+                            <p>
+                              {activeLookupQuery
+                                ? `Sin resultados para "${activeLookupQuery}".`
+                                : 'Sin resultados iniciales para mostrar.'}
+                            </p>
+                          </div>
+                        )}
                       </div>
-                    ) : activeLookupQuery ? (
-                      <div className="px-2 py-2 text-xs text-gray-600 space-y-2">
-                        <p>No encontramos variantes para "{activeLookupQuery}".</p>
+                      <div className="border-t bg-white px-2 py-2">
                         <button
                           type="button"
-                          className="px-2 py-1 rounded border text-xs font-semibold hover:bg-gray-50"
+                          className="w-full px-2 py-2 rounded border text-xs font-semibold hover:bg-gray-50"
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => openCreateModal(idx)}
                         >
                           Agregar producto y variante
                         </button>
                       </div>
-                    ) : (
-                      <div className="px-2 py-2 text-xs text-gray-500">Escribe para buscar variantes.</div>
-                    )}
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1019,6 +1626,9 @@ export default function ComprasPage() {
         </button>
       </form>
 
+      {itemsFlowMsg ? (
+        <p className={`text-sm ${itemsFlowMsgTone === 'warn' ? 'text-amber-700' : 'text-green-700'}`}>{itemsFlowMsg}</p>
+      ) : null}
       {err ? <p className="text-sm text-red-700">{err}</p> : null}
       {result ? (
         <div className="card">
@@ -1028,7 +1638,7 @@ export default function ComprasPage() {
         </div>
       ) : null}
 
-      <div className="card space-y-3">
+      <div className="card relative z-0 space-y-3">
         <div className="flex flex-wrap gap-2 items-end justify-between">
           <div>
             <h2 className="text-lg font-semibold">Lista de proveedores</h2>
@@ -1106,6 +1716,111 @@ export default function ComprasPage() {
           )
         ) : null}
       </div>
+
+      {quickOpen ? (
+        <div className="fixed inset-0 z-[55] bg-black/40 p-3 md:p-6" onClick={closeQuickModal}>
+          <div
+            className="mx-auto max-w-3xl rounded-xl border border-gray-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="border-b bg-white px-4 py-3 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">Alta masiva por combinaciones</h2>
+                <p className="text-xs text-gray-500">
+                  Producto: <strong>{quickProduct?.name || `#${quickProduct?.id || ''}`}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                className="px-3 py-2 rounded border"
+                onClick={closeQuickModal}
+                disabled={quickApplying}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              {quickErr ? <p className="text-sm text-red-700">{quickErr}</p> : null}
+              {quickMsg ? <p className="text-sm text-gray-700">{quickMsg}</p> : null}
+              {!createLoadingData && createErr ? <p className="text-sm text-red-700">{createErr}</p> : null}
+              {createLoadingData ? <p className="text-sm text-gray-500">Cargando atributos...</p> : null}
+
+              <div className="space-y-2">
+                <h3 className="text-sm font-semibold">Atributos multivalor</h3>
+                {(quickAttrRows || []).map((row, idx) => (
+                  <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+                    <div className="md:col-span-4">
+                      <label className="block text-xs text-gray-500 mb-1">Atributo</label>
+                      <select
+                        className="input"
+                        value={row.attribute_code || ''}
+                        onChange={(e) => updateQuickAttrRow(idx, { attribute_code: e.target.value })}
+                        disabled={quickApplying || createLoadingData}
+                      >
+                        <option value="">Seleccionar atributo</option>
+                        {availableQuickAttrsForRow(idx).map((attr) => (
+                          <option key={attr.id} value={attr.code}>{attr.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="md:col-span-6">
+                      <label className="block text-xs text-gray-500 mb-1">Valores</label>
+                      <input
+                        className="input"
+                        placeholder="Ej: Azul, Violeta, Negro"
+                        value={row.values_text || ''}
+                        onChange={(e) => updateQuickAttrRow(idx, { values_text: e.target.value })}
+                        disabled={quickApplying}
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <button
+                        type="button"
+                        className="w-full px-3 py-2 rounded border"
+                        onClick={() => removeQuickAttrRow(idx)}
+                        disabled={quickApplying || quickAttrRows.length <= 1}
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded border"
+                  onClick={addQuickAttrRow}
+                  disabled={quickApplying || !canAddQuickAttrRow}
+                >
+                  Agregar atributo
+                </button>
+              </div>
+
+              <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded border"
+                  onClick={closeQuickModal}
+                  disabled={quickApplying}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={applyQuickCombinations}
+                  disabled={quickApplying || createLoadingData}
+                >
+                  {quickApplying ? 'Aplicando...' : 'Aplicar combinaciones'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {createOpen ? (
         <div className="fixed inset-0 z-50 bg-black/40 p-3 md:p-6" onClick={closeCreateModal}>
@@ -1290,6 +2005,170 @@ export default function ComprasPage() {
                   </button>
                 </form>
               </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <form className="card space-y-3" onSubmit={saveCreateProductEdit}>
+                  <h3 className="text-base font-semibold">Editar producto seleccionado</h3>
+                  {createProductEditForm?.id ? (
+                    <>
+                      <input
+                        className="input"
+                        value={createProductEditForm.name}
+                        onChange={(e) => setCreateProductEditForm((prev) => ({ ...prev, name: e.target.value }))}
+                        placeholder="Nombre"
+                        required
+                      />
+                      <input
+                        className="input"
+                        value={createProductEditForm.sku_prefix}
+                        onChange={(e) => setCreateProductEditForm((prev) => ({ ...prev, sku_prefix: e.target.value }))}
+                        placeholder="Prefijo SKU"
+                      />
+                      <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+                        <input
+                          type="checkbox"
+                          checked={!!createProductEditForm.active}
+                          onChange={(e) => setCreateProductEditForm((prev) => ({ ...prev, active: e.target.checked }))}
+                        />
+                        Activo
+                      </label>
+                      <button className="btn" type="submit" disabled={createProductEditSaving}>
+                        {createProductEditSaving ? 'Guardando...' : 'Guardar producto'}
+                      </button>
+                    </>
+                  ) : (
+                    <p className="text-sm text-gray-500">Selecciona un producto en la forma de variante para editarlo.</p>
+                  )}
+                </form>
+
+                <div className="card space-y-3">
+                  <h3 className="text-base font-semibold">Variantes del producto seleccionado</h3>
+                  {createProductVariantsLoading ? <p className="text-sm text-gray-500">Cargando variantes...</p> : null}
+                  {!createProductVariantsLoading ? (
+                    createProductVariants.length ? (
+                      <div className="overflow-auto">
+                        <table className="min-w-full text-sm">
+                          <thead>
+                            <tr className="text-left border-b">
+                              <th className="py-2 pr-3">ID</th>
+                              <th className="py-2 pr-3">SKU</th>
+                              <th className="py-2 pr-3">Firma</th>
+                              <th className="py-2 pr-3">Accion</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {createProductVariants.map((row) => (
+                              <tr key={row.id} className="border-b last:border-b-0">
+                                <td className="py-2 pr-3">{row.id}</td>
+                                <td className="py-2 pr-3">{row.sku}</td>
+                                <td className="py-2 pr-3">{row.option_signature || '-'}</td>
+                                <td className="py-2 pr-3">
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 rounded border text-xs font-semibold hover:bg-gray-50"
+                                      onClick={() => useVariantFromCreateList(row)}
+                                    >
+                                      Usar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="px-2 py-1 rounded border text-xs font-semibold hover:bg-gray-50"
+                                      onClick={() => startEditCreateVariant(row)}
+                                    >
+                                      Editar
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">No hay variantes para este producto.</p>
+                    )
+                  ) : null}
+
+                  {createVariantEditForm?.id ? (
+                    <form className="rounded-xl border border-neutral-200 p-3 space-y-2" onSubmit={saveCreateVariantEdit}>
+                      <h4 className="text-sm font-semibold">Editar variante #{createVariantEditForm.id}</h4>
+                      <input
+                        className="input"
+                        value={createVariantEditForm.sku}
+                        onChange={(e) => setCreateVariantEditForm((prev) => ({ ...prev, sku: e.target.value }))}
+                        placeholder="SKU"
+                        required
+                      />
+                      <input
+                        className="input"
+                        value={createVariantEditForm.barcode_internal}
+                        onChange={(e) => setCreateVariantEditForm((prev) => ({ ...prev, barcode_internal: e.target.value }))}
+                        placeholder="Barcode interno"
+                      />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={createVariantEditForm.price_store_ars}
+                          onChange={(e) => setCreateVariantEditForm((prev) => ({ ...prev, price_store_ars: e.target.value }))}
+                          placeholder="Precio local"
+                        />
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={createVariantEditForm.price_online_ars}
+                          onChange={(e) => setCreateVariantEditForm((prev) => ({ ...prev, price_online_ars: e.target.value }))}
+                          placeholder="Precio online"
+                        />
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={createVariantEditForm.stock_min}
+                          onChange={(e) => setCreateVariantEditForm((prev) => ({ ...prev, stock_min: e.target.value }))}
+                          placeholder="Stock minimo"
+                        />
+                      </div>
+                      <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+                        <input
+                          type="checkbox"
+                          checked={!!createVariantEditForm.active}
+                          onChange={(e) => setCreateVariantEditForm((prev) => ({ ...prev, active: e.target.checked }))}
+                        />
+                        Activa
+                      </label>
+                      <div className="flex gap-2">
+                        <button className="btn" type="submit" disabled={createVariantEditSaving}>
+                          {createVariantEditSaving ? 'Guardando...' : 'Guardar variante'}
+                        </button>
+                        <button
+                          type="button"
+                          className="px-3 py-2 rounded border"
+                          onClick={() => setCreateVariantEditForm({ ...EMPTY_CREATE_VARIANT_EDIT })}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </form>
+                  ) : null}
+                </div>
+              </div>
+
+              <VariantBatchCreator
+                title="Alta masiva por combinaciones"
+                products={createProducts}
+                attributes={createAttributes}
+                suppliers={suppliersRows}
+                canEdit={!createBusy}
+                initialProductId={createVariantForm.product_id}
+                onBatchFinished={onCreateBatchFinished}
+              />
             </div>
           </div>
         </div>

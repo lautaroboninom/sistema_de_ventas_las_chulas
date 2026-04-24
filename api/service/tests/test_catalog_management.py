@@ -1,0 +1,155 @@
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from rest_framework.exceptions import ValidationError
+
+from service.views.retail_views import (
+    RetailAtributoDetailView,
+    RetailProductosView,
+    RetailVarianteDetailView,
+    RetailVariantesView,
+)
+
+
+def _request(*, data=None, query=None, method='GET', role='admin'):
+    return SimpleNamespace(
+        data=data or {},
+        query_params=query or {},
+        user=SimpleNamespace(id=17, rol=role),
+        method=method,
+    )
+
+
+class RetailCatalogManagementTests(unittest.TestCase):
+    @patch('service.views.retail_views.q')
+    def test_productos_get_supports_limit(self, q_mock):
+        q_mock.return_value = []
+        req = _request(query={'active': '1', 'limit': '7'}, method='GET')
+        response = RetailProductosView().get(req)
+        self.assertEqual(response.status_code, 200)
+        sql = str(q_mock.call_args[0][0])
+        params = q_mock.call_args[0][1]
+        self.assertIn('LIMIT %s', sql)
+        self.assertEqual(params[-1], 7)
+
+    @patch('service.views.retail_views.q')
+    def test_variantes_get_includes_last_purchase_defaults(self, q_mock):
+        q_mock.side_effect = [[], []]
+        req = _request(query={'active': '1', 'limit': '10'}, method='GET')
+        response = RetailVariantesView().get(req)
+        self.assertEqual(response.status_code, 200)
+        sql = str(q_mock.call_args_list[0][0][0])
+        self.assertIn('LEFT JOIN LATERAL', sql)
+        self.assertIn('last_purchase_unit_cost_currency', sql)
+        self.assertIn('last_purchase_suggested_markup_pct', sql)
+
+    @patch('service.views.retail_views._can_view_costs', return_value=False)
+    @patch('service.views.retail_views.q')
+    def test_variantes_get_hides_purchase_cost_defaults_without_permission(self, q_mock, _can_view_costs_mock):
+        q_mock.side_effect = [
+            [
+                {
+                    'id': 1,
+                    'product_id': 2,
+                    'producto': 'Remera',
+                    'marca': '',
+                    'product_image_path': '',
+                    'option_signature': 'talle=s',
+                    'display_name': 'Remera S',
+                    'sku': 'SKU-1',
+                    'barcode_internal': '7791234567890',
+                    'price_store_ars': 100,
+                    'price_online_ars': 100,
+                    'cost_avg_ars': 55,
+                    'stock_on_hand': 8,
+                    'stock_reserved': 0,
+                    'stock_min': 1,
+                    'last_purchase_quantity': 3,
+                    'last_purchase_unit_cost_currency': 120,
+                    'last_purchase_suggested_markup_pct': 45,
+                    'barcode_count': 1,
+                    'active': True,
+                    'created_at': None,
+                    'updated_at': None,
+                    'tiendanube_product_id': None,
+                    'tiendanube_variant_id': None,
+                }
+            ],
+            [],
+        ]
+        req = _request(query={'active': '1'}, method='GET')
+        response = RetailVariantesView().get(req)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        row = response.data[0]
+        self.assertIsNone(row.get('cost_avg_ars'))
+        self.assertIsNone(row.get('last_purchase_unit_cost_currency'))
+        self.assertIsNone(row.get('last_purchase_suggested_markup_pct'))
+        self.assertEqual(row.get('last_purchase_quantity'), 3)
+
+    @patch('service.views.retail_views._set_audit_user')
+    @patch('service.views.retail_views.q')
+    def test_atributo_patch_blocks_code_change_when_in_use(self, q_mock, _set_audit_user_mock):
+        q_mock.side_effect = [
+            {
+                'id': 11,
+                'name': 'Talle',
+                'code': 'talle',
+                'applies_to_category_id': None,
+                'active': True,
+                'sort_order': 100,
+            },
+            {'exists': 1},
+        ]
+        req = _request(data={'code': 'tamano'}, method='PATCH')
+        with self.assertRaises(ValidationError):
+            RetailAtributoDetailView.patch.__wrapped__(RetailAtributoDetailView(), req, atributo_id=11)
+
+    @patch('service.views.retail_views._set_audit_user')
+    @patch('service.views.retail_views._tiendanube_schedule_local_variants_delete')
+    @patch('service.views.retail_views.exec_void')
+    @patch('service.views.retail_views._variant_has_operational_usage', return_value=True)
+    @patch('service.views.retail_views._load_variante')
+    def test_variante_delete_soft_when_has_usage(
+        self,
+        load_mock,
+        _usage_mock,
+        exec_void_mock,
+        schedule_delete_mock,
+        _set_audit_user_mock,
+    ):
+        load_mock.side_effect = [
+            {'id': 51, 'active': True, 'sku': 'SKU-51'},
+            {'id': 51, 'active': False, 'sku': 'SKU-51'},
+        ]
+        req = _request(method='DELETE')
+        response = RetailVarianteDetailView.delete.__wrapped__(RetailVarianteDetailView(), req, variante_id=51)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('mode'), 'soft')
+        schedule_delete_mock.assert_called_once()
+        exec_void_mock.assert_called_once()
+
+    @patch('service.views.retail_views._set_audit_user')
+    @patch('service.views.retail_views._variant_try_remote_delete_best_effort')
+    @patch('service.views.retail_views.exec_void')
+    @patch('service.views.retail_views._variant_has_operational_usage', return_value=False)
+    @patch('service.views.retail_views._load_variante', return_value={'id': 77, 'active': True, 'sku': 'SKU-77'})
+    def test_variante_delete_hard_when_no_usage(
+        self,
+        _load_mock,
+        _usage_mock,
+        exec_void_mock,
+        remote_delete_mock,
+        _set_audit_user_mock,
+    ):
+        req = _request(method='DELETE')
+        response = RetailVarianteDetailView.delete.__wrapped__(RetailVarianteDetailView(), req, variante_id=77)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data.get('mode'), 'hard')
+        exec_void_mock.assert_called_once()
+        remote_delete_mock.assert_called_once()
+
+
+if __name__ == '__main__':
+    unittest.main()

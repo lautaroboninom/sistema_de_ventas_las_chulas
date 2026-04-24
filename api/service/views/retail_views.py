@@ -1656,6 +1656,7 @@ class RetailProductosView(APIView):
         _require_staff(request)
         qtxt = (request.query_params.get('q') or '').strip()
         active = (request.query_params.get('active') or '').strip().lower()
+        limit = _to_int(request.query_params.get('limit') or 0, 'limit', allow_none=True)
         params = []
         filters = []
         if qtxt:
@@ -1666,6 +1667,10 @@ class RetailProductosView(APIView):
         if active in ('0', 'false', 'no'):
             filters.append('p.active=FALSE')
         where = f"WHERE {' AND '.join(filters)}" if filters else ''
+        limit_sql = ''
+        if limit and int(limit) > 0:
+            limit_sql = 'LIMIT %s'
+            params.append(max(1, min(int(limit), 300)))
         rows = q(
             f'''
             SELECT p.id, p.name, p.description, p.category_id, COALESCE(c.name,'') AS category_name,
@@ -1681,6 +1686,7 @@ class RetailProductosView(APIView):
             ) v ON v.product_id = p.id
             {where}
             ORDER BY p.name, p.id
+            {limit_sql}
             ''',
             params,
         ) or []
@@ -1899,6 +1905,147 @@ class RetailAtributosView(APIView):
         )
         row = q('SELECT * FROM retail_variant_attributes WHERE id=%s', [aid], one=True)
         return Response(row, status=201)
+
+
+class RetailAtributoDetailView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def patch(self, request, atributo_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        data = request.data or {}
+        row = q(
+            '''
+            SELECT id, name, code, applies_to_category_id, active, sort_order, created_at, updated_at
+            FROM retail_variant_attributes
+            WHERE id=%s
+            ''',
+            [atributo_id],
+            one=True,
+        )
+        if not row:
+            return Response({'detail': 'Atributo no encontrado'}, status=404)
+
+        updates = []
+        params = []
+
+        if 'name' in data or 'nombre' in data:
+            name = _clean_text(data.get('name') or data.get('nombre'))
+            if not name:
+                raise ValidationError('name no puede ser vacio')
+            updates.append('name=%s')
+            params.append(name)
+
+        if 'code' in data or 'codigo' in data:
+            code = _clean_text(data.get('code') or data.get('codigo'))
+            if not code:
+                raise ValidationError('code no puede ser vacio')
+            current_code = str(row.get('code') or '').strip().lower()
+            next_code = str(code).strip().lower()
+            if current_code != next_code:
+                in_use = q(
+                    'SELECT 1 FROM retail_variant_option_values WHERE attribute_id=%s LIMIT 1',
+                    [atributo_id],
+                    one=True,
+                )
+                if in_use:
+                    raise ValidationError('No se puede cambiar code: atributo ya usado en variantes')
+            updates.append('code=%s')
+            params.append(code)
+
+        if 'applies_to_category_id' in data:
+            updates.append('applies_to_category_id=%s')
+            params.append(_to_int(data.get('applies_to_category_id'), 'applies_to_category_id', allow_none=True))
+
+        if 'sort_order' in data:
+            updates.append('sort_order=%s')
+            params.append(_to_int(data.get('sort_order'), 'sort_order'))
+
+        if 'active' in data:
+            updates.append('active=%s')
+            params.append(bool(data.get('active')))
+
+        if not updates:
+            raise ValidationError('Sin cambios para aplicar')
+
+        try:
+            params.append(atributo_id)
+            exec_void(f"UPDATE retail_variant_attributes SET {', '.join(updates)} WHERE id=%s", params)
+        except Exception as exc:
+            txt = str(exc).lower()
+            if 'uq_retail_variant_attributes_code' in txt or 'retail_variant_attributes_code_key' in txt:
+                raise ValidationError('code ya existe')
+            if 'uq_retail_variant_attributes_name' in txt or 'retail_variant_attributes_name_key' in txt:
+                raise ValidationError('name ya existe')
+            raise
+
+        updated = q(
+            '''
+            SELECT id, name, code, applies_to_category_id, active, sort_order, created_at, updated_at
+            FROM retail_variant_attributes
+            WHERE id=%s
+            ''',
+            [atributo_id],
+            one=True,
+        )
+        return Response(updated)
+
+    @transaction.atomic
+    def delete(self, request, atributo_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        row = q(
+            '''
+            SELECT id, name, code, applies_to_category_id, active, sort_order, created_at, updated_at
+            FROM retail_variant_attributes
+            WHERE id=%s
+            ''',
+            [atributo_id],
+            one=True,
+        )
+        if not row:
+            return Response({'detail': 'Atributo no encontrado'}, status=404)
+
+        in_use = q(
+            'SELECT 1 FROM retail_variant_option_values WHERE attribute_id=%s LIMIT 1',
+            [atributo_id],
+            one=True,
+        )
+        if in_use:
+            exec_void('UPDATE retail_variant_attributes SET active=FALSE WHERE id=%s', [atributo_id])
+            soft = q(
+                '''
+                SELECT id, name, code, applies_to_category_id, active, sort_order, created_at, updated_at
+                FROM retail_variant_attributes
+                WHERE id=%s
+                ''',
+                [atributo_id],
+                one=True,
+            ) or {'id': atributo_id, 'active': False}
+            soft['mode'] = 'soft'
+            soft['deleted'] = False
+            soft['detail'] = 'Atributo en uso: se aplico baja logica'
+            return Response(soft)
+
+        try:
+            exec_void('DELETE FROM retail_variant_attributes WHERE id=%s', [atributo_id])
+            return Response({'id': atributo_id, 'mode': 'hard', 'deleted': True})
+        except Exception:
+            exec_void('UPDATE retail_variant_attributes SET active=FALSE WHERE id=%s', [atributo_id])
+            soft = q(
+                '''
+                SELECT id, name, code, applies_to_category_id, active, sort_order, created_at, updated_at
+                FROM retail_variant_attributes
+                WHERE id=%s
+                ''',
+                [atributo_id],
+                one=True,
+            ) or {'id': atributo_id, 'active': False}
+            soft['mode'] = 'soft'
+            soft['deleted'] = False
+            soft['detail'] = 'Atributo referenciado: se aplico baja logica'
+            return Response(soft)
 
 
 def _autogen_sku(product_row):
@@ -2264,6 +2411,7 @@ class RetailVariantesView(APIView):
         _require_staff(request)
         qtxt = (request.query_params.get('q') or '').strip()
         only_active = (request.query_params.get('active') or '').strip().lower()
+        product_id = _to_int(request.query_params.get('product_id'), 'product_id', allow_none=True)
         limit = _to_int(request.query_params.get('limit') or 0, 'limit', allow_none=True)
         params = []
         filters = []
@@ -2288,6 +2436,9 @@ class RetailVariantesView(APIView):
             filters.append('v.active=TRUE')
         if only_active in ('0', 'false', 'no'):
             filters.append('v.active=FALSE')
+        if product_id:
+            filters.append('v.product_id=%s')
+            params.append(product_id)
         where = f"WHERE {' AND '.join(filters)}" if filters else ''
         limit_sql = ''
         if limit and int(limit) > 0:
@@ -2301,11 +2452,24 @@ class RetailVariantesView(APIView):
                    v.option_signature, v.display_name, v.sku, v.barcode_internal,
                    v.price_store_ars, v.price_online_ars, v.cost_avg_ars,
                    v.stock_on_hand, v.stock_reserved, v.stock_min,
+                   lpi.last_purchase_quantity,
+                   lpi.last_purchase_unit_cost_currency,
+                   lpi.last_purchase_suggested_markup_pct,
                    COALESCE(vb.cnt, 0) AS barcode_count,
                    v.active, v.created_at, v.updated_at,
                    v.tiendanube_product_id, v.tiendanube_variant_id
             FROM retail_product_variants v
             JOIN retail_products p ON p.id=v.product_id
+            LEFT JOIN LATERAL (
+              SELECT pi.quantity AS last_purchase_quantity,
+                     pi.unit_cost_currency AS last_purchase_unit_cost_currency,
+                     pi.suggested_markup_pct AS last_purchase_suggested_markup_pct
+              FROM retail_purchase_items pi
+              JOIN retail_purchases rp2 ON rp2.id=pi.purchase_id
+              WHERE pi.variant_id=v.id
+              ORDER BY rp2.purchase_date DESC NULLS LAST, rp2.id DESC, pi.id DESC
+              LIMIT 1
+            ) lpi ON TRUE
             LEFT JOIN (
               SELECT variant_id, COUNT(*)::int AS cnt
               FROM retail_variant_barcodes
@@ -2321,6 +2485,8 @@ class RetailVariantesView(APIView):
         if not _can_view_costs(request):
             for row in rows:
                 row['cost_avg_ars'] = None
+                row['last_purchase_unit_cost_currency'] = None
+                row['last_purchase_suggested_markup_pct'] = None
         for row in rows:
             row['product_image_url'] = _product_image_url(request, row.get('product_id'), row.get('product_image_path'))
             row.pop('product_image_path', None)
@@ -2444,6 +2610,62 @@ class RetailVariantesView(APIView):
         )
 
         return Response(_load_variante(vid, include_costs=True), status=201)
+
+
+_VARIANT_USAGE_QUERIES = (
+    ('retail_purchase_items', 'variant_id'),
+    ('retail_stock_movements', 'variant_id'),
+    ('retail_sale_items', 'variant_id'),
+    ('retail_return_items', 'variant_id'),
+    ('retail_promotion_variants', 'variant_id'),
+    ('retail_inventory_count_items', 'variant_id'),
+    ('retail_exchange_items', 'variant_from_id'),
+    ('retail_exchange_items', 'variant_to_id'),
+)
+
+
+def _variant_has_operational_usage(variante_id):
+    for table_name, column_name in _VARIANT_USAGE_QUERIES:
+        row = q(
+            f'SELECT 1 FROM {table_name} WHERE {column_name}=%s LIMIT 1',
+            [variante_id],
+            one=True,
+        )
+        if row:
+            return True
+    return False
+
+
+def _variant_try_remote_delete_best_effort(variant_row, *, reason='variant_delete_hard'):
+    row = dict(variant_row or {})
+    product_id_remote = _safe_int(row.get('tiendanube_product_id'))
+    variant_id_remote = _safe_int(row.get('tiendanube_variant_id'))
+    sku = _clean_text(row.get('sku'))
+    if not (product_id_remote or variant_id_remote or sku):
+        return
+
+    cfg = _tiendanube_cfg()
+    if not cfg.get('store_id') or not cfg.get('access_token'):
+        return
+
+    try:
+        out = _tiendanube_delete_remote_for_local_variant(cfg, row)
+        if not out.get('ok'):
+            security_logger.warning(
+                "tiendanube_variant_delete_best_effort_failed reason=%s variant_id=%s sku=%s error=%s",
+                reason,
+                row.get('id'),
+                sku or '-',
+                _clean_text(out.get('error')) or 'unknown',
+            )
+    except Exception as exc:
+        security_logger.warning(
+            "tiendanube_variant_delete_best_effort_exception reason=%s variant_id=%s sku=%s error=%s",
+            reason,
+            row.get('id'),
+            sku or '-',
+            exc,
+        )
 
 
 class RetailVarianteDetailView(APIView):
@@ -2578,6 +2800,56 @@ class RetailVarianteDetailView(APIView):
                 )
 
         return Response(_load_variante(variante_id, include_costs=True))
+
+    @transaction.atomic
+    def delete(self, request, variante_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        existing = _load_variante(variante_id, include_costs=True)
+        if not existing:
+            return Response({'detail': 'Variante no encontrada'}, status=404)
+
+        has_usage = _variant_has_operational_usage(variante_id)
+        if has_usage:
+            exec_void('UPDATE retail_product_variants SET active=FALSE WHERE id=%s', [variante_id])
+            _tiendanube_schedule_local_variants_delete(
+                [variante_id],
+                reason='variant_delete_soft',
+            )
+            soft_row = _load_variante(variante_id, include_costs=True) or dict(existing)
+            soft_row['active'] = False
+            return Response(
+                {
+                    'id': variante_id,
+                    'mode': 'soft',
+                    'deleted': False,
+                    'detail': 'Variante con historial: se aplico baja logica',
+                    'variant': soft_row,
+                }
+            )
+
+        try:
+            exec_void('DELETE FROM retail_product_variants WHERE id=%s', [variante_id])
+        except Exception:
+            exec_void('UPDATE retail_product_variants SET active=FALSE WHERE id=%s', [variante_id])
+            _tiendanube_schedule_local_variants_delete(
+                [variante_id],
+                reason='variant_delete_soft_fallback',
+            )
+            soft_row = _load_variante(variante_id, include_costs=True) or dict(existing)
+            soft_row['active'] = False
+            return Response(
+                {
+                    'id': variante_id,
+                    'mode': 'soft',
+                    'deleted': False,
+                    'detail': 'Variante referenciada: se aplico baja logica',
+                    'variant': soft_row,
+                }
+            )
+
+        _variant_try_remote_delete_best_effort(existing, reason='variant_delete_hard')
+        return Response({'id': variante_id, 'mode': 'hard', 'deleted': True})
 
 
 class RetailVarianteEscanearView(APIView):
@@ -12858,6 +13130,7 @@ __all__ = [
     'RetailProductoDetailView',
     'RetailProductoImagenView',
     'RetailAtributosView',
+    'RetailAtributoDetailView',
     'RetailVariantesView',
     'RetailVarianteDetailView',
     'RetailVarianteEscanearView',

@@ -36,6 +36,18 @@ class EmpleadoPermissionLockTests(unittest.TestCase):
 
     def test_permission_matrix_covers_barcodes_and_sales_requests(self):
         self.assertEqual(
+            VIEW_PERMISSION_MATRIX.get('RetailAtributoDetailView', {}).get('PATCH'),
+            'action.config.editar',
+        )
+        self.assertEqual(
+            VIEW_PERMISSION_MATRIX.get('RetailAtributoDetailView', {}).get('DELETE'),
+            'action.config.editar',
+        )
+        self.assertEqual(
+            VIEW_PERMISSION_MATRIX.get('RetailVarianteDetailView', {}).get('DELETE'),
+            'action.config.editar',
+        )
+        self.assertEqual(
             VIEW_PERMISSION_MATRIX.get('RetailVarianteBarcodesView', {}).get('GET'),
             'page.productos',
         )

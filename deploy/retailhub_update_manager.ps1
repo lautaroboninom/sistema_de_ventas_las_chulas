@@ -286,6 +286,10 @@ function Run-BackendMigrations {
     if ($LASTEXITCODE -ne 0) {
       throw 'No se pudieron ejecutar migraciones de backend (manage.py migrate).'
     }
+    & $pythonExe 'manage.py' apply_sql_patches *> $null
+    if ($LASTEXITCODE -ne 0) {
+      throw 'No se pudieron ejecutar apply SQL pendientes (manage.py apply_sql_patches).'
+    }
   } finally {
     Pop-Location
   }
@@ -323,10 +327,12 @@ function Invoke-Check {
 function Invoke-ApplyOnStart {
   param([object]$State)
 
+  $checked = $false
   $applied = $false
   $errorMessage = $null
   try {
     Invoke-GitText -Args @('fetch', '--prune', 'origin', $script:Channel) | Out-Null
+    $checked = $true
     $State.last_check_at = Get-IsoUtcNow
     $State.channel = $script:Channel
     $State.installed_commit = Get-HeadCommit
@@ -339,10 +345,13 @@ function Invoke-ApplyOnStart {
     $State.pending = [bool]($State.installed_commit -ne $State.remote_commit)
 
     if (-not [bool]$State.pending) {
+      if (-not $SkipBackendMigrate) {
+        Run-BackendMigrations
+      }
       $State.last_error = $null
       Write-State -State $State
       return @{
-        Checked = $true
+        Checked = $checked
         Applied = $false
         ErrorMessage = $null
       }
@@ -377,14 +386,18 @@ function Invoke-ApplyOnStart {
     $remote = Get-RemoteCommit
     if (-not [string]::IsNullOrWhiteSpace($remote)) {
       $State.remote_commit = $remote
+      $State.pending = [bool]($State.installed_commit -ne $State.remote_commit)
+    } elseif ([string]::IsNullOrWhiteSpace([string]$State.remote_commit)) {
+      $State.pending = $true
+    } else {
+      $State.pending = [bool]($State.installed_commit -ne $State.remote_commit)
     }
-    $State.pending = $true
     $State.last_error = $errorMessage
     Write-State -State $State
   }
 
   return @{
-    Checked = $false
+    Checked = $checked
     Applied = $applied
     ErrorMessage = $errorMessage
   }

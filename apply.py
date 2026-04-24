@@ -59,6 +59,17 @@ def run_docker_apply(compose_file: str) -> None:
             "--noinput",
         )
     )
+    run(
+        docker_compose_cmd(
+            compose_file,
+            "exec",
+            "-T",
+            "api",
+            "python",
+            "manage.py",
+            "apply_sql_patches",
+        )
+    )
     verification_code = (
         "from django.db import connection; "
         "cur = connection.cursor(); "
@@ -108,6 +119,7 @@ def run_local_apply(repo_root: Path) -> None:
         cwd=api_dir,
     )
     run([sys.executable, "manage.py", "migrate", "--noinput"], cwd=api_dir)
+    run([sys.executable, "manage.py", "apply_sql_patches"], cwd=api_dir)
     verification_code = (
         "from django.db import connection; "
         "cur = connection.cursor(); "

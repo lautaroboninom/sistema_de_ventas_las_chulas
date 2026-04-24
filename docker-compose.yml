@@ -2,13 +2,14 @@ name: retailhub-dev
 
 services:
   postgres:
-    image: postgres:16
+    build:
+      context: .
+      dockerfile: ./deploy/docker/postgres/Dockerfile
     env_file: ./.env
     ports:
       - "5433:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./sql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -q"]
       interval: 5s
@@ -43,6 +44,7 @@ services:
     command: >
       bash -lc "
       python manage.py migrate --noinput &&
+      python manage.py apply_sql_patches &&
       gunicorn app.wsgi:application --bind 0.0.0.0:8000 --workers 2
       "
 
@@ -58,7 +60,7 @@ services:
         condition: service_started
 volumes:
   pg_data:
-    name: laschulas-dev_pg_data
+    name: retailhub-dev_pg_data
 
 
 

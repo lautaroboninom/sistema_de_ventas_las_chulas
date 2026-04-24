@@ -284,19 +284,30 @@ Prerrequisitos:
 Pasos:
 1. Crear producto (nombre, prefijo SKU, imagen opcional).
 2. Crear atributo (ej: talle, color).
-3. Crear variante:
+3. Crear variante individual:
    - producto base
    - SKU/barcode
    - proveedor opcional para EAN
    - precios local/online
    - costo, stock inicial, stock minimo
    - atributos de variante.
-4. Gestionar barcodes:
+4. Crear variantes masivas por combinaciones:
+   - seleccionar producto base
+   - definir atributos multivalor (ej: color y talle)
+   - generar combinaciones automaticas
+   - completar grilla por variante (stock, barcode, precios, costo, stock minimo)
+   - guardar lote (con resultado por fila: ok/error).
+5. Gestionar barcodes:
    - generar
    - asociar
    - marcar principal
    - imprimir etiquetas (A4 o termica).
-5. Ajustar stock por variante desde grilla.
+6. Editar y limpiar catalogo:
+   - editar producto
+   - editar variante (SKU, barcode, atributos, precios, activo)
+   - editar atributo (nombre, code, orden, activo)
+   - eliminar variante/atributo con politica hard/soft segun uso historico.
+7. Ajustar stock por variante desde grilla.
 
 Resultado esperado:
 - Variante activa con identidad comercial (SKU/barcode), precios y stock consistente.
@@ -326,12 +337,18 @@ Pasos:
    - tipo de cambio si moneda es USD
    - comprobante y notas.
 2. Cargar items:
-   - buscar variante por nombre/SKU/barcode
+   - al enfocar el buscador, se muestran sugerencias iniciales
+   - buscar por nombre/SKU/barcode con filtrado en tiempo real
+   - sugerencias mixtas de variantes y productos
    - definir cantidad y costo unitario
    - revisar costo ARS y precio sugerido
    - definir precio final.
-3. Registrar compra.
-4. Si falta variante, usar `Agregar producto y variante` sin salir de la pantalla.
+3. Si eliges producto (sin variante), abrir `Agregar producto y variante` para:
+   - crear variante
+   - seleccionar variante existente del producto
+   - editar producto/variante sin salir de Compras
+   - usar generador masivo por combinaciones.
+4. Registrar compra.
 5. Consultar lista de proveedores y autocompletar.
 
 Resultado esperado:

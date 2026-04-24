@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  deleteRetailAtributo,
+  deleteRetailVariante,
   getRetailAtributos,
   getRetailComprasProveedores,
   getRetailOnlineFailedJobsSummary,
@@ -7,6 +9,8 @@ import {
   getRetailVarianteBarcodeLabelsUrl,
   getRetailVarianteBarcodes,
   getRetailVariantes,
+  patchRetailAtributo,
+  patchRetailProducto,
   patchRetailVariante,
   postRetailAtributo,
   postRetailProducto,
@@ -18,6 +22,7 @@ import {
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { can, PERMISSION_CODES } from '../lib/permissions';
+import VariantBatchCreator from '../components/VariantBatchCreator';
 
 function errMsg(error) {
   return error?.message || 'Ocurrio un error inesperado';
@@ -137,6 +142,35 @@ const EMPTY_VARIANT = {
   stock_min: '0',
 };
 
+const EMPTY_EDIT_PRODUCT = {
+  id: null,
+  name: '',
+  sku_prefix: '',
+  default_cost_ars: '0',
+  active: true,
+};
+
+const EMPTY_EDIT_ATTR = {
+  id: null,
+  name: '',
+  code: '',
+  sort_order: '100',
+  active: true,
+};
+
+const EMPTY_EDIT_VARIANT = {
+  id: null,
+  display_name: '',
+  sku: '',
+  barcode_internal: '',
+  price_store_ars: '0',
+  price_online_ars: '0',
+  cost_avg_ars: '0',
+  stock_min: '0',
+  active: true,
+  option_rows: [{ attribute_code: '', value: '' }],
+};
+
 const EMPTY_BARCODE_MODAL = {
   open: false,
   variant: null,
@@ -184,6 +218,10 @@ export default function ProductosPage() {
   const [prodImageFile, setProdImageFile] = useState(null);
   const [attrForm, setAttrForm] = useState({ ...EMPTY_ATTR });
   const [varForm, setVarForm] = useState({ ...EMPTY_VARIANT });
+  const [editProductForm, setEditProductForm] = useState({ ...EMPTY_EDIT_PRODUCT });
+  const [editAttrForm, setEditAttrForm] = useState({ ...EMPTY_EDIT_ATTR });
+  const [editVariantForm, setEditVariantForm] = useState({ ...EMPTY_EDIT_VARIANT });
+  const [editVariantOpen, setEditVariantOpen] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const prodImageInputRef = useRef(null);
   const barcodeInputRef = useRef(null);
@@ -307,6 +345,203 @@ export default function ProductosPage() {
     });
   }
 
+  function openProductEditor(row) {
+    if (!row) return;
+    setEditProductForm({
+      id: row.id,
+      name: row.name || '',
+      sku_prefix: row.sku_prefix || '',
+      default_cost_ars: String(row.default_cost_ars ?? 0),
+      active: !!row.active,
+    });
+  }
+
+  function closeProductEditor() {
+    setEditProductForm({ ...EMPTY_EDIT_PRODUCT });
+  }
+
+  async function saveProductEditor() {
+    if (!canEdit || !editProductForm?.id) return;
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      await patchRetailProducto(editProductForm.id, {
+        name: editProductForm.name,
+        sku_prefix: editProductForm.sku_prefix || undefined,
+        default_cost_ars: Number(editProductForm.default_cost_ars || 0),
+        active: !!editProductForm.active,
+      });
+      setMsg('Producto actualizado');
+      closeProductEditor();
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openAttrEditor(row) {
+    if (!row) return;
+    setEditAttrForm({
+      id: row.id,
+      name: row.name || '',
+      code: row.code || '',
+      sort_order: String(row.sort_order ?? 100),
+      active: !!row.active,
+    });
+  }
+
+  function closeAttrEditor() {
+    setEditAttrForm({ ...EMPTY_EDIT_ATTR });
+  }
+
+  async function saveAttrEditor() {
+    if (!canEdit || !editAttrForm?.id) return;
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      await patchRetailAtributo(editAttrForm.id, {
+        name: editAttrForm.name,
+        code: editAttrForm.code,
+        sort_order: Number(editAttrForm.sort_order || 100),
+        active: !!editAttrForm.active,
+      });
+      setMsg('Atributo actualizado');
+      closeAttrEditor();
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteAttr(row) {
+    if (!canEdit) return;
+    const aid = Number(row?.id || 0);
+    if (!aid) return;
+    const confirmed = window.confirm(`Eliminar atributo ${row?.name || ''}?`);
+    if (!confirmed) return;
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      const resp = await deleteRetailAtributo(aid);
+      if (resp?.mode === 'soft') {
+        setMsg('Atributo en uso: se aplico baja logica.');
+      } else {
+        setMsg('Atributo eliminado.');
+      }
+      if (Number(editAttrForm?.id) === aid) closeAttrEditor();
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openVariantEditor(row) {
+    if (!row) return;
+    const rows = Array.isArray(row.option_values) && row.option_values.length
+      ? row.option_values.map((opt) => ({ attribute_code: attrCode(opt.attribute_code), value: opt.option_value || '' }))
+      : [{ attribute_code: '', value: '' }];
+    setEditVariantForm({
+      id: row.id,
+      display_name: row.display_name || '',
+      sku: row.sku || '',
+      barcode_internal: row.barcode_internal || '',
+      price_store_ars: String(row.price_store_ars ?? 0),
+      price_online_ars: String(row.price_online_ars ?? 0),
+      cost_avg_ars: String(row.cost_avg_ars ?? 0),
+      stock_min: String(row.stock_min ?? 0),
+      active: !!row.active,
+      option_rows: rows,
+    });
+    setEditVariantOpen(true);
+  }
+
+  function closeVariantEditor() {
+    setEditVariantOpen(false);
+    setEditVariantForm({ ...EMPTY_EDIT_VARIANT });
+  }
+
+  function availableAttrsForVariantEditRow(idx) {
+    const rows = Array.isArray(editVariantForm.option_rows) ? editVariantForm.option_rows : [];
+    const current = attrCode(rows[idx]?.attribute_code);
+    const selected = new Set(
+      rows
+        .filter((_, i) => i !== idx)
+        .map((row) => attrCode(row.attribute_code))
+        .filter(Boolean)
+    );
+
+    return atributos.filter((a) => {
+      const code = attrCode(a.code);
+      return !selected.has(code) || code === current;
+    });
+  }
+
+  function updateEditVariantOptionRow(idx, patch) {
+    setEditVariantForm((prev) => ({
+      ...prev,
+      option_rows: (prev.option_rows || []).map((row, i) => (i === idx ? { ...row, ...patch } : row)),
+    }));
+  }
+
+  function addEditVariantOptionRow() {
+    setEditVariantForm((prev) => {
+      const used = new Set((prev.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
+      const firstFree = atributos.find((a) => !used.has(attrCode(a.code)));
+      return {
+        ...prev,
+        option_rows: [...(prev.option_rows || []), { attribute_code: firstFree ? firstFree.code : '', value: '' }],
+      };
+    });
+  }
+
+  function removeEditVariantOptionRow(idx) {
+    setEditVariantForm((prev) => {
+      const next = (prev.option_rows || []).filter((_, i) => i !== idx);
+      return {
+        ...prev,
+        option_rows: next.length ? next : [{ attribute_code: '', value: '' }],
+      };
+    });
+  }
+
+  async function saveVariantEditor(e) {
+    e.preventDefault();
+    if (!canEdit || !editVariantForm?.id) return;
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      const option_values = buildOptionValues(editVariantForm.option_rows);
+      await patchRetailVariante(editVariantForm.id, {
+        display_name: editVariantForm.display_name || undefined,
+        sku: editVariantForm.sku,
+        barcode_internal: editVariantForm.barcode_internal || undefined,
+        price_store_ars: Number(editVariantForm.price_store_ars || 0),
+        price_online_ars: Number(editVariantForm.price_online_ars || 0),
+        cost_avg_ars: Number(editVariantForm.cost_avg_ars || 0),
+        stock_min: Number(editVariantForm.stock_min || 0),
+        active: !!editVariantForm.active,
+        option_values,
+      });
+      setMsg('Variante actualizada');
+      closeVariantEditor();
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function createProducto(e) {
     e.preventDefault();
     setSaving(true);
@@ -385,6 +620,14 @@ export default function ProductosPage() {
     }
   }
 
+  async function onBatchCreated(rows) {
+    const createdCount = Array.isArray(rows) ? rows.length : 0;
+    if (createdCount > 0) {
+      setMsg(`Lote de variantes finalizado. Creadas: ${createdCount}.`);
+      await loadAll();
+    }
+  }
+
   async function applyAdjust(variantId) {
     if (!canEdit) return;
     const qty = Number(adjustByVariant[variantId] || 0);
@@ -418,8 +661,12 @@ export default function ProductosPage() {
     setErr('');
     setMsg('');
     try {
-      await patchRetailVariante(variantId, { active: false });
-      setMsg('Variante eliminada. La baja en Tienda Nube fue encolada.');
+      const resp = await deleteRetailVariante(variantId);
+      if (resp?.mode === 'soft') {
+        setMsg('Variante con historial: se aplico baja logica.');
+      } else {
+        setMsg('Variante eliminada.');
+      }
       await loadAll();
     } catch (error) {
       setErr(errMsg(error));
@@ -613,6 +860,8 @@ export default function ProductosPage() {
 
   const usedAttrs = new Set((varForm.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
   const canAddOptionRow = atributos.length === 0 || usedAttrs.size < atributos.length;
+  const usedEditAttrs = new Set((editVariantForm.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
+  const canAddEditOptionRow = atributos.length === 0 || usedEditAttrs.size < atributos.length;
   const totalProductos = productos.length;
   const totalVariantes = variantes.length;
   const failedSyncTotal = Number(onlineSyncSummary?.failed_total || 0);
@@ -919,6 +1168,15 @@ export default function ProductosPage() {
 
                 <button className="btn" disabled={saving} type="submit">Crear variante</button>
               </form>
+
+              <VariantBatchCreator
+                title="Alta masiva por combinaciones"
+                products={productos}
+                attributes={atributos}
+                suppliers={suppliers}
+                canEdit={canEdit}
+                onBatchFinished={onBatchCreated}
+              />
             </div>
           ) : null}
         </div>
@@ -931,6 +1189,170 @@ export default function ProductosPage() {
         </div>
         <button className="px-3 py-2 rounded border" type="button" onClick={loadAll} disabled={loading}>Filtrar</button>
       </div>
+
+      {canEdit ? (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="card space-y-3">
+            <h2 className="text-lg font-semibold">Productos</h2>
+            <div className="overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="text-left border-b">
+                    <th className="py-2 pr-3">Nombre</th>
+                    <th className="py-2 pr-3">SKU prefix</th>
+                    <th className="py-2 pr-3">Variantes</th>
+                    <th className="py-2 pr-3">Accion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productos.map((row) => (
+                    <tr key={row.id} className="border-b last:border-b-0">
+                      <td className="py-2 pr-3">{row.name}</td>
+                      <td className="py-2 pr-3">{row.sku_prefix || '-'}</td>
+                      <td className="py-2 pr-3">{Number(row.variantes || 0)}</td>
+                      <td className="py-2 pr-3">
+                        <button type="button" className="px-2 py-1 rounded border text-xs" onClick={() => openProductEditor(row)}>
+                          Editar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!productos.length ? (
+                    <tr>
+                      <td colSpan={4} className="py-3 text-gray-500">Sin productos para mostrar.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            {editProductForm?.id ? (
+              <div className="rounded-xl border border-neutral-200 p-3 space-y-2">
+                <h3 className="text-sm font-semibold">Editar producto #{editProductForm.id}</h3>
+                <input
+                  className="input"
+                  value={editProductForm.name}
+                  onChange={(e) => setEditProductForm((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="Nombre"
+                />
+                <input
+                  className="input"
+                  value={editProductForm.sku_prefix}
+                  onChange={(e) => setEditProductForm((prev) => ({ ...prev, sku_prefix: e.target.value }))}
+                  placeholder="Prefijo SKU"
+                />
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editProductForm.default_cost_ars}
+                  onChange={(e) => setEditProductForm((prev) => ({ ...prev, default_cost_ars: e.target.value }))}
+                  placeholder="Costo default"
+                />
+                <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={!!editProductForm.active}
+                    onChange={(e) => setEditProductForm((prev) => ({ ...prev, active: e.target.checked }))}
+                  />
+                  Activo
+                </label>
+                <div className="flex gap-2">
+                  <button type="button" className="btn" onClick={saveProductEditor} disabled={saving}>Guardar</button>
+                  <button type="button" className="px-3 py-2 rounded border" onClick={closeProductEditor}>Cancelar</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="card space-y-3">
+            <h2 className="text-lg font-semibold">Atributos</h2>
+            <div className="overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="text-left border-b">
+                    <th className="py-2 pr-3">Nombre</th>
+                    <th className="py-2 pr-3">Code</th>
+                    <th className="py-2 pr-3">Orden</th>
+                    <th className="py-2 pr-3">Activo</th>
+                    <th className="py-2 pr-3">Accion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {atributos.map((row) => (
+                    <tr key={row.id} className="border-b last:border-b-0">
+                      <td className="py-2 pr-3">{row.name}</td>
+                      <td className="py-2 pr-3">{row.code}</td>
+                      <td className="py-2 pr-3">{row.sort_order}</td>
+                      <td className="py-2 pr-3">{row.active ? 'Si' : 'No'}</td>
+                      <td className="py-2 pr-3">
+                        <div className="flex gap-2">
+                          <button type="button" className="px-2 py-1 rounded border text-xs" onClick={() => openAttrEditor(row)}>
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded border text-xs text-red-700 border-red-300 hover:bg-red-50"
+                            onClick={() => deleteAttr(row)}
+                            disabled={saving}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {!atributos.length ? (
+                    <tr>
+                      <td colSpan={5} className="py-3 text-gray-500">Sin atributos para mostrar.</td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            {editAttrForm?.id ? (
+              <div className="rounded-xl border border-neutral-200 p-3 space-y-2">
+                <h3 className="text-sm font-semibold">Editar atributo #{editAttrForm.id}</h3>
+                <input
+                  className="input"
+                  value={editAttrForm.name}
+                  onChange={(e) => setEditAttrForm((prev) => ({ ...prev, name: e.target.value }))}
+                  placeholder="Nombre"
+                />
+                <input
+                  className="input"
+                  value={editAttrForm.code}
+                  onChange={(e) => setEditAttrForm((prev) => ({ ...prev, code: e.target.value }))}
+                  placeholder="Code"
+                />
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={editAttrForm.sort_order}
+                  onChange={(e) => setEditAttrForm((prev) => ({ ...prev, sort_order: e.target.value }))}
+                  placeholder="Sort order"
+                />
+                <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={!!editAttrForm.active}
+                    onChange={(e) => setEditAttrForm((prev) => ({ ...prev, active: e.target.checked }))}
+                  />
+                  Activo
+                </label>
+                <div className="flex gap-2">
+                  <button type="button" className="btn" onClick={saveAttrEditor} disabled={saving}>Guardar</button>
+                  <button type="button" className="px-3 py-2 rounded border" onClick={closeAttrEditor}>Cancelar</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <div className="card">
         <div className="flex items-center justify-between mb-2">
@@ -1025,6 +1447,14 @@ export default function ProductosPage() {
                       <button
                         type="button"
                         className="px-2 py-1 rounded border text-xs"
+                        onClick={() => openVariantEditor(row)}
+                        disabled={saving || !canEdit}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border text-xs"
                         onClick={() => {
                           const prefs = loadBarcodePrintPrefs();
                           const layout = normalizePrintLayout(prefs.layout);
@@ -1066,6 +1496,146 @@ export default function ProductosPage() {
           </table>
         </div>
       </div>
+
+      {editVariantOpen ? (
+        <div className="fixed inset-0 z-50 bg-black/40 p-3 md:p-6 overflow-auto">
+          <div className="mx-auto w-full max-w-4xl rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold">Editar variante #{editVariantForm?.id || ''}</h3>
+              <button type="button" className="px-3 py-2 rounded border" onClick={closeVariantEditor} disabled={saving}>
+                Cerrar
+              </button>
+            </div>
+
+            <form className="space-y-3" onSubmit={saveVariantEditor}>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <input
+                  className="input"
+                  value={editVariantForm.display_name}
+                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, display_name: e.target.value }))}
+                  placeholder="Display name"
+                />
+                <input
+                  className="input"
+                  value={editVariantForm.sku}
+                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, sku: e.target.value }))}
+                  placeholder="SKU"
+                  required
+                />
+                <input
+                  className="input"
+                  value={editVariantForm.barcode_internal}
+                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, barcode_internal: e.target.value }))}
+                  placeholder="Barcode interno"
+                />
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editVariantForm.price_store_ars}
+                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, price_store_ars: e.target.value }))}
+                  placeholder="Precio local"
+                />
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editVariantForm.price_online_ars}
+                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, price_online_ars: e.target.value }))}
+                  placeholder="Precio online"
+                />
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editVariantForm.cost_avg_ars}
+                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, cost_avg_ars: e.target.value }))}
+                  placeholder="Costo promedio"
+                />
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={editVariantForm.stock_min}
+                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, stock_min: e.target.value }))}
+                  placeholder="Stock minimo"
+                />
+              </div>
+
+              <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={!!editVariantForm.active}
+                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, active: e.target.checked }))}
+                />
+                Activa
+              </label>
+
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold">Atributos</h4>
+                {(editVariantForm.option_rows || []).map((row, idx) => (
+                  <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+                    <div className="md:col-span-5">
+                      <select
+                        className="input"
+                        value={row.attribute_code || ''}
+                        onChange={(e) => updateEditVariantOptionRow(idx, { attribute_code: e.target.value })}
+                        required
+                      >
+                        <option value="">Seleccionar atributo</option>
+                        {availableAttrsForVariantEditRow(idx).map((a) => (
+                          <option key={a.id} value={a.code}>{a.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="md:col-span-5">
+                      <input
+                        className="input"
+                        value={row.value || ''}
+                        onChange={(e) => updateEditVariantOptionRow(idx, { value: e.target.value })}
+                        placeholder="Valor"
+                        required
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded border w-full"
+                        onClick={() => removeEditVariantOptionRow(idx)}
+                        disabled={(editVariantForm.option_rows || []).length <= 1}
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded border"
+                  onClick={addEditVariantOptionRow}
+                  disabled={!canAddEditOptionRow}
+                >
+                  Agregar atributo
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <button className="btn" type="submit" disabled={saving}>
+                  Guardar cambios
+                </button>
+                <button type="button" className="px-3 py-2 rounded border" onClick={closeVariantEditor}>
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
 
       {barcodeModal.open ? (
         <div className="fixed inset-0 z-50 bg-black/40 p-3 md:p-6 overflow-auto">

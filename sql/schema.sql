@@ -111,7 +111,7 @@ INSERT INTO users(nombre, email, hash_pw, rol, activo)
 VALUES (
   'Admin Las Chulas',
   'admin@laschulas.local',
-  'argon2$argon2id$v=19$m=102400,t=2,p=8$bjRCMHg3ZXpHclk2Umd3ejM5a09nYw$AQmPB4oLm+Inc7pQ0c+SzcPz2ukt3YnOmlMha+x1rLI',
+  'argon2$argon2id$v=19$m=102400,t=2,p=8$Mm02ZHNLTmhXWGxpcXVNZVR6c05XWA$Dt6Vo8NPGvXyOBYZ3MFirU+KqIvysRwP59vLB5NXZlA',
   'admin',
   TRUE
 )
@@ -688,6 +688,127 @@ CREATE TABLE IF NOT EXISTS retail_variant_option_values (
   sort_order       INTEGER NOT NULL DEFAULT 100,
   CONSTRAINT uq_variant_attribute UNIQUE (variant_id, attribute_id)
 );
+
+-- Seed minimo de catalogo para desarrollo local
+DO $$
+DECLARE
+  v_supplier_id BIGINT;
+  v_product_id BIGINT;
+  v_attr_color_id BIGINT;
+  v_attr_talle_id BIGINT;
+BEGIN
+  INSERT INTO retail_suppliers(name, ean_supplier_code, email, phone, notes, active)
+  VALUES ('Proveedor Seed', '1234', 'proveedor.seed@laschulas.local', '', 'Seed de desarrollo', TRUE)
+  ON CONFLICT (name) DO UPDATE
+  SET ean_supplier_code = EXCLUDED.ean_supplier_code,
+      email = EXCLUDED.email,
+      active = TRUE;
+
+  SELECT id INTO v_supplier_id
+  FROM retail_suppliers
+  WHERE LOWER(name) = LOWER('Proveedor Seed')
+  ORDER BY id
+  LIMIT 1;
+
+  INSERT INTO retail_products(name, description, brand, season, active, sku_prefix, default_cost_ars)
+  SELECT
+    'Remera Basica Seed',
+    'Producto de prueba para desarrollo local.',
+    'Las Chulas',
+    'All-season',
+    TRUE,
+    'REM-SEED',
+    5000
+  WHERE NOT EXISTS (
+    SELECT 1
+    FROM retail_products
+    WHERE LOWER(name) = LOWER('Remera Basica Seed')
+  );
+
+  SELECT id INTO v_product_id
+  FROM retail_products
+  WHERE LOWER(name) = LOWER('Remera Basica Seed')
+  ORDER BY id
+  LIMIT 1;
+
+  INSERT INTO retail_variant_attributes(name, code, active, sort_order)
+  VALUES ('Color', 'color', TRUE, 10)
+  ON CONFLICT (code) DO UPDATE
+  SET name = EXCLUDED.name,
+      active = TRUE;
+
+  INSERT INTO retail_variant_attributes(name, code, active, sort_order)
+  VALUES ('Talle', 'talle', TRUE, 20)
+  ON CONFLICT (code) DO UPDATE
+  SET name = EXCLUDED.name,
+      active = TRUE;
+
+  SELECT id INTO v_attr_color_id
+  FROM retail_variant_attributes
+  WHERE code = 'color'
+  ORDER BY id
+  LIMIT 1;
+
+  SELECT id INTO v_attr_talle_id
+  FROM retail_variant_attributes
+  WHERE code = 'talle'
+  ORDER BY id
+  LIMIT 1;
+
+  INSERT INTO retail_product_variants(
+    product_id, option_signature, display_name, sku, barcode_internal,
+    price_store_ars, price_online_ars, cost_avg_ars, stock_on_hand, stock_min, active
+  ) VALUES
+    (v_product_id, 'color=Azul|talle=S', 'Remera Basica Seed - Azul S', 'REM-SEED-AZ-S', '7791234000018', 12000, 12000, 5000, 8, 2, TRUE),
+    (v_product_id, 'color=Azul|talle=M', 'Remera Basica Seed - Azul M', 'REM-SEED-AZ-M', '7791234000025', 12000, 12000, 5000, 7, 2, TRUE),
+    (v_product_id, 'color=Violeta|talle=S', 'Remera Basica Seed - Violeta S', 'REM-SEED-VI-S', '7791234000032', 12500, 12500, 5000, 6, 2, TRUE),
+    (v_product_id, 'color=Violeta|talle=M', 'Remera Basica Seed - Violeta M', 'REM-SEED-VI-M', '7791234000049', 12500, 12500, 5000, 5, 2, TRUE)
+  ON CONFLICT (sku) DO UPDATE
+  SET product_id = EXCLUDED.product_id,
+      option_signature = EXCLUDED.option_signature,
+      display_name = EXCLUDED.display_name,
+      barcode_internal = EXCLUDED.barcode_internal,
+      active = TRUE;
+
+  INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value, sort_order)
+  SELECT v.id, v_attr_color_id, 'Azul', 10
+  FROM retail_product_variants v
+  WHERE v.sku IN ('REM-SEED-AZ-S', 'REM-SEED-AZ-M')
+  ON CONFLICT (variant_id, attribute_id) DO UPDATE
+  SET option_value = EXCLUDED.option_value;
+
+  INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value, sort_order)
+  SELECT v.id, v_attr_color_id, 'Violeta', 10
+  FROM retail_product_variants v
+  WHERE v.sku IN ('REM-SEED-VI-S', 'REM-SEED-VI-M')
+  ON CONFLICT (variant_id, attribute_id) DO UPDATE
+  SET option_value = EXCLUDED.option_value;
+
+  INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value, sort_order)
+  SELECT v.id, v_attr_talle_id, 'S', 20
+  FROM retail_product_variants v
+  WHERE v.sku IN ('REM-SEED-AZ-S', 'REM-SEED-VI-S')
+  ON CONFLICT (variant_id, attribute_id) DO UPDATE
+  SET option_value = EXCLUDED.option_value;
+
+  INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value, sort_order)
+  SELECT v.id, v_attr_talle_id, 'M', 20
+  FROM retail_product_variants v
+  WHERE v.sku IN ('REM-SEED-AZ-M', 'REM-SEED-VI-M')
+  ON CONFLICT (variant_id, attribute_id) DO UPDATE
+  SET option_value = EXCLUDED.option_value;
+
+  INSERT INTO retail_variant_barcodes(variant_id, barcode, is_primary, supplier_id, source, created_at, updated_at)
+  SELECT v.id, v.barcode_internal, TRUE, v_supplier_id, 'seed_dev', NOW(), NOW()
+  FROM retail_product_variants v
+  WHERE v.product_id = v_product_id
+    AND NOT EXISTS (
+      SELECT 1
+      FROM retail_variant_barcodes b
+      WHERE b.variant_id = v.id
+        AND b.is_primary = TRUE
+    );
+END $$;
 
 -- =============================
 -- Promotions

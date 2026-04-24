@@ -120,6 +120,7 @@ export const getRetailProductos = (params = {}) => {
   const qs = new URLSearchParams();
   if (params.q) qs.set('q', params.q);
   if (params.active !== undefined) qs.set('active', String(params.active));
+  if (params.limit) qs.set('limit', String(params.limit));
   return api.get(`/api/retail/productos/${qs.toString() ? `?${qs}` : ''}`);
 };
 export const postRetailProducto = (payload) => api.post('/api/retail/productos/', payload);
@@ -127,16 +128,20 @@ export const patchRetailProducto = (id, payload) => api.patch(`/api/retail/produ
 
 export const getRetailAtributos = () => api.get('/api/retail/atributos/');
 export const postRetailAtributo = (payload) => api.post('/api/retail/atributos/', payload);
+export const patchRetailAtributo = (id, payload) => api.patch(`/api/retail/atributos/${id}/`, payload);
+export const deleteRetailAtributo = (id) => api.del(`/api/retail/atributos/${id}/`);
 
 export const getRetailVariantes = (params = {}) => {
   const qs = new URLSearchParams();
   if (params.q) qs.set('q', params.q);
   if (params.active !== undefined) qs.set('active', String(params.active));
+  if (params.product_id) qs.set('product_id', String(params.product_id));
   if (params.limit) qs.set('limit', String(params.limit));
   return api.get(`/api/retail/variantes/${qs.toString() ? `?${qs}` : ''}`);
 };
 export const postRetailVariante = (payload) => api.post('/api/retail/variantes/', payload);
 export const patchRetailVariante = (id, payload) => api.patch(`/api/retail/variantes/${id}/`, payload);
+export const deleteRetailVariante = (id) => api.del(`/api/retail/variantes/${id}/`);
 export const getRetailVarianteByScan = (codigo) => api.get(`/api/retail/variantes/escanear/${encodeURIComponent(codigo)}/`);
 export const getRetailVarianteBarcodes = (id) => api.get(`/api/retail/variantes/${id}/barcodes/`);
 export const postRetailVarianteBarcodeGenerate = (id, payload) =>

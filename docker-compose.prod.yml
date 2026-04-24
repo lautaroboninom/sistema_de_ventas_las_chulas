@@ -45,6 +45,7 @@ services:
         condition: service_healthy
     command: >
       bash -lc "python manage.py migrate --noinput && \
+      python manage.py apply_sql_patches && \
       python manage.py collectstatic --noinput && \
       gunicorn app.wsgi:application -w 3 -k gthread --threads 8 -b 0.0.0.0:8000"
     healthcheck:
