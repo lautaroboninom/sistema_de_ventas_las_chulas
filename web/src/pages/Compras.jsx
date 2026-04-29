@@ -25,6 +25,11 @@ function parseNum(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function inputMoney(v, fallback = '') {
+  if (v === null || v === undefined || v === '') return fallback;
+  return String(v);
+}
+
 const BARCODE_PRINT_PREFS_KEY = 'las_chulas_barcode_print_prefs_v1';
 const PRINT_LAYOUTS = {
   A4: 'a4_grid',
@@ -76,6 +81,7 @@ function makeEmptyItem(markupPct = '') {
     variant_id: '',
     variant_query: '',
     variant_name: '',
+    supplier_product_name: '',
     barcode_internal: '',
     quantity: '1',
     unit_cost_currency: '',
@@ -87,6 +93,8 @@ function makeEmptyItem(markupPct = '') {
 const EMPTY_CREATE_PRODUCT = {
   name: '',
   sku_prefix: '',
+  default_price_store_ars: '',
+  default_price_online_ars: '',
 };
 
 const EMPTY_CREATE_VARIANT = {
@@ -105,6 +113,8 @@ const EMPTY_CREATE_PRODUCT_EDIT = {
   id: '',
   name: '',
   sku_prefix: '',
+  default_price_store_ars: '0',
+  default_price_online_ars: '0',
   active: true,
 };
 
@@ -305,6 +315,7 @@ function payloadItems(items) {
 
     return {
       variant_id: variantId,
+      supplier_product_name: String(it.supplier_product_name || '').trim() || undefined,
       quantity,
       unit_cost_currency: unitCost,
       suggested_markup_pct: suggestedMarkupPct,
@@ -527,12 +538,21 @@ export default function ComprasPage() {
 
     const selectedProduct = (createProducts || []).find((p) => Number(p.id) === pid);
     if (selectedProduct) {
+      const defaultStore = inputMoney(selectedProduct.default_price_store_ars, '0');
+      const defaultOnline = inputMoney(selectedProduct.default_price_online_ars, defaultStore || '0');
       setCreateProductEditForm({
         id: selectedProduct.id,
         name: selectedProduct.name || '',
         sku_prefix: selectedProduct.sku_prefix || '',
+        default_price_store_ars: defaultStore,
+        default_price_online_ars: defaultOnline,
         active: !!selectedProduct.active,
       });
+      setCreateVariantForm((prev) => ({
+        ...prev,
+        price_store_ars: prev.price_store_ars || defaultStore,
+        price_online_ars: prev.price_online_ars || defaultOnline || defaultStore,
+      }));
     }
 
     let cancelled = false;
@@ -809,6 +829,11 @@ export default function ComprasPage() {
       touchedPricing = true;
     }
 
+    const supplierProductName = String(variantRow?.last_purchase_supplier_product_name || '').trim();
+    if (supplierProductName && !String(next.supplier_product_name || '').trim()) {
+      next.supplier_product_name = supplierProductName;
+    }
+
     return touchedPricing ? recalcFinalPriceKeepingMarkup(next) : next;
   }
 
@@ -820,6 +845,8 @@ export default function ComprasPage() {
     if (cost) chunks.push(`Costo ${cost}`);
     const markup = String(row?.last_purchase_suggested_markup_pct ?? '').trim();
     if (markup) chunks.push(`Margen ${markup}%`);
+    const supplierProductName = String(row?.last_purchase_supplier_product_name || '').trim();
+    if (supplierProductName) chunks.push(`Nombre proveedor ${supplierProductName}`);
     return chunks.join(' | ');
   }
 
@@ -863,6 +890,38 @@ export default function ComprasPage() {
       },
       variantRow,
     );
+  }
+
+  function productDefaultPrices(product) {
+    const store = inputMoney(product?.default_price_store_ars, '');
+    const online = inputMoney(product?.default_price_online_ars, store);
+    return { store, online: online || store };
+  }
+
+  function pricesPayloadFromProduct(product) {
+    const prices = productDefaultPrices(product);
+    const store = Number(prices.store || 0);
+    const online = Number(prices.online || prices.store || 0);
+    return {
+      price_store_ars: Number.isFinite(store) ? store : 0,
+      price_online_ars: Number.isFinite(online) ? online : Number.isFinite(store) ? store : 0,
+    };
+  }
+
+  function createProductById(productId) {
+    const pid = Number(productId || 0);
+    return (createProducts || []).find((p) => Number(p.id) === pid) || null;
+  }
+
+  function onCreateVariantProductChange(productId) {
+    const product = createProductById(productId);
+    const prices = productDefaultPrices(product);
+    setCreateVariantForm((prev) => ({
+      ...prev,
+      product_id: productId,
+      price_store_ars: prices.store || prev.price_store_ars,
+      price_online_ars: prices.online || prices.store || prev.price_online_ars,
+    }));
   }
 
   function openQuickModal(idx, product) {
@@ -1023,6 +1082,7 @@ export default function ComprasPage() {
           const created = await postRetailVariante({
             product_id: productId,
             option_values: combo.option_values,
+            ...pricesPayloadFromProduct(quickProduct),
           });
           bySignature.set(combo.signature, created);
           resolved.push(created);
@@ -1059,6 +1119,7 @@ export default function ComprasPage() {
   function openCreateModal(idx, options = {}) {
     const seed = String(items[idx]?.variant_query || '').trim();
     const selectedProduct = options?.product || null;
+    const selectedPrices = productDefaultPrices(selectedProduct);
 
     setCreateErr('');
     setCreateMsg('');
@@ -1067,16 +1128,22 @@ export default function ComprasPage() {
     setCreateProductForm({
       ...EMPTY_CREATE_PRODUCT,
       name: selectedProduct?.name ? String(selectedProduct.name).slice(0, 80) : seed.slice(0, 80),
+      default_price_store_ars: selectedPrices.store || '',
+      default_price_online_ars: selectedPrices.online || selectedPrices.store || '',
     });
     setCreateVariantForm({
       ...EMPTY_CREATE_VARIANT,
       product_id: selectedProduct?.id ? String(selectedProduct.id) : '',
+      price_store_ars: selectedPrices.store || '',
+      price_online_ars: selectedPrices.online || selectedPrices.store || '',
     });
     setCreateProductEditForm(selectedProduct
       ? {
           id: selectedProduct.id,
           name: selectedProduct.name || '',
           sku_prefix: selectedProduct.sku_prefix || '',
+          default_price_store_ars: selectedPrices.store || '0',
+          default_price_online_ars: selectedPrices.online || selectedPrices.store || '0',
           active: !!selectedProduct.active,
         }
       : { ...EMPTY_CREATE_PRODUCT_EDIT });
@@ -1154,18 +1221,25 @@ export default function ComprasPage() {
       const created = await postRetailProducto({
         name: createProductForm.name,
         sku_prefix: createProductForm.sku_prefix || undefined,
+        default_price_store_ars: Number(createProductForm.default_price_store_ars || 0),
+        default_price_online_ars: Number(createProductForm.default_price_online_ars || createProductForm.default_price_store_ars || 0),
       });
+      const createdPrices = productDefaultPrices(created);
 
       const nextProducts = [created, ...createProducts].filter(Boolean);
       setCreateProducts(nextProducts);
       setCreateVariantForm((prev) => ({
         ...prev,
         product_id: String(created?.id || ''),
+        price_store_ars: prev.price_store_ars || createdPrices.store,
+        price_online_ars: prev.price_online_ars || createdPrices.online || createdPrices.store,
       }));
       setCreateProductEditForm({
         id: created?.id || '',
         name: created?.name || '',
         sku_prefix: created?.sku_prefix || '',
+        default_price_store_ars: createdPrices.store || '0',
+        default_price_online_ars: createdPrices.online || createdPrices.store || '0',
         active: true,
       });
       setCreateMsg(`Producto creado (#${created?.id || ''}).`);
@@ -1218,11 +1292,22 @@ export default function ComprasPage() {
       const updated = await patchRetailProducto(createProductEditForm.id, {
         name: createProductEditForm.name,
         sku_prefix: createProductEditForm.sku_prefix || undefined,
+        default_price_store_ars: Number(createProductEditForm.default_price_store_ars || 0),
+        default_price_online_ars: Number(createProductEditForm.default_price_online_ars || createProductEditForm.default_price_store_ars || 0),
+        sync_variant_prices:
+          Number(createProductEditForm.default_price_store_ars || 0) > 0 ||
+          Number(createProductEditForm.default_price_online_ars || 0) > 0,
         active: !!createProductEditForm.active,
       });
       setCreateProducts((prev) =>
         (prev || []).map((p) => (Number(p.id) === Number(updated?.id) ? { ...p, ...updated } : p))
       );
+      const updatedPrices = productDefaultPrices(updated);
+      setCreateVariantForm((prev) => ({
+        ...prev,
+        price_store_ars: updatedPrices.store || prev.price_store_ars,
+        price_online_ars: updatedPrices.online || updatedPrices.store || prev.price_online_ars,
+      }));
       setCreateMsg('Producto actualizado.');
     } catch (error) {
       setCreateErr(errMsg(error));
@@ -1429,7 +1514,7 @@ export default function ComprasPage() {
             return (
             <div
               key={idx}
-              className="grid grid-cols-1 md:[grid-template-columns:minmax(0,0.75fr)_minmax(0,1.65fr)_minmax(0,1.65fr)_minmax(0,1.65fr)_minmax(0,1.2fr)_minmax(0,0.55fr)_minmax(0,0.95fr)_minmax(0,0.95fr)_minmax(0,0.75fr)_minmax(0,0.95fr)_minmax(0,0.95fr)_minmax(0,0.8fr)_minmax(0,0.9fr)] gap-2 items-start rounded border border-gray-200 p-2"
+              className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start rounded border border-gray-200 p-2"
             >
               <div className="md:col-span-1">
                 <label className="block text-xs text-gray-500 mb-1">Variante ID</label>
@@ -1442,7 +1527,7 @@ export default function ComprasPage() {
               </div>
 
               <div className="md:col-span-3 relative">
-                <label className="block text-xs text-gray-500 mb-1">Nombre variante</label>
+                <label className="block text-xs text-gray-500 mb-1">Nombre interno</label>
                 <input
                   className="input"
                   placeholder="Buscar por nombre, SKU o barcode"
@@ -1510,6 +1595,16 @@ export default function ComprasPage() {
                     </div>
                   </div>
                 ) : null}
+              </div>
+
+              <div className="md:col-span-3">
+                <label className="block text-xs text-gray-500 mb-1">Nombre proveedor</label>
+                <input
+                  className="input"
+                  placeholder="Ej: Jean Wideleg FIA ceniza"
+                  value={it.supplier_product_name || ''}
+                  onChange={(e) => updateItem(idx, { supplier_product_name: e.target.value })}
+                />
               </div>
 
               <div className="md:col-span-1">
@@ -1852,7 +1947,7 @@ export default function ComprasPage() {
                   <h3 className="text-base font-semibold">Nuevo producto</h3>
                   <input
                     className="input"
-                    placeholder="Nombre"
+                    placeholder="Nombre interno"
                     value={createProductForm.name}
                     onChange={(e) => setCreateProductForm((prev) => ({ ...prev, name: e.target.value }))}
                     required
@@ -1863,6 +1958,33 @@ export default function ComprasPage() {
                     value={createProductForm.sku_prefix}
                     onChange={(e) => setCreateProductForm((prev) => ({ ...prev, sku_prefix: e.target.value }))}
                   />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Precio local"
+                      value={createProductForm.default_price_store_ars}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setCreateProductForm((prev) => ({
+                          ...prev,
+                          default_price_store_ars: value,
+                          default_price_online_ars: prev.default_price_online_ars || value,
+                        }));
+                      }}
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Precio online"
+                      value={createProductForm.default_price_online_ars}
+                      onChange={(e) => setCreateProductForm((prev) => ({ ...prev, default_price_online_ars: e.target.value }))}
+                    />
+                  </div>
                   <button className="btn" type="submit" disabled={createProductSaving}>
                     {createProductSaving ? 'Guardando...' : 'Crear producto'}
                   </button>
@@ -1874,7 +1996,7 @@ export default function ComprasPage() {
                   <select
                     className="input"
                     value={createVariantForm.product_id}
-                    onChange={(e) => setCreateVariantForm((prev) => ({ ...prev, product_id: e.target.value }))}
+                    onChange={(e) => onCreateVariantProductChange(e.target.value)}
                     required
                     disabled={createLoadingData}
                   >
@@ -2015,7 +2137,7 @@ export default function ComprasPage() {
                         className="input"
                         value={createProductEditForm.name}
                         onChange={(e) => setCreateProductEditForm((prev) => ({ ...prev, name: e.target.value }))}
-                        placeholder="Nombre"
+                        placeholder="Nombre interno"
                         required
                       />
                       <input
@@ -2024,6 +2146,33 @@ export default function ComprasPage() {
                         onChange={(e) => setCreateProductEditForm((prev) => ({ ...prev, sku_prefix: e.target.value }))}
                         placeholder="Prefijo SKU"
                       />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={createProductEditForm.default_price_store_ars}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setCreateProductEditForm((prev) => ({
+                              ...prev,
+                              default_price_store_ars: value,
+                              default_price_online_ars: prev.default_price_online_ars || value,
+                            }));
+                          }}
+                          placeholder="Precio base local"
+                        />
+                        <input
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={createProductEditForm.default_price_online_ars}
+                          onChange={(e) => setCreateProductEditForm((prev) => ({ ...prev, default_price_online_ars: e.target.value }))}
+                          placeholder="Precio base online"
+                        />
+                      </div>
                       <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
                         <input
                           type="checkbox"

@@ -6,6 +6,7 @@ from rest_framework.exceptions import ValidationError
 
 from service.views.retail_views import (
     RetailAtributoDetailView,
+    RetailComprasView,
     RetailProductosView,
     RetailVarianteDetailView,
     RetailVariantesView,
@@ -31,6 +32,8 @@ class RetailCatalogManagementTests(unittest.TestCase):
         sql = str(q_mock.call_args[0][0])
         params = q_mock.call_args[0][1]
         self.assertIn('LIMIT %s', sql)
+        self.assertIn('default_price_store_ars', sql)
+        self.assertIn('default_price_online_ars', sql)
         self.assertEqual(params[-1], 7)
 
     @patch('service.views.retail_views.q')
@@ -43,6 +46,7 @@ class RetailCatalogManagementTests(unittest.TestCase):
         self.assertIn('LEFT JOIN LATERAL', sql)
         self.assertIn('last_purchase_unit_cost_currency', sql)
         self.assertIn('last_purchase_suggested_markup_pct', sql)
+        self.assertIn('last_purchase_supplier_product_name', sql)
 
     @patch('service.views.retail_views._can_view_costs', return_value=False)
     @patch('service.views.retail_views.q')
@@ -87,6 +91,54 @@ class RetailCatalogManagementTests(unittest.TestCase):
         self.assertIsNone(row.get('last_purchase_unit_cost_currency'))
         self.assertIsNone(row.get('last_purchase_suggested_markup_pct'))
         self.assertEqual(row.get('last_purchase_quantity'), 3)
+
+    @patch('service.views.retail_views._load_compra', return_value={'id': 99, 'items': []})
+    @patch('service.views.retail_views._tiendanube_schedule_local_variants_sync')
+    @patch('service.views.retail_views.exec_void')
+    @patch('service.views.retail_views.exec_returning', return_value=99)
+    @patch('service.views.retail_views._set_audit_user')
+    @patch('service.views.retail_views.q')
+    def test_compra_post_stores_supplier_product_name_and_propagates_product_price(
+        self,
+        q_mock,
+        _set_audit_user_mock,
+        _exec_returning_mock,
+        exec_void_mock,
+        _schedule_sync_mock,
+        _load_compra_mock,
+    ):
+        q_mock.side_effect = [
+            {'purchase_default_markup_pct': 100},
+            {'id': 5, 'product_id': 42, 'stock_on_hand': 1, 'cost_avg_ars': 10},
+        ]
+        req = _request(
+            data={
+                'supplier_id': 3,
+                'currency_code': 'ARS',
+                'items': [
+                    {
+                        'variant_id': 5,
+                        'supplier_product_name': 'Jean Wideleg FIA ceniza',
+                        'quantity': 2,
+                        'unit_cost_currency': 50,
+                        'suggested_markup_pct': 100,
+                        'unit_price_final_ars': 150,
+                    }
+                ],
+            },
+            method='POST',
+        )
+
+        response = RetailComprasView.post.__wrapped__(RetailComprasView(), req)
+
+        self.assertEqual(response.status_code, 201)
+        insert_calls = [call for call in exec_void_mock.call_args_list if 'INSERT INTO retail_purchase_items' in str(call[0][0])]
+        self.assertEqual(len(insert_calls), 1)
+        self.assertIn('supplier_product_name', str(insert_calls[0][0][0]))
+        self.assertIn('Jean Wideleg FIA ceniza', insert_calls[0][0][1])
+        price_calls = [call for call in exec_void_mock.call_args_list if 'UPDATE retail_product_variants SET price_store_ars' in str(call[0][0])]
+        self.assertEqual(len(price_calls), 1)
+        self.assertEqual(price_calls[0][0][1][-1], 42)
 
     @patch('service.views.retail_views._set_audit_user')
     @patch('service.views.retail_views.q')

@@ -560,13 +560,53 @@ CREATE TABLE IF NOT EXISTS retail_products (
   sku_prefix          TEXT,
   image_path          TEXT,
   default_cost_ars    NUMERIC(14,2) NOT NULL DEFAULT 0,
+  default_price_store_ars NUMERIC(14,2) NOT NULL DEFAULT 0,
+  default_price_online_ars NUMERIC(14,2) NOT NULL DEFAULT 0,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT chk_retail_products_cost CHECK (default_cost_ars >= 0)
+  CONSTRAINT chk_retail_products_cost CHECK (default_cost_ars >= 0),
+  CONSTRAINT chk_retail_products_default_prices CHECK (default_price_store_ars >= 0 AND default_price_online_ars >= 0)
 );
 
 ALTER TABLE retail_products
 ADD COLUMN IF NOT EXISTS image_path TEXT;
+
+ALTER TABLE retail_products
+ADD COLUMN IF NOT EXISTS default_price_store_ars NUMERIC(14,2);
+
+ALTER TABLE retail_products
+ADD COLUMN IF NOT EXISTS default_price_online_ars NUMERIC(14,2);
+
+UPDATE retail_products
+SET default_price_store_ars = COALESCE(default_price_store_ars, 0),
+    default_price_online_ars = COALESCE(default_price_online_ars, 0)
+WHERE default_price_store_ars IS NULL
+   OR default_price_online_ars IS NULL;
+
+ALTER TABLE retail_products
+ALTER COLUMN default_price_store_ars SET DEFAULT 0;
+
+ALTER TABLE retail_products
+ALTER COLUMN default_price_online_ars SET DEFAULT 0;
+
+ALTER TABLE retail_products
+ALTER COLUMN default_price_store_ars SET NOT NULL;
+
+ALTER TABLE retail_products
+ALTER COLUMN default_price_online_ars SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'chk_retail_products_default_prices'
+  ) THEN
+    ALTER TABLE retail_products
+      ADD CONSTRAINT chk_retail_products_default_prices
+      CHECK (default_price_store_ars >= 0 AND default_price_online_ars >= 0);
+  END IF;
+END $$;
 
 DROP TRIGGER IF EXISTS trg_retail_products_updated_at ON retail_products;
 CREATE TRIGGER trg_retail_products_updated_at
@@ -624,6 +664,33 @@ DROP TRIGGER IF EXISTS trg_retail_product_variants_updated_at ON retail_product_
 CREATE TRIGGER trg_retail_product_variants_updated_at
 BEFORE UPDATE ON retail_product_variants
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+UPDATE retail_products p
+SET default_price_store_ars = COALESCE(
+      NULLIF(p.default_price_store_ars, 0),
+      (
+        SELECT v.price_store_ars
+        FROM retail_product_variants v
+        WHERE v.product_id=p.id AND v.active=TRUE
+        ORDER BY v.id
+        LIMIT 1
+      ),
+      0
+    ),
+    default_price_online_ars = COALESCE(
+      NULLIF(p.default_price_online_ars, 0),
+      (
+        SELECT v.price_online_ars
+        FROM retail_product_variants v
+        WHERE v.product_id=p.id AND v.active=TRUE
+        ORDER BY v.id
+        LIMIT 1
+      ),
+      NULLIF(p.default_price_store_ars, 0),
+      0
+    )
+WHERE p.default_price_store_ars = 0
+   OR p.default_price_online_ars = 0;
 
 CREATE TABLE IF NOT EXISTS retail_ean13_supplier_sequences (
   supplier_code    TEXT PRIMARY KEY,
@@ -907,6 +974,7 @@ CREATE TABLE IF NOT EXISTS retail_purchase_items (
   id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   purchase_id         BIGINT NOT NULL REFERENCES retail_purchases(id) ON DELETE CASCADE,
   variant_id          BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE RESTRICT,
+  supplier_product_name TEXT,
   quantity            INTEGER NOT NULL,
   unit_cost_currency  NUMERIC(14,4) NOT NULL,
   unit_cost_ars       NUMERIC(14,4) NOT NULL,
@@ -923,6 +991,8 @@ CREATE TABLE IF NOT EXISTS retail_purchase_items (
   CONSTRAINT chk_purchase_item_final_price CHECK (unit_price_final_ars IS NULL OR unit_price_final_ars >= 0)
 );
 
+ALTER TABLE retail_purchase_items
+ADD COLUMN IF NOT EXISTS supplier_product_name TEXT;
 ALTER TABLE retail_purchase_items
 ADD COLUMN IF NOT EXISTS suggested_markup_pct NUMERIC(6,2);
 ALTER TABLE retail_purchase_items

@@ -39,6 +39,15 @@ function money(v) {
   return moneyFmt.format(Number.isFinite(n) ? n : 0);
 }
 
+function inputMoney(v, fallback = '') {
+  if (v === null || v === undefined || v === '') return fallback;
+  return String(v);
+}
+
+function sameMoney(a, b) {
+  return Number(a || 0) === Number(b || 0);
+}
+
 function attrCode(v) {
   return String(v || '').trim().toLowerCase();
 }
@@ -127,7 +136,7 @@ function saveBarcodePrintPrefs(raw) {
   }
 }
 
-const EMPTY_PRODUCT = { name: '', sku_prefix: '' };
+const EMPTY_PRODUCT = { name: '', sku_prefix: '', default_price_store_ars: '', default_price_online_ars: '' };
 const EMPTY_ATTR = { name: '', code: '' };
 const EMPTY_VARIANT = {
   product_id: '',
@@ -147,6 +156,10 @@ const EMPTY_EDIT_PRODUCT = {
   name: '',
   sku_prefix: '',
   default_cost_ars: '0',
+  default_price_store_ars: '0',
+  default_price_online_ars: '0',
+  original_default_price_store_ars: '0',
+  original_default_price_online_ars: '0',
   active: true,
 };
 
@@ -345,13 +358,41 @@ export default function ProductosPage() {
     });
   }
 
+  function productById(productId) {
+    const pid = Number(productId || 0);
+    return productos.find((p) => Number(p.id) === pid) || null;
+  }
+
+  function productDefaultPrices(productId) {
+    const product = productById(productId);
+    const store = inputMoney(product?.default_price_store_ars, '');
+    const online = inputMoney(product?.default_price_online_ars, store);
+    return { store, online };
+  }
+
+  function onVariantProductChange(productId) {
+    const defaults = productDefaultPrices(productId);
+    setVarForm((prev) => ({
+      ...prev,
+      product_id: productId,
+      price_store_ars: defaults.store || prev.price_store_ars,
+      price_online_ars: defaults.online || defaults.store || prev.price_online_ars,
+    }));
+  }
+
   function openProductEditor(row) {
     if (!row) return;
+    const defaultStore = inputMoney(row.default_price_store_ars, '0');
+    const defaultOnline = inputMoney(row.default_price_online_ars, defaultStore || '0');
     setEditProductForm({
       id: row.id,
       name: row.name || '',
       sku_prefix: row.sku_prefix || '',
       default_cost_ars: String(row.default_cost_ars ?? 0),
+      default_price_store_ars: defaultStore,
+      default_price_online_ars: defaultOnline,
+      original_default_price_store_ars: defaultStore,
+      original_default_price_online_ars: defaultOnline,
       active: !!row.active,
     });
   }
@@ -366,10 +407,16 @@ export default function ProductosPage() {
     setErr('');
     setMsg('');
     try {
+      const pricesChanged =
+        !sameMoney(editProductForm.default_price_store_ars, editProductForm.original_default_price_store_ars) ||
+        !sameMoney(editProductForm.default_price_online_ars, editProductForm.original_default_price_online_ars);
       await patchRetailProducto(editProductForm.id, {
         name: editProductForm.name,
         sku_prefix: editProductForm.sku_prefix || undefined,
         default_cost_ars: Number(editProductForm.default_cost_ars || 0),
+        default_price_store_ars: Number(editProductForm.default_price_store_ars || 0),
+        default_price_online_ars: Number(editProductForm.default_price_online_ars || 0),
+        sync_variant_prices: pricesChanged,
         active: !!editProductForm.active,
       });
       setMsg('Producto actualizado');
@@ -552,12 +599,19 @@ export default function ProductosPage() {
         const formData = new FormData();
         formData.append('name', prodForm.name);
         if (prodForm.sku_prefix) formData.append('sku_prefix', prodForm.sku_prefix);
+        formData.append('default_price_store_ars', Number(prodForm.default_price_store_ars || 0));
+        formData.append(
+          'default_price_online_ars',
+          Number(prodForm.default_price_online_ars || prodForm.default_price_store_ars || 0),
+        );
         formData.append('image', prodImageFile);
         await postRetailProducto(formData);
       } else {
         await postRetailProducto({
           name: prodForm.name,
           sku_prefix: prodForm.sku_prefix || undefined,
+          default_price_store_ars: Number(prodForm.default_price_store_ars || 0),
+          default_price_online_ars: Number(prodForm.default_price_online_ars || prodForm.default_price_store_ars || 0),
         });
       }
       setProdForm({ ...EMPTY_PRODUCT });
@@ -931,7 +985,7 @@ export default function ProductosPage() {
                   <h3 className="text-lg font-semibold">Nuevo producto</h3>
                   <input
                     className="input"
-                    placeholder="Nombre"
+                    placeholder="Nombre interno"
                     value={prodForm.name}
                     onChange={(e) => setProdForm((v) => ({ ...v, name: e.target.value }))}
                     required
@@ -942,6 +996,33 @@ export default function ProductosPage() {
                     value={prodForm.sku_prefix}
                     onChange={(e) => setProdForm((v) => ({ ...v, sku_prefix: e.target.value }))}
                   />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Precio local"
+                      value={prodForm.default_price_store_ars}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setProdForm((v) => ({
+                          ...v,
+                          default_price_store_ars: value,
+                          default_price_online_ars: v.default_price_online_ars || value,
+                        }));
+                      }}
+                    />
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Precio online"
+                      value={prodForm.default_price_online_ars}
+                      onChange={(e) => setProdForm((v) => ({ ...v, default_price_online_ars: e.target.value }))}
+                    />
+                  </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Imagen del producto (opcional)</label>
                     <input
@@ -984,7 +1065,7 @@ export default function ProductosPage() {
                     <select
                       className="input"
                       value={varForm.product_id}
-                      onChange={(e) => setVarForm((v) => ({ ...v, product_id: e.target.value }))}
+                      onChange={(e) => onVariantProductChange(e.target.value)}
                       required
                     >
                       <option value="">Seleccionar producto</option>
@@ -1198,8 +1279,9 @@ export default function ProductosPage() {
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="text-left border-b">
-                    <th className="py-2 pr-3">Nombre</th>
+                    <th className="py-2 pr-3">Nombre interno</th>
                     <th className="py-2 pr-3">SKU prefix</th>
+                    <th className="py-2 pr-3">Precio base</th>
                     <th className="py-2 pr-3">Variantes</th>
                     <th className="py-2 pr-3">Accion</th>
                   </tr>
@@ -1209,6 +1291,10 @@ export default function ProductosPage() {
                     <tr key={row.id} className="border-b last:border-b-0">
                       <td className="py-2 pr-3">{row.name}</td>
                       <td className="py-2 pr-3">{row.sku_prefix || '-'}</td>
+                      <td className="py-2 pr-3">
+                        <div>Local: {money(row.default_price_store_ars)}</div>
+                        <div className="text-xs text-gray-500">Online: {money(row.default_price_online_ars)}</div>
+                      </td>
                       <td className="py-2 pr-3">{Number(row.variantes || 0)}</td>
                       <td className="py-2 pr-3">
                         <button type="button" className="px-2 py-1 rounded border text-xs" onClick={() => openProductEditor(row)}>
@@ -1219,7 +1305,7 @@ export default function ProductosPage() {
                   ))}
                   {!productos.length ? (
                     <tr>
-                      <td colSpan={4} className="py-3 text-gray-500">Sin productos para mostrar.</td>
+                      <td colSpan={5} className="py-3 text-gray-500">Sin productos para mostrar.</td>
                     </tr>
                   ) : null}
                 </tbody>
@@ -1233,7 +1319,7 @@ export default function ProductosPage() {
                   className="input"
                   value={editProductForm.name}
                   onChange={(e) => setEditProductForm((prev) => ({ ...prev, name: e.target.value }))}
-                  placeholder="Nombre"
+                  placeholder="Nombre interno"
                 />
                 <input
                   className="input"
@@ -1241,6 +1327,33 @@ export default function ProductosPage() {
                   onChange={(e) => setEditProductForm((prev) => ({ ...prev, sku_prefix: e.target.value }))}
                   placeholder="Prefijo SKU"
                 />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editProductForm.default_price_store_ars}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setEditProductForm((prev) => ({
+                        ...prev,
+                        default_price_store_ars: value,
+                        default_price_online_ars: prev.default_price_online_ars || value,
+                      }));
+                    }}
+                    placeholder="Precio base local"
+                  />
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editProductForm.default_price_online_ars}
+                    onChange={(e) => setEditProductForm((prev) => ({ ...prev, default_price_online_ars: e.target.value }))}
+                    placeholder="Precio base online"
+                  />
+                </div>
                 <input
                   className="input"
                   type="number"

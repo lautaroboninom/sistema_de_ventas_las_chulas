@@ -228,6 +228,15 @@ def _clean_text(val):
     return s or None
 
 
+def _first_payload_value(data, *keys):
+    for key in keys:
+        if key in data:
+            value = data.get(key)
+            if value is not None and not (isinstance(value, str) and value.strip() == ''):
+                return value
+    return None
+
+
 def _to_bool(val):
     if isinstance(val, bool):
         return val
@@ -1064,7 +1073,16 @@ def _random_suffix(size=4):
 
 
 def _product_name(product_id):
-    row = q('SELECT id, name, sku_prefix FROM retail_products WHERE id=%s', [product_id], one=True)
+    row = q(
+        '''
+        SELECT id, name, sku_prefix, default_cost_ars,
+               default_price_store_ars, default_price_online_ars
+        FROM retail_products
+        WHERE id=%s
+        ''',
+        [product_id],
+        one=True,
+    )
     if not row:
         raise ValidationError('Producto no encontrado')
     return row
@@ -1592,8 +1610,10 @@ def _open_cash_session(lock=False):
 def _load_producto(producto_id, request=None, keep_path=False):
     row = q(
         '''
-        SELECT p.id, p.name, p.description, p.category_id, p.brand, p.season, p.active, p.sku_prefix,
-               p.default_cost_ars, p.image_path, p.created_at, p.updated_at,
+        SELECT p.id, p.name, p.name AS internal_name, p.description, p.category_id, p.brand, p.season,
+               p.active, p.sku_prefix, p.default_cost_ars,
+               p.default_price_store_ars, p.default_price_online_ars,
+               p.image_path, p.created_at, p.updated_at,
                COALESCE(c.name, '') AS category_name
         FROM retail_products p
         LEFT JOIN retail_categories c ON c.id = p.category_id
@@ -1614,6 +1634,8 @@ def _load_variante(variante_id, include_costs=False):
                COALESCE(p.category_id,0) AS category_id, COALESCE(c.name,'') AS category_name,
                v.option_signature, v.display_name, v.sku, v.barcode_internal,
                v.price_store_ars, v.price_online_ars, v.cost_avg_ars, v.stock_on_hand,
+               p.default_price_store_ars AS product_default_price_store_ars,
+               p.default_price_online_ars AS product_default_price_online_ars,
                v.stock_reserved, v.stock_min, v.active,
                v.tiendanube_product_id, v.tiendanube_variant_id,
                COALESCE(vb.cnt, 0) AS barcode_count,
@@ -1673,8 +1695,10 @@ class RetailProductosView(APIView):
             params.append(max(1, min(int(limit), 300)))
         rows = q(
             f'''
-            SELECT p.id, p.name, p.description, p.category_id, COALESCE(c.name,'') AS category_name,
-                   p.brand, p.season, p.active, p.sku_prefix, p.default_cost_ars, p.image_path,
+            SELECT p.id, p.name, p.name AS internal_name, p.description, p.category_id,
+                   COALESCE(c.name,'') AS category_name,
+                   p.brand, p.season, p.active, p.sku_prefix, p.default_cost_ars,
+                   p.default_price_store_ars, p.default_price_online_ars, p.image_path,
                    p.created_at, p.updated_at,
                    COALESCE(v.cnt,0) AS variantes
             FROM retail_products p
@@ -1702,7 +1726,7 @@ class RetailProductosView(APIView):
         _require_staff(request)
         _set_audit_user(request)
         data = request.data or {}
-        name = _clean_text(data.get('name') or data.get('nombre'))
+        name = _clean_text(data.get('internal_name') or data.get('name') or data.get('nombre'))
         if not name:
             raise ValidationError('name requerido')
         category_id = _to_int(data.get('category_id'), 'category_id', allow_none=True)
@@ -1711,16 +1735,32 @@ class RetailProductosView(APIView):
         description = _clean_text(data.get('description') or data.get('descripcion'))
         sku_prefix = _clean_text(data.get('sku_prefix'))
         default_cost = _money(data.get('default_cost_ars') or 0)
+        default_price_store = _money(_first_payload_value(data, 'default_price_store_ars', 'price_store_ars') or 0)
+        default_price_online_raw = _first_payload_value(data, 'default_price_online_ars', 'price_online_ars')
+        default_price_online = _money(default_price_online_raw if default_price_online_raw is not None else default_price_store)
         image_file = request.FILES.get('image') or request.FILES.get('imagen')
         created_image_path = None
         try:
             pid = exec_returning(
                 '''
-                INSERT INTO retail_products(name, description, category_id, brand, season, active, sku_prefix, default_cost_ars)
-                VALUES (%s,%s,%s,%s,%s,TRUE,%s,%s)
+                INSERT INTO retail_products(
+                  name, description, category_id, brand, season, active, sku_prefix,
+                  default_cost_ars, default_price_store_ars, default_price_online_ars
+                )
+                VALUES (%s,%s,%s,%s,%s,TRUE,%s,%s,%s,%s)
                 RETURNING id
                 ''',
-                [name, description, category_id, brand, season, sku_prefix, default_cost],
+                [
+                    name,
+                    description,
+                    category_id,
+                    brand,
+                    season,
+                    sku_prefix,
+                    default_cost,
+                    default_price_store,
+                    default_price_online,
+                ],
             )
             if image_file:
                 created_image_path = _save_product_image(pid, image_file)
@@ -1751,8 +1791,8 @@ class RetailProductoDetailView(APIView):
         next_image_path = old_image_path
         uploaded_image_path = None
 
-        if 'name' in data or 'nombre' in data:
-            name = _clean_text(data.get('name') or data.get('nombre'))
+        if 'internal_name' in data or 'name' in data or 'nombre' in data:
+            name = _clean_text(data.get('internal_name') or data.get('name') or data.get('nombre'))
             if not name:
                 raise ValidationError('name no puede ser vacio')
             updates.append('name=%s')
@@ -1775,6 +1815,17 @@ class RetailProductoDetailView(APIView):
         if 'default_cost_ars' in data:
             updates.append('default_cost_ars=%s')
             params.append(_money(data.get('default_cost_ars')))
+        product_price_updates = {}
+        if 'default_price_store_ars' in data or 'price_store_ars' in data:
+            price_store = _money(_first_payload_value(data, 'default_price_store_ars', 'price_store_ars'))
+            updates.append('default_price_store_ars=%s')
+            params.append(price_store)
+            product_price_updates['price_store_ars'] = price_store
+        if 'default_price_online_ars' in data or 'price_online_ars' in data:
+            price_online = _money(_first_payload_value(data, 'default_price_online_ars', 'price_online_ars'))
+            updates.append('default_price_online_ars=%s')
+            params.append(price_online)
+            product_price_updates['price_online_ars'] = price_online
         image_file = request.FILES.get('image') or request.FILES.get('imagen')
         if image_file:
             uploaded_image_path = _save_product_image(producto_id, image_file)
@@ -1796,6 +1847,21 @@ class RetailProductoDetailView(APIView):
         try:
             params.append(producto_id)
             exec_void(f"UPDATE retail_products SET {', '.join(updates)} WHERE id=%s", params)
+            if product_price_updates and _to_bool(data.get('sync_variant_prices')):
+                variant_updates = []
+                variant_params = []
+                if 'price_store_ars' in product_price_updates:
+                    variant_updates.append('price_store_ars=%s')
+                    variant_params.append(product_price_updates['price_store_ars'])
+                if 'price_online_ars' in product_price_updates:
+                    variant_updates.append('price_online_ars=%s')
+                    variant_params.append(product_price_updates['price_online_ars'])
+                if variant_updates:
+                    variant_params.append(producto_id)
+                    exec_void(
+                        f"UPDATE retail_product_variants SET {', '.join(variant_updates)} WHERE product_id=%s AND active=TRUE",
+                        variant_params,
+                    )
         except Exception:
             if uploaded_image_path:
                 _delete_product_image(uploaded_image_path)
@@ -2451,10 +2517,13 @@ class RetailVariantesView(APIView):
                    p.image_path AS product_image_path,
                    v.option_signature, v.display_name, v.sku, v.barcode_internal,
                    v.price_store_ars, v.price_online_ars, v.cost_avg_ars,
+                   p.default_price_store_ars AS product_default_price_store_ars,
+                   p.default_price_online_ars AS product_default_price_online_ars,
                    v.stock_on_hand, v.stock_reserved, v.stock_min,
                    lpi.last_purchase_quantity,
                    lpi.last_purchase_unit_cost_currency,
                    lpi.last_purchase_suggested_markup_pct,
+                   lpi.last_purchase_supplier_product_name,
                    COALESCE(vb.cnt, 0) AS barcode_count,
                    v.active, v.created_at, v.updated_at,
                    v.tiendanube_product_id, v.tiendanube_variant_id
@@ -2463,7 +2532,8 @@ class RetailVariantesView(APIView):
             LEFT JOIN LATERAL (
               SELECT pi.quantity AS last_purchase_quantity,
                      pi.unit_cost_currency AS last_purchase_unit_cost_currency,
-                     pi.suggested_markup_pct AS last_purchase_suggested_markup_pct
+                     pi.suggested_markup_pct AS last_purchase_suggested_markup_pct,
+                     pi.supplier_product_name AS last_purchase_supplier_product_name
               FROM retail_purchase_items pi
               JOIN retail_purchases rp2 ON rp2.id=pi.purchase_id
               WHERE pi.variant_id=v.id
@@ -2541,9 +2611,18 @@ class RetailVariantesView(APIView):
         if _barcode_exists_anywhere(barcode):
             raise ValidationError('barcode ya existe en otra variante')
         display_name = _clean_text(data.get('display_name')) or f"{product_row['name']} ({signature})"
-        price_store = _money(data.get('price_store_ars') or data.get('precio_local_ars') or 0)
-        price_online = _money(data.get('price_online_ars') or data.get('precio_online_ars') or price_store)
-        cost_avg = _money(data.get('cost_avg_ars') or data.get('costo_promedio_ars') or product_row.get('default_cost_ars') or 0)
+        price_store_raw = _first_payload_value(data, 'price_store_ars', 'precio_local_ars')
+        if price_store_raw is None:
+            price_store_raw = product_row.get('default_price_store_ars') or 0
+        price_store = _money(price_store_raw)
+        price_online_raw = _first_payload_value(data, 'price_online_ars', 'precio_online_ars')
+        if price_online_raw is None:
+            price_online_raw = product_row.get('default_price_online_ars')
+        price_online = _money(price_online_raw if price_online_raw is not None else price_store)
+        cost_raw = _first_payload_value(data, 'cost_avg_ars', 'costo_promedio_ars')
+        if cost_raw is None:
+            cost_raw = product_row.get('default_cost_ars') or 0
+        cost_avg = _money(cost_raw)
         stock_on_hand = _to_int(data.get('stock_on_hand') or 0, 'stock_on_hand')
         stock_min = _to_int(data.get('stock_min') or 0, 'stock_min')
 
@@ -3307,7 +3386,7 @@ def _load_compra(compra_id, include_costs=False):
         return None
     items = q(
         '''
-        SELECT pi.id, pi.purchase_id, pi.variant_id, pi.quantity,
+        SELECT pi.id, pi.purchase_id, pi.variant_id, pi.supplier_product_name, pi.quantity,
                pi.unit_cost_currency, pi.unit_cost_ars, pi.suggested_markup_pct,
                pi.unit_price_suggested_ars, pi.unit_price_final_ars,
                pi.real_margin_pct, pi.line_total_ars,
@@ -3456,6 +3535,12 @@ class RetailComprasView(APIView):
             if not isinstance(item, dict):
                 raise ValidationError('Cada item debe ser objeto')
             variant_id = _to_int(item.get('variant_id'), 'variant_id')
+            supplier_product_name = _clean_text(
+                item.get('supplier_product_name')
+                or item.get('supplier_description')
+                or item.get('nombre_proveedor')
+                or item.get('descripcion_proveedor')
+            )
             qty = _to_int(item.get('quantity') or item.get('cantidad'), 'quantity')
             if qty <= 0:
                 raise ValidationError('quantity debe ser mayor a 0')
@@ -3484,7 +3569,7 @@ class RetailComprasView(APIView):
             line_total = (unit_cost_ars * Decimal(qty)).quantize(TWO_DEC, rounding=ROUND_HALF_UP)
 
             variant = q(
-                'SELECT id, stock_on_hand, cost_avg_ars FROM retail_product_variants WHERE id=%s FOR UPDATE',
+                'SELECT id, product_id, stock_on_hand, cost_avg_ars FROM retail_product_variants WHERE id=%s FOR UPDATE',
                 [variant_id],
                 one=True,
             )
@@ -3503,16 +3588,17 @@ class RetailComprasView(APIView):
             exec_void(
                 '''
                 INSERT INTO retail_purchase_items(
-                  purchase_id, variant_id, quantity,
+                  purchase_id, variant_id, supplier_product_name, quantity,
                   unit_cost_currency, unit_cost_ars, suggested_markup_pct,
                   unit_price_suggested_ars, unit_price_final_ars, real_margin_pct,
                   line_total_ars
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ''',
                 [
                     purchase_id,
                     variant_id,
+                    supplier_product_name,
                     qty,
                     unit_cost_currency,
                     unit_cost_ars,
@@ -3524,8 +3610,16 @@ class RetailComprasView(APIView):
                 ],
             )
             exec_void(
-                'UPDATE retail_product_variants SET stock_on_hand=%s, cost_avg_ars=%s, price_store_ars=%s WHERE id=%s',
-                [new_stock, new_cost, unit_price_final_ars, variant_id],
+                'UPDATE retail_product_variants SET stock_on_hand=%s, cost_avg_ars=%s WHERE id=%s',
+                [new_stock, new_cost, variant_id],
+            )
+            exec_void(
+                'UPDATE retail_products SET default_price_store_ars=%s WHERE id=%s',
+                [unit_price_final_ars, variant['product_id']],
+            )
+            exec_void(
+                'UPDATE retail_product_variants SET price_store_ars=%s WHERE product_id=%s AND active=TRUE',
+                [unit_price_final_ars, variant['product_id']],
             )
             exec_void(
                 '''

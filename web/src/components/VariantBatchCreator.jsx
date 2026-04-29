@@ -55,6 +55,11 @@ function toNum(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function inputMoney(value, fallback = '') {
+  if (value === null || value === undefined || value === '') return fallback;
+  return String(value);
+}
+
 const EMPTY_ATTR_ROW = { attribute_code: '', values_text: '' };
 
 export default function VariantBatchCreator({
@@ -68,6 +73,8 @@ export default function VariantBatchCreator({
 }) {
   const [productId, setProductId] = useState(initialProductId ? String(initialProductId) : '');
   const [supplierId, setSupplierId] = useState('');
+  const [batchPriceStore, setBatchPriceStore] = useState('');
+  const [batchPriceOnline, setBatchPriceOnline] = useState('');
   const [attrRows, setAttrRows] = useState([{ ...EMPTY_ATTR_ROW }]);
   const [generatedRows, setGeneratedRows] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -79,6 +86,18 @@ export default function VariantBatchCreator({
     setProductId(initialProductId ? String(initialProductId) : '');
     setGeneratedRows([]);
   }, [initialProductId]);
+
+  const selectedProduct = useMemo(
+    () => (products || []).find((p) => String(p?.id || '') === String(productId || '')) || null,
+    [products, productId],
+  );
+
+  useEffect(() => {
+    const store = inputMoney(selectedProduct?.default_price_store_ars, '');
+    const online = inputMoney(selectedProduct?.default_price_online_ars, store);
+    setBatchPriceStore(store);
+    setBatchPriceOnline(online || store);
+  }, [selectedProduct]);
 
   const usedAttrCodes = useMemo(
     () =>
@@ -176,8 +195,8 @@ export default function VariantBatchCreator({
         row_label: rowLabel(optionValues),
         sku: '',
         barcode_internal: '',
-        price_store_ars: '0',
-        price_online_ars: '0',
+        price_store_ars: batchPriceStore || '0',
+        price_online_ars: batchPriceOnline || batchPriceStore || '0',
         cost_avg_ars: '0',
         stock_on_hand: '0',
         stock_min: '0',
@@ -322,7 +341,7 @@ export default function VariantBatchCreator({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
         <select
           className="input"
           value={productId}
@@ -334,6 +353,43 @@ export default function VariantBatchCreator({
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>
+
+        <input
+          className="input"
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder="Precio local del lote"
+          value={batchPriceStore}
+          onChange={(e) => {
+            const value = e.target.value;
+            setBatchPriceStore(value);
+            setBatchPriceOnline((prev) => prev || value);
+            setGeneratedRows((prev) =>
+              prev.map((row) => ({
+                ...row,
+                price_store_ars: value,
+                price_online_ars: row.price_online_ars || value,
+              }))
+            );
+          }}
+          disabled={!canEdit || saving}
+        />
+
+        <input
+          className="input"
+          type="number"
+          min="0"
+          step="0.01"
+          placeholder="Precio online del lote"
+          value={batchPriceOnline}
+          onChange={(e) => {
+            const value = e.target.value;
+            setBatchPriceOnline(value);
+            setGeneratedRows((prev) => prev.map((row) => ({ ...row, price_online_ars: value })));
+          }}
+          disabled={!canEdit || saving}
+        />
 
         <select
           className="input"
