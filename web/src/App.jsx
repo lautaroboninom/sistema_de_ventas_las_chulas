@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar.jsx';
 import Footer from './components/Footer.jsx';
+import UPDATE_NOTICE from './updateNotice.js';
 import { useAuth } from './context/AuthContext';
 import {
   getRetailConfigPageSettings,
@@ -39,6 +40,8 @@ export default function App() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
+  const [showUpdateNotice, setShowUpdateNotice] = useState(false);
+  const updateNoticeStorageKey = UPDATE_NOTICE?.id ? `las_chulas_update_notice_seen_${UPDATE_NOTICE.id}` : '';
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -89,6 +92,19 @@ export default function App() {
       active = false;
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !updateNoticeStorageKey) {
+      setShowUpdateNotice(false);
+      return;
+    }
+
+    try {
+      setShowUpdateNotice(window.localStorage.getItem(updateNoticeStorageKey) !== '1');
+    } catch {
+      setShowUpdateNotice(true);
+    }
+  }, [user, updateNoticeStorageKey]);
 
   useEffect(() => {
     if (!user) {
@@ -191,6 +207,17 @@ export default function App() {
   const goToRouteFromMenu = (path) => {
     setHeaderMenuOpen(false);
     nav(path);
+  };
+
+  const dismissUpdateNotice = () => {
+    if (updateNoticeStorageKey) {
+      try {
+        window.localStorage.setItem(updateNoticeStorageKey, '1');
+      } catch {
+        // Si el navegador no permite guardar el dato, igual cerramos el aviso en esta sesion.
+      }
+    }
+    setShowUpdateNotice(false);
   };
 
   const handleManualUpdateCheck = async () => {
@@ -377,6 +404,53 @@ export default function App() {
           <Outlet />
         </div>
       </main>
+
+      {showUpdateNotice ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="update-notice-title"
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-neutral-200 bg-white shadow-2xl"
+          >
+            <div className="border-b border-neutral-200 px-5 py-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-neutral-500">
+                {UPDATE_NOTICE.subtitle}
+              </p>
+              <h2 id="update-notice-title" className="mt-1 text-xl font-semibold text-neutral-900">
+                {UPDATE_NOTICE.title}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-neutral-600">{UPDATE_NOTICE.intro}</p>
+            </div>
+
+            <div className="space-y-4 px-5 py-4">
+              {UPDATE_NOTICE.sections.map((section) => (
+                <section key={section.title}>
+                  <h3 className="text-sm font-semibold text-neutral-900">{section.title}</h3>
+                  <ul className="mt-2 space-y-2 text-sm leading-6 text-neutral-700">
+                    {section.items.map((item) => (
+                      <li key={item} className="flex gap-2">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-neutral-400" />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+
+            <div className="flex justify-end border-t border-neutral-200 px-5 py-4">
+              <button
+                type="button"
+                onClick={dismissUpdateNotice}
+                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-800"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <Footer legalName={pageSettings.footer_legal_name} />
     </div>
