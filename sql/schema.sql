@@ -752,9 +752,61 @@ CREATE TABLE IF NOT EXISTS retail_variant_option_values (
   variant_id       BIGINT NOT NULL REFERENCES retail_product_variants(id) ON DELETE CASCADE,
   attribute_id     BIGINT NOT NULL REFERENCES retail_variant_attributes(id) ON DELETE RESTRICT,
   option_value     TEXT NOT NULL,
+  attribute_value_id BIGINT,
+  option_value_key TEXT,
   sort_order       INTEGER NOT NULL DEFAULT 100,
   CONSTRAINT uq_variant_attribute UNIQUE (variant_id, attribute_id)
 );
+
+CREATE OR REPLACE FUNCTION retail_normalized_option_key(raw TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+  txt TEXT;
+BEGIN
+  txt := COALESCE(raw, '');
+  txt := regexp_replace(trim(txt), '\s+', ' ', 'g');
+  txt := lower(txt);
+  txt := translate(
+    txt,
+    'áàäâãéèëêíìïîóòöôõúùüûñçÁÀÄÂÃÉÈËÊÍÌÏÎÓÒÖÔÕÚÙÜÛÑÇ',
+    'aaaaaeeeeiiiiooooouuuuncAAAAAEEEEIIIIOOOOOUUUUNC'
+  );
+  RETURN NULLIF(txt, '');
+END $$;
+
+CREATE TABLE IF NOT EXISTS retail_variant_attribute_values (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  attribute_id   BIGINT NOT NULL REFERENCES retail_variant_attributes(id) ON DELETE CASCADE,
+  value_label    TEXT NOT NULL,
+  value_key      TEXT NOT NULL,
+  active         BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_retail_variant_attribute_values_key UNIQUE (attribute_id, value_key)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'fk_retail_variant_option_values_attribute_value'
+  ) THEN
+    ALTER TABLE retail_variant_option_values
+      ADD CONSTRAINT fk_retail_variant_option_values_attribute_value
+      FOREIGN KEY (attribute_value_id)
+      REFERENCES retail_variant_attribute_values(id)
+      ON DELETE SET NULL;
+  END IF;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_retail_variant_attribute_values_updated_at ON retail_variant_attribute_values;
+CREATE TRIGGER trg_retail_variant_attribute_values_updated_at
+BEFORE UPDATE ON retail_variant_attribute_values
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Seed minimo de catalogo para desarrollo local
 DO $$
@@ -826,10 +878,10 @@ BEGIN
     product_id, option_signature, display_name, sku, barcode_internal,
     price_store_ars, price_online_ars, cost_avg_ars, stock_on_hand, stock_min, active
   ) VALUES
-    (v_product_id, 'color=Azul|talle=S', 'Remera Basica Seed - Azul S', 'REM-SEED-AZ-S', '7791234000018', 12000, 12000, 5000, 8, 2, TRUE),
-    (v_product_id, 'color=Azul|talle=M', 'Remera Basica Seed - Azul M', 'REM-SEED-AZ-M', '7791234000025', 12000, 12000, 5000, 7, 2, TRUE),
-    (v_product_id, 'color=Violeta|talle=S', 'Remera Basica Seed - Violeta S', 'REM-SEED-VI-S', '7791234000032', 12500, 12500, 5000, 6, 2, TRUE),
-    (v_product_id, 'color=Violeta|talle=M', 'Remera Basica Seed - Violeta M', 'REM-SEED-VI-M', '7791234000049', 12500, 12500, 5000, 5, 2, TRUE)
+    (v_product_id, 'color=azul|talle=s', 'Remera Basica Seed - Azul S', 'REM-SEED-AZ-S', '7791234000018', 12000, 12000, 5000, 8, 2, TRUE),
+    (v_product_id, 'color=azul|talle=m', 'Remera Basica Seed - Azul M', 'REM-SEED-AZ-M', '7791234000025', 12000, 12000, 5000, 7, 2, TRUE),
+    (v_product_id, 'color=violeta|talle=s', 'Remera Basica Seed - Violeta S', 'REM-SEED-VI-S', '7791234000032', 12500, 12500, 5000, 6, 2, TRUE),
+    (v_product_id, 'color=violeta|talle=m', 'Remera Basica Seed - Violeta M', 'REM-SEED-VI-M', '7791234000049', 12500, 12500, 5000, 5, 2, TRUE)
   ON CONFLICT (sku) DO UPDATE
   SET product_id = EXCLUDED.product_id,
       option_signature = EXCLUDED.option_signature,
@@ -876,6 +928,39 @@ BEGIN
         AND b.is_primary = TRUE
     );
 END $$;
+
+WITH value_counts AS (
+  SELECT attribute_id,
+         retail_normalized_option_key(option_value) AS value_key,
+         option_value AS value_label,
+         COUNT(*)::int AS usage_count
+  FROM retail_variant_option_values
+  WHERE retail_normalized_option_key(option_value) IS NOT NULL
+  GROUP BY attribute_id, retail_normalized_option_key(option_value), option_value
+),
+value_rank AS (
+  SELECT attribute_id,
+         value_key,
+         value_label,
+         ROW_NUMBER() OVER (
+           PARTITION BY attribute_id, value_key
+           ORDER BY usage_count DESC, length(value_label), value_label
+         ) AS rn
+  FROM value_counts
+)
+INSERT INTO retail_variant_attribute_values(attribute_id, value_label, value_key, active)
+SELECT attribute_id, value_label, value_key, TRUE
+FROM value_rank
+WHERE rn = 1
+ON CONFLICT (attribute_id, value_key) DO NOTHING;
+
+UPDATE retail_variant_option_values ov
+SET option_value_key = retail_normalized_option_key(ov.option_value),
+    attribute_value_id = av.id,
+    option_value = COALESCE(av.value_label, ov.option_value)
+FROM retail_variant_attribute_values av
+WHERE av.attribute_id = ov.attribute_id
+  AND av.value_key = retail_normalized_option_key(ov.option_value);
 
 -- =============================
 -- Promotions
@@ -1766,6 +1851,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_retail_variant_barcodes_code_ci ON retail_v
 CREATE UNIQUE INDEX IF NOT EXISTS uq_retail_variant_barcodes_primary_per_variant ON retail_variant_barcodes (variant_id) WHERE is_primary;
 CREATE INDEX IF NOT EXISTS idx_retail_variant_barcodes_variant ON retail_variant_barcodes(variant_id, is_primary DESC, id);
 CREATE INDEX IF NOT EXISTS idx_retail_variant_options_attr_value ON retail_variant_option_values(attribute_id, option_value);
+CREATE INDEX IF NOT EXISTS idx_retail_variant_attribute_values_attr_active ON retail_variant_attribute_values(attribute_id, active, value_label);
+CREATE INDEX IF NOT EXISTS idx_retail_variant_option_values_value_id ON retail_variant_option_values(attribute_value_id);
+CREATE INDEX IF NOT EXISTS idx_retail_variant_option_values_key ON retail_variant_option_values(attribute_id, option_value_key);
 CREATE INDEX IF NOT EXISTS idx_retail_promotions_active_window ON retail_promotions(active, channel_scope, priority, valid_from, valid_until);
 CREATE INDEX IF NOT EXISTS idx_retail_promotion_products_promotion ON retail_promotion_products(promotion_id);
 CREATE INDEX IF NOT EXISTS idx_retail_promotion_products_product ON retail_promotion_products(product_id);

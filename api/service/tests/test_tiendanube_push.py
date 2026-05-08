@@ -4,7 +4,9 @@ from unittest.mock import patch
 from rest_framework.exceptions import ValidationError
 
 from service.views.retail_views import (
+    _tiendanube_build_product_payload_from_local_variants,
     _tiendanube_build_create_product_payload_from_local_variant,
+    _tiendanube_depublish_old_products,
     _tiendanube_delete_remote_for_local_variant,
     _tiendanube_ensure_rows_remote_mapping,
     _tiendanube_run_retryable_job,
@@ -40,7 +42,7 @@ class TiendaNubePushTests(unittest.TestCase):
         self.assertEqual(payload['variants'][0]['values'], [{'es': 'M'}])
         self.assertEqual(payload['variants'][0]['sku'], 'SKU-RH-501')
 
-    def test_payload_with_color_and_size_puts_color_on_name(self):
+    def test_payload_with_color_and_size_keeps_color_as_attribute(self):
         row = self._local_variant(
             option_values=[
                 {'attribute_code': 'color', 'attribute_name': 'Color', 'option_value': 'Negro'},
@@ -48,20 +50,20 @@ class TiendaNubePushTests(unittest.TestCase):
             ]
         )
         payload = _tiendanube_build_create_product_payload_from_local_variant(row)
-        self.assertEqual(payload['name']['es'], 'Remera Basic Negro')
-        self.assertEqual(payload['attributes'], [{'es': 'Talle'}])
-        self.assertEqual(payload['variants'][0]['values'], [{'es': 'L'}])
+        self.assertEqual(payload['name']['es'], 'Remera Basic')
+        self.assertEqual(payload['attributes'], [{'es': 'Color'}, {'es': 'Talle'}])
+        self.assertEqual(payload['variants'][0]['values'], [{'es': 'Negro'}, {'es': 'L'}])
 
-    def test_payload_without_size_creates_simple_product(self):
+    def test_payload_with_only_color_keeps_variant_attribute(self):
         row = self._local_variant(
             option_values=[
                 {'attribute_code': 'color', 'attribute_name': 'Color', 'option_value': 'Rojo'},
             ]
         )
         payload = _tiendanube_build_create_product_payload_from_local_variant(row)
-        self.assertEqual(payload['name']['es'], 'Remera Basic Rojo')
-        self.assertNotIn('attributes', payload)
-        self.assertNotIn('values', payload['variants'][0])
+        self.assertEqual(payload['name']['es'], 'Remera Basic')
+        self.assertEqual(payload['attributes'], [{'es': 'Color'}])
+        self.assertEqual(payload['variants'][0]['values'], [{'es': 'Rojo'}])
 
     def test_payload_includes_non_color_attributes(self):
         row = self._local_variant(
@@ -72,12 +74,75 @@ class TiendaNubePushTests(unittest.TestCase):
             ]
         )
         payload = _tiendanube_build_create_product_payload_from_local_variant(row)
-        self.assertEqual(payload['name']['es'], 'Remera Basic Negro')
-        self.assertEqual(payload['attributes'], [{'es': 'Talle'}, {'es': 'Material'}])
-        self.assertEqual(payload['variants'][0]['values'], [{'es': 'XL'}, {'es': 'Algodon'}])
+        self.assertEqual(payload['name']['es'], 'Remera Basic')
+        self.assertEqual(payload['attributes'], [{'es': 'Color'}, {'es': 'Talle'}, {'es': 'Material'}])
+        self.assertEqual(payload['variants'][0]['values'], [{'es': 'Negro'}, {'es': 'XL'}, {'es': 'Algodon'}])
+
+    def test_grouped_payload_keeps_variants_under_one_product(self):
+        rows = [
+            self._local_variant(
+                id=1,
+                sku='SKU-NEG-S',
+                option_values=[
+                    {'attribute_code': 'color', 'attribute_name': 'Color', 'option_value': 'Negro'},
+                    {'attribute_code': 'talle', 'attribute_name': 'Talle', 'option_value': 'S'},
+                ],
+            ),
+            self._local_variant(
+                id=2,
+                sku='SKU-NEG-M',
+                option_values=[
+                    {'attribute_code': 'color', 'attribute_name': 'Color', 'option_value': 'Negro'},
+                    {'attribute_code': 'talle', 'attribute_name': 'Talle', 'option_value': 'M'},
+                ],
+            ),
+        ]
+        built = _tiendanube_build_product_payload_from_local_variants({'name': 'Remera Basic'}, rows)
+        payload = built['payload']
+        self.assertEqual(payload['name']['es'], 'Remera Basic')
+        self.assertEqual(payload['attributes'], [{'es': 'Color'}, {'es': 'Talle'}])
+        self.assertEqual(len(payload['variants']), 2)
+        self.assertEqual(payload['variants'][0]['values'], [{'es': 'Negro'}, {'es': 'S'}])
+        self.assertEqual(payload['variants'][1]['sku'], 'SKU-NEG-M')
+
+    def test_grouped_payload_rejects_more_than_three_attributes(self):
+        row = self._local_variant(
+            option_values=[
+                {'attribute_code': 'color', 'attribute_name': 'Color', 'option_value': 'Negro'},
+                {'attribute_code': 'talle', 'attribute_name': 'Talle', 'option_value': 'M'},
+                {'attribute_code': 'material', 'attribute_name': 'Material', 'option_value': 'Algodon'},
+                {'attribute_code': 'temporada', 'attribute_name': 'Temporada', 'option_value': 'Invierno'},
+            ]
+        )
+        with self.assertRaises(ValidationError):
+            _tiendanube_build_product_payload_from_local_variants({'name': 'Remera Basic'}, [row])
+
+    @patch('service.views.retail_views._tiendanube_request')
+    def test_old_remote_product_cleanup_skips_unrelated_skus(self, mock_request):
+        mock_request.return_value = {
+            'id': 9001,
+            'variants': [
+                {'id': 1, 'sku': 'SKU-LOCAL'},
+                {'id': 2, 'sku': 'SKU-OTHER'},
+            ],
+        }
+        out = _tiendanube_depublish_old_products(
+            {'store_id': '1', 'access_token': 'x'},
+            [9001],
+            canonical_product_id=9000,
+            local_skus=['SKU-LOCAL'],
+        )
+        self.assertEqual(out['unpublished'], 0)
+        self.assertEqual(out['skipped'], [9001])
+        self.assertEqual(mock_request.call_count, 1)
 
     def test_payload_omits_cost_when_zero(self):
-        row = self._local_variant(cost_avg_ars='0')
+        row = self._local_variant(
+            cost_avg_ars='0',
+            option_values=[
+                {'attribute_code': 'talle', 'attribute_name': 'Talle', 'option_value': 'M'},
+            ],
+        )
         payload = _tiendanube_build_create_product_payload_from_local_variant(row)
         self.assertNotIn('cost', payload['variants'][0])
 
@@ -143,10 +208,10 @@ class TiendaNubePushTests(unittest.TestCase):
         mock_request.assert_not_called()
         mock_exec.assert_not_called()
 
-    @patch('service.views.retail_views._tiendanube_create_remote_product_for_local_variant')
+    @patch('service.views.retail_views._tiendanube_sync_local_product_group')
     @patch('service.views.retail_views._tiendanube_autolink_rows_by_sku')
-    def test_ensure_mapping_uses_autolink_without_create(self, mock_autolink, mock_create):
-        rows = [{'id': 10, 'sku': 'SKU-AUTO', 'tiendanube_product_id': None, 'tiendanube_variant_id': None}]
+    def test_ensure_mapping_uses_autolink_without_create(self, mock_autolink, mock_group_sync):
+        rows = [{'id': 10, 'product_id': 40, 'sku': 'SKU-AUTO', 'tiendanube_product_id': None, 'tiendanube_variant_id': None}]
 
         def _do_autolink(_cfg, target_rows):
             target_rows[0]['tiendanube_product_id'] = 9001
@@ -160,17 +225,18 @@ class TiendaNubePushTests(unittest.TestCase):
         self.assertEqual(out['created_remote'], 0)
         self.assertEqual(out['creation_failed'], 0)
         self.assertEqual(out['pending_mapping'], 0)
-        mock_create.assert_not_called()
+        mock_group_sync.assert_not_called()
 
-    @patch('service.views.retail_views.exec_void')
-    @patch('service.views.retail_views._tiendanube_create_remote_product_for_local_variant')
-    @patch('service.views.retail_views._load_variante')
+    @patch('service.views.retail_views._tiendanube_load_local_product_group')
+    @patch('service.views.retail_views._tiendanube_sync_local_product_group')
     @patch('service.views.retail_views._tiendanube_autolink_rows_by_sku')
-    def test_ensure_mapping_creates_and_persists_mapping(self, mock_autolink, mock_load, mock_create, mock_exec):
-        rows = [{'id': 11, 'sku': 'SKU-NEW', 'tiendanube_product_id': None, 'tiendanube_variant_id': None}]
+    def test_ensure_mapping_creates_and_persists_mapping(self, mock_autolink, mock_group_sync, mock_load_group):
+        rows = [{'id': 11, 'product_id': 41, 'sku': 'SKU-NEW', 'tiendanube_product_id': None, 'tiendanube_variant_id': None}]
         mock_autolink.return_value = {'auto_mapped': 0, 'pending_mapping': 1, 'errors': []}
-        mock_load.return_value = self._local_variant(id=11, sku='SKU-NEW')
-        mock_create.return_value = {'product_id': 4001, 'variant_id': 5001}
+        mock_group_sync.return_value = {'created_remote': 1}
+        mock_load_group.return_value = [
+            {'id': 11, 'tiendanube_product_id': 4001, 'tiendanube_variant_id': 5001},
+        ]
 
         out = _tiendanube_ensure_rows_remote_mapping({'store_id': '1', 'access_token': 'x'}, rows, reason='test')
 
@@ -179,16 +245,14 @@ class TiendaNubePushTests(unittest.TestCase):
         self.assertEqual(out['pending_mapping'], 0)
         self.assertEqual(rows[0]['tiendanube_product_id'], 4001)
         self.assertEqual(rows[0]['tiendanube_variant_id'], 5001)
-        self.assertEqual(mock_exec.call_count, 1)
+        mock_group_sync.assert_called_once()
 
-    @patch('service.views.retail_views._tiendanube_create_remote_product_for_local_variant')
-    @patch('service.views.retail_views._load_variante')
+    @patch('service.views.retail_views._tiendanube_sync_local_product_group')
     @patch('service.views.retail_views._tiendanube_autolink_rows_by_sku')
-    def test_ensure_mapping_creation_error_is_non_blocking(self, mock_autolink, mock_load, mock_create):
-        rows = [{'id': 12, 'sku': 'SKU-ERR', 'tiendanube_product_id': None, 'tiendanube_variant_id': None}]
+    def test_ensure_mapping_creation_error_is_non_blocking(self, mock_autolink, mock_group_sync):
+        rows = [{'id': 12, 'product_id': 42, 'sku': 'SKU-ERR', 'producto': 'Producto Err', 'tiendanube_product_id': None, 'tiendanube_variant_id': None}]
         mock_autolink.return_value = {'auto_mapped': 0, 'pending_mapping': 1, 'errors': []}
-        mock_load.return_value = self._local_variant(id=12, sku='SKU-ERR')
-        mock_create.side_effect = ValidationError('fallo remoto')
+        mock_group_sync.side_effect = ValidationError('fallo remoto')
 
         out = _tiendanube_ensure_rows_remote_mapping({'store_id': '1', 'access_token': 'x'}, rows, reason='test')
 

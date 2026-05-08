@@ -1,43 +1,50 @@
 const UPDATE_NOTICE = {
-  id: '2026-04-29-productos-compras-nombres-precios',
-  title: 'Novedades implementadas en productos y compras',
-  subtitle: 'Actualizacion de productos, variantes y proveedores',
+  id: '2026-05-07-atributos-tiendanube-agrupada',
+  title: 'Actualizacion de atributos y Tienda Nube',
+  subtitle: 'Productos, variantes y sincronizacion online',
   intro:
-    'Esta actualizacion ordena mejor los nombres de los productos y reduce pasos repetidos al cargar precios y variantes.',
+    'Esta actualizacion ayuda a cargar talles, colores y otros atributos sin duplicarlos, y corrige la forma en que los productos se envian a Tienda Nube.',
   sections: [
     {
-      title: 'Nombre interno y nombre del proveedor',
+      title: 'Carga de atributos mas simple',
       items: [
-        'Cada producto puede tener un nombre interno del local, que es el nombre que se usa para vender, buscar y controlar stock.',
-        'La descripcion que trae el proveedor se puede guardar aparte al cargar una compra, tal como viene en la factura, remito o pedido.',
-        'El nombre del proveedor queda como dato de referencia para compras y reposiciones, pero no aparece en el uso diario del mostrador.',
-        'Esto permite trabajar con el nombre que usa el local aunque cada proveedor escriba sus productos de otra manera.',
+        'Cuando se carga un valor como Negro, negro o NEGRO, RetailHub lo reconoce como el mismo valor.',
+        'Si se escribe algo parecido a un valor que ya existe, el sistema avisa antes de crear uno nuevo.',
+        'En Productos y Variantes ahora aparecen ayudas, opciones sugeridas y botones para elegir valores ya cargados.',
+        'Esto evita colores, talles o atributos duplicados por mayusculas, acentos, espacios o errores de tipeo.',
       ],
     },
     {
-      title: 'Precios y variantes',
+      title: 'Productos en Tienda Nube',
       items: [
-        'Ahora cada producto tiene un precio base para el local y otro para la venta online.',
-        'Cuando se crean variantes por talle o color, el sistema toma ese precio base automaticamente.',
-        'Si un producto siempre vale lo mismo aunque cambie el talle o el color, ya no hace falta escribir el precio una y otra vez.',
-        'Cuando se cambia el precio base del producto, las variantes activas pueden quedar actualizadas con ese mismo precio.',
+        'RetailHub ahora envia a Tienda Nube un solo producto con sus variantes adentro.',
+        'Por ejemplo, una remera con Color y Talle queda como un producto unico, no como varios productos separados.',
+        'Color, Talle y otros atributos se sincronizan como opciones de la variante en Tienda Nube.',
+        'RetailHub usa el SKU de cada variante para reconocer que variante corresponde actualizar.',
       ],
     },
     {
-      title: 'Compras a proveedores',
+      title: 'Que tienen que hacer',
       items: [
-        'Al cargar una compra se puede guardar el nombre o descripcion que usa el proveedor.',
-        'Ese nombre del proveedor queda como referencia de compra para identificar mejor pedidos y reposiciones.',
-        'Si ya se compro antes una variante, el sistema puede recuperar la ultima descripcion del proveedor para cargar mas rapido.',
-        'La carga rapida de productos desde Compras tambien incluye precio base, para que las variantes nuevas ya nazcan con el precio correcto.',
+        'Para productos nuevos o variantes nuevas, no hay que hacer ningun paso extra: RetailHub lo prepara automaticamente.',
+        'Para corregir productos que ya estaban creados separados en Tienda Nube, entrar a Online (Tienda Nube) y tocar Corregir productos en Tienda Nube.',
+        'Si despues de corregir quedan pendientes, tocar Reintentar fallidos en la misma pantalla.',
+        'Mientras se hace la correccion, no borrar ni editar manualmente los productos duplicados desde Tienda Nube.',
       ],
     },
     {
-      title: 'Alta masiva de variantes',
+      title: 'Importante',
       items: [
-        'Al crear muchas combinaciones de talle y color, se puede definir un precio comun para todas.',
-        'Las variantes creadas en lote toman el precio del producto, evitando repetir el mismo importe en cada renglon.',
+        'RetailHub no borra productos viejos de Tienda Nube. Primero verifica que todas las variantes queden bien vinculadas.',
+        'Si la correccion esta completa, los productos viejos se despublican para que no se vean duplicados en la tienda.',
+        'Si alguna variante no se pudo vincular, el sistema deja el producto viejo publicado y muestra el pendiente para revisar.',
       ],
+    },
+  ],
+  actions: [
+    {
+      label: 'Ir a Online (Tienda Nube)',
+      to: '/online',
     },
   ],
 };

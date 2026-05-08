@@ -448,6 +448,7 @@ Errores frecuentes y resolucion:
 ## 6.6 Online Tienda Nube (`/online`)
 Objetivo:
 - Operar tareas de importacion/sincronizacion con Tienda Nube y gestionar fallidos.
+- Corregir productos que antes quedaron separados en Tienda Nube, dejando sus variantes dentro de un unico producto.
 
 Prerrequisitos:
 - Permiso `page.online`.
@@ -456,18 +457,34 @@ Prerrequisitos:
 Pasos:
 1. Definir limite de productos.
 2. Ejecutar acciones segun necesidad:
-   - `Importar catalogo`
-   - `Reconciliar catalogo`
-   - `Sync stock`
+   - `Importar desde Tienda Nube`: trae productos y variantes desde Tienda Nube hacia RetailHub.
+   - `Corregir productos en Tienda Nube`: agrupa en Tienda Nube las variantes que pertenecen al mismo producto de RetailHub.
+   - `Sincronizar stock`: envia a Tienda Nube el stock disponible de RetailHub.
    - `Reintentar fallidos`
-   - `Proceso programado jobs`.
+   - `Procesar pendientes`.
 3. Monitorear paneles de resultado y resumen de fallidos por tipo.
+
+Correccion de productos separados:
+1. Entrar a `Productos y variantes` (`/productos`) y revisar que cada variante tenga SKU.
+2. Entrar a `Online (Tienda Nube)` (`/online`).
+3. Tocar `Corregir productos en Tienda Nube`.
+4. Esperar a que termine y revisar `Fallidos pendientes`.
+5. Si quedan pendientes, tocar `Reintentar fallidos`.
+
+Para productos nuevos o variantes nuevas:
+- No hace falta un paso extra. RetailHub ya queda preparado para sincronizarlos como un producto unico con variantes adentro.
+
+Importante:
+- No borrar ni editar manualmente en Tienda Nube los productos duplicados mientras se ejecuta la correccion.
+- RetailHub no elimina productos viejos de Tienda Nube. Los despublica solo cuando ya pudo vincular todas las variantes correctamente.
+- Si alguna variante no se pudo vincular, el producto viejo queda publicado y se muestra el pendiente para revisar.
 
 Resultado esperado:
 - Jobs procesados y estado de sincronizacion actualizado.
+- Cada producto de RetailHub queda como un producto en Tienda Nube, con sus variantes adentro.
 
 Errores frecuentes y resolucion:
-- Fallidos recurrentes: revisar credenciales, SKU y conectividad API.
+- Fallidos recurrentes: revisar que las variantes tengan SKU, que no haya SKU repetidos y que Tienda Nube este conectada.
 - Reintentos no resuelven: ejecutar `Proceso programado jobs` y revisar detalle de errores.
 - Sin datos de tienda: completar configuracion en `/config`.
 

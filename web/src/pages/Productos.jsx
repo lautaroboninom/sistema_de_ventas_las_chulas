@@ -3,6 +3,7 @@ import {
   deleteRetailAtributo,
   deleteRetailVariante,
   getRetailAtributos,
+  getRetailAtributoValores,
   getRetailComprasProveedores,
   getRetailOnlineFailedJobsSummary,
   getRetailProductos,
@@ -22,6 +23,7 @@ import {
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { can, PERMISSION_CODES } from '../lib/permissions';
+import InfoHint from '../components/InfoHint';
 import VariantBatchCreator from '../components/VariantBatchCreator';
 
 function errMsg(error) {
@@ -52,6 +54,41 @@ function attrCode(v) {
   return String(v || '').trim().toLowerCase();
 }
 
+function optionKey(v) {
+  return String(v || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function valuesForAttr(valuesByCode, code) {
+  return valuesByCode?.[attrCode(code)] || [];
+}
+
+function isKnownAttrValue(valuesByCode, code, value) {
+  const key = optionKey(value);
+  if (!key) return false;
+  return valuesForAttr(valuesByCode, code).some((item) => optionKey(item?.value_label) === key || optionKey(item?.value_key) === key);
+}
+
+function normalizeValueError(error) {
+  const data = error?.data || {};
+  if (data?.code === 'attribute_value_suggestion_required') return data;
+  if (data?.detail?.code === 'attribute_value_suggestion_required') return data.detail;
+  return null;
+}
+
+function HelpTitle({ as: Tag = 'h3', className = '', children, help }) {
+  return (
+    <Tag className={`inline-flex items-center gap-2 ${className}`}>
+      <span>{children}</span>
+      <InfoHint text={help} />
+    </Tag>
+  );
+}
+
 function buildOptionValues(rows) {
   const list = Array.isArray(rows) ? rows : [];
   const out = [];
@@ -70,7 +107,12 @@ function buildOptionValues(rows) {
     }
 
     seen.add(code);
-    out.push({ attribute_code: code, value });
+    out.push({
+      attribute_code: code,
+      value,
+      attribute_value_id: row?.attribute_value_id || undefined,
+      confirm_new_value: !!row?.confirm_new_value,
+    });
   });
 
   if (!out.length) {
@@ -223,6 +265,7 @@ export default function ProductosPage() {
 
   const [productos, setProductos] = useState([]);
   const [atributos, setAtributos] = useState([]);
+  const [attrValuesByCode, setAttrValuesByCode] = useState({});
   const [variantes, setVariantes] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [q, setQ] = useState('');
@@ -279,14 +322,23 @@ export default function ProductosPage() {
     setLoading(true);
     setErr('');
     try {
-      const [prods, attrs, vars, sups] = await Promise.all([
+      const [prods, attrs, attrVals, vars, sups] = await Promise.all([
         getRetailProductos({ active: 1 }),
         getRetailAtributos(),
+        getRetailAtributoValores({ limit: 500 }),
         getRetailVariantes({ q, active: 1 }),
         getRetailComprasProveedores({ limit: 500 }),
       ]);
       setProductos(Array.isArray(prods) ? prods : []);
       setAtributos(Array.isArray(attrs) ? attrs : []);
+      const groupedValues = {};
+      const valueItems = Array.isArray(attrVals?.items) ? attrVals.items : Array.isArray(attrVals) ? attrVals : [];
+      valueItems.forEach((item) => {
+        const code = attrCode(item?.attribute_code);
+        if (!code) return;
+        groupedValues[code] = [...(groupedValues[code] || []), item];
+      });
+      setAttrValuesByCode(groupedValues);
       setVariantes(Array.isArray(vars) ? vars : []);
       setSuppliers(Array.isArray(sups) ? sups : []);
     } catch (error) {
@@ -322,6 +374,7 @@ export default function ProductosPage() {
     );
 
     return atributos.filter((a) => {
+      if (a?.active === false) return false;
       const code = attrCode(a.code);
       return !selected.has(code) || code === current;
     });
@@ -337,7 +390,7 @@ export default function ProductosPage() {
   function addOptionRow() {
     setVarForm((prev) => {
       const used = new Set((prev.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
-      const firstFree = atributos.find((a) => !used.has(attrCode(a.code)));
+      const firstFree = atributos.find((a) => a?.active !== false && !used.has(attrCode(a.code)));
       return {
         ...prev,
         option_rows: [
@@ -423,7 +476,12 @@ export default function ProductosPage() {
       closeProductEditor();
       await loadAll();
     } catch (error) {
-      setErr(errMsg(error));
+      const suggestion = normalizeValueError(error);
+      if (suggestion) {
+        setErr(suggestion.detail || errMsg(error));
+      } else {
+        setErr(errMsg(error));
+      }
     } finally {
       setSaving(false);
     }
@@ -460,7 +518,12 @@ export default function ProductosPage() {
       closeAttrEditor();
       await loadAll();
     } catch (error) {
-      setErr(errMsg(error));
+      const suggestion = normalizeValueError(error);
+      if (suggestion) {
+        setErr(suggestion.detail || errMsg(error));
+      } else {
+        setErr(errMsg(error));
+      }
     } finally {
       setSaving(false);
     }
@@ -485,7 +548,8 @@ export default function ProductosPage() {
       if (Number(editAttrForm?.id) === aid) closeAttrEditor();
       await loadAll();
     } catch (error) {
-      setErr(errMsg(error));
+      const suggestion = normalizeValueError(error);
+      setErr(suggestion?.detail || errMsg(error));
     } finally {
       setSaving(false);
     }
@@ -494,7 +558,11 @@ export default function ProductosPage() {
   function openVariantEditor(row) {
     if (!row) return;
     const rows = Array.isArray(row.option_values) && row.option_values.length
-      ? row.option_values.map((opt) => ({ attribute_code: attrCode(opt.attribute_code), value: opt.option_value || '' }))
+      ? row.option_values.map((opt) => ({
+          attribute_code: attrCode(opt.attribute_code),
+          value: opt.option_value || '',
+          attribute_value_id: opt.attribute_value_id || undefined,
+        }))
       : [{ attribute_code: '', value: '' }];
     setEditVariantForm({
       id: row.id,
@@ -527,6 +595,7 @@ export default function ProductosPage() {
     );
 
     return atributos.filter((a) => {
+      if (a?.active === false) return false;
       const code = attrCode(a.code);
       return !selected.has(code) || code === current;
     });
@@ -542,7 +611,7 @@ export default function ProductosPage() {
   function addEditVariantOptionRow() {
     setEditVariantForm((prev) => {
       const used = new Set((prev.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
-      const firstFree = atributos.find((a) => !used.has(attrCode(a.code)));
+      const firstFree = atributos.find((a) => a?.active !== false && !used.has(attrCode(a.code)));
       return {
         ...prev,
         option_rows: [...(prev.option_rows || []), { attribute_code: firstFree ? firstFree.code : '', value: '' }],
@@ -583,7 +652,8 @@ export default function ProductosPage() {
       closeVariantEditor();
       await loadAll();
     } catch (error) {
-      setErr(errMsg(error));
+      const suggestion = normalizeValueError(error);
+      setErr(suggestion?.detail || errMsg(error));
     } finally {
       setSaving(false);
     }
@@ -620,7 +690,8 @@ export default function ProductosPage() {
       setMsg('Producto creado');
       await loadAll();
     } catch (error) {
-      setErr(errMsg(error));
+      const suggestion = normalizeValueError(error);
+      setErr(suggestion?.detail || errMsg(error));
     } finally {
       setSaving(false);
     }
@@ -637,7 +708,8 @@ export default function ProductosPage() {
       setMsg('Atributo creado');
       await loadAll();
     } catch (error) {
-      setErr(errMsg(error));
+      const suggestion = normalizeValueError(error);
+      setErr(suggestion?.detail || errMsg(error));
     } finally {
       setSaving(false);
     }
@@ -913,9 +985,10 @@ export default function ProductosPage() {
   }
 
   const usedAttrs = new Set((varForm.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
-  const canAddOptionRow = atributos.length === 0 || usedAttrs.size < atributos.length;
+  const activeAttrCount = atributos.filter((a) => a?.active !== false).length;
+  const canAddOptionRow = activeAttrCount === 0 || usedAttrs.size < activeAttrCount;
   const usedEditAttrs = new Set((editVariantForm.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
-  const canAddEditOptionRow = atributos.length === 0 || usedEditAttrs.size < atributos.length;
+  const canAddEditOptionRow = activeAttrCount === 0 || usedEditAttrs.size < activeAttrCount;
   const totalProductos = productos.length;
   const totalVariantes = variantes.length;
   const failedSyncTotal = Number(onlineSyncSummary?.failed_total || 0);
@@ -925,7 +998,13 @@ export default function ProductosPage() {
   return (
     <div className="space-y-4">
       <div className="card">
-        <h1 className="h1">Productos y variantes</h1>
+        <HelpTitle
+          as="h1"
+          className="h1"
+          help="Aca se administra el catalogo interno. Un producto agrupa las variantes; cada variante tiene SKU, stock, precio, barcode y atributos para vender localmente y sincronizar con Tienda Nube."
+        >
+          Productos y variantes
+        </HelpTitle>
         <p className="text-sm text-gray-600">
           Catalogo retail unificado. Variantes con atributos configurables y stock global por SKU/barcode.
         </p>
@@ -966,7 +1045,13 @@ export default function ProductosPage() {
       {canEdit ? (
         <div className="card space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold">Altas</h2>
+            <HelpTitle
+              as="h2"
+              className="text-lg font-semibold"
+              help="Desde este bloque se cargan las piezas basicas del catalogo: primero producto, luego atributos si faltan, y finalmente variantes vendibles."
+            >
+              Altas
+            </HelpTitle>
             <button
               type="button"
               className="btn"
@@ -982,7 +1067,13 @@ export default function ProductosPage() {
             <div id="productos-create-panel" className="space-y-4">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <form className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3" onSubmit={createProducto}>
-                  <h3 className="text-lg font-semibold">Nuevo producto</h3>
+                  <HelpTitle
+                    as="h3"
+                    className="text-lg font-semibold"
+                    help="Crea el item base, por ejemplo Remera Basica. No representa un talle o color puntual: sirve para agrupar todas sus variantes bajo el mismo producto."
+                  >
+                    Nuevo producto
+                  </HelpTitle>
                   <input
                     className="input"
                     placeholder="Nombre interno"
@@ -1037,7 +1128,13 @@ export default function ProductosPage() {
                 </form>
 
                 <form className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3" onSubmit={createAtributo}>
-                  <h3 className="text-lg font-semibold">Nuevo atributo</h3>
+                  <HelpTitle
+                    as="h3"
+                    className="text-lg font-semibold"
+                    help="Crea una caracteristica reutilizable, como Talle o Color. Luego cada variante recibe un valor de ese atributo, por ejemplo Talle M o Color Negro."
+                  >
+                    Nuevo atributo
+                  </HelpTitle>
                   <input
                     className="input"
                     placeholder="Nombre (ej Talle)"
@@ -1057,7 +1154,13 @@ export default function ProductosPage() {
               </div>
 
               <form className="rounded-xl border border-neutral-200 bg-white p-4 space-y-3" onSubmit={createVariante}>
-                <h3 className="text-lg font-semibold">Nueva variante</h3>
+                <HelpTitle
+                  as="h3"
+                  className="text-lg font-semibold"
+                  help="Crea una unidad vendible concreta del producto. Esta variante tiene SKU, barcode, stock, precios y valores de atributos; por ejemplo Remera Basica, Color Negro, Talle M."
+                >
+                  Nueva variante
+                </HelpTitle>
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   <div className="space-y-1">
@@ -1192,9 +1295,18 @@ export default function ProductosPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <h4 className="text-sm font-semibold">Atributos de la variante</h4>
+                  <HelpTitle
+                    as="h4"
+                    className="text-sm font-semibold"
+                    help="Define que valores distinguen esta variante dentro del producto. Elegir valores ya existentes evita duplicados como Negro, negro o NEGRO."
+                  >
+                    Atributos de la variante
+                  </HelpTitle>
                   {(varForm.option_rows || []).map((row, idx) => {
                     const options = availableAttrsForRow(idx);
+                    const attrValues = valuesForAttr(attrValuesByCode, row.attribute_code).slice(0, 10);
+                    const knownValue = isKnownAttrValue(attrValuesByCode, row.attribute_code, row.value);
+                    const listId = `variant-attr-values-${idx}`;
                     return (
                       <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
                         <div className="md:col-span-5">
@@ -1202,7 +1314,7 @@ export default function ProductosPage() {
                           <select
                             className="input"
                             value={row.attribute_code || ''}
-                            onChange={(e) => updateOptionRow(idx, { attribute_code: e.target.value })}
+                            onChange={(e) => updateOptionRow(idx, { attribute_code: e.target.value, value: '', attribute_value_id: undefined, confirm_new_value: false })}
                             required
                           >
                             <option value="">Seleccionar atributo</option>
@@ -1216,11 +1328,48 @@ export default function ProductosPage() {
                           <label className="block text-xs text-gray-500 mb-1">Valor</label>
                           <input
                             className="input"
+                            list={listId}
                             placeholder="Ej: S, Negro, 36"
                             value={row.value || ''}
-                            onChange={(e) => updateOptionRow(idx, { value: e.target.value })}
+                            onChange={(e) => updateOptionRow(idx, { value: e.target.value, attribute_value_id: undefined, confirm_new_value: false })}
                             required
                           />
+                          <datalist id={listId}>
+                            {attrValues.map((item) => (
+                              <option key={item.id} value={item.value_label} />
+                            ))}
+                          </datalist>
+                          {attrValues.length ? (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {attrValues.slice(0, 6).map((item) => (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  className="px-2 py-1 rounded border text-[11px] hover:bg-neutral-100"
+                                  onClick={() =>
+                                    updateOptionRow(idx, {
+                                      value: item.value_label,
+                                      attribute_value_id: item.id,
+                                      confirm_new_value: false,
+                                    })
+                                  }
+                                >
+                                  {item.value_label}
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                          {row.value && row.attribute_code && !knownValue ? (
+                            <button
+                              type="button"
+                              className={`mt-1 px-2 py-1 rounded border text-[11px] ${
+                                row.confirm_new_value ? 'border-amber-300 bg-amber-50 text-amber-700' : 'hover:bg-neutral-100'
+                              }`}
+                              onClick={() => updateOptionRow(idx, { confirm_new_value: !row.confirm_new_value })}
+                            >
+                              {row.confirm_new_value ? 'Nuevo valor confirmado' : 'Crear valor nuevo'}
+                            </button>
+                          ) : null}
                         </div>
 
                         <div className="md:col-span-2">
@@ -1254,6 +1403,7 @@ export default function ProductosPage() {
                 title="Alta masiva por combinaciones"
                 products={productos}
                 attributes={atributos}
+                attributeValuesByCode={attrValuesByCode}
                 suppliers={suppliers}
                 canEdit={canEdit}
                 onBatchFinished={onBatchCreated}
@@ -1274,7 +1424,13 @@ export default function ProductosPage() {
       {canEdit ? (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div className="card space-y-3">
-            <h2 className="text-lg font-semibold">Productos</h2>
+            <HelpTitle
+              as="h2"
+              className="text-lg font-semibold"
+              help="Lista de productos base. Cada fila puede tener una o varias variantes asociadas para talles, colores u otras opciones."
+            >
+              Productos
+            </HelpTitle>
             <div className="overflow-auto">
               <table className="min-w-full text-sm">
                 <thead>
@@ -1314,7 +1470,13 @@ export default function ProductosPage() {
 
             {editProductForm?.id ? (
               <div className="rounded-xl border border-neutral-200 p-3 space-y-2">
-                <h3 className="text-sm font-semibold">Editar producto #{editProductForm.id}</h3>
+                <HelpTitle
+                  as="h3"
+                  className="text-sm font-semibold"
+                  help="Modifica los datos generales del producto base. Los cambios de precios por defecto pueden propagarse a variantes cuando corresponda."
+                >
+                  Editar producto #{editProductForm.id}
+                </HelpTitle>
                 <input
                   className="input"
                   value={editProductForm.name}
@@ -1380,7 +1542,13 @@ export default function ProductosPage() {
           </div>
 
           <div className="card space-y-3">
-            <h2 className="text-lg font-semibold">Atributos</h2>
+            <HelpTitle
+              as="h2"
+              className="text-lg font-semibold"
+              help="Catalogo de atributos reutilizables para variantes. Mantenerlo ordenado ayuda a que RetailHub y Tienda Nube hablen el mismo idioma."
+            >
+              Atributos
+            </HelpTitle>
             <div className="overflow-auto">
               <table className="min-w-full text-sm">
                 <thead>
@@ -1427,7 +1595,13 @@ export default function ProductosPage() {
 
             {editAttrForm?.id ? (
               <div className="rounded-xl border border-neutral-200 p-3 space-y-2">
-                <h3 className="text-sm font-semibold">Editar atributo #{editAttrForm.id}</h3>
+                <HelpTitle
+                  as="h3"
+                  className="text-sm font-semibold"
+                  help="Ajusta el nombre visible o estado del atributo. El codigo no se puede cambiar cuando ya esta usado para evitar romper variantes existentes."
+                >
+                  Editar atributo #{editAttrForm.id}
+                </HelpTitle>
                 <input
                   className="input"
                   value={editAttrForm.name}
@@ -1469,7 +1643,13 @@ export default function ProductosPage() {
 
       <div className="card">
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-lg font-semibold">Variantes</h2>
+          <HelpTitle
+            as="h2"
+            className="text-lg font-semibold"
+            help="Lista de variantes vendibles. Cada variante descuenta stock, puede tener barcode propio y se sincroniza como una variante del producto en Tienda Nube."
+          >
+            Variantes
+          </HelpTitle>
           <span className="text-xs text-gray-500">Atributos cargados: {atributos.length}</span>
         </div>
         {loading ? <p className="text-sm text-gray-500">Cargando...</p> : null}
@@ -1614,7 +1794,13 @@ export default function ProductosPage() {
         <div className="fixed inset-0 z-50 bg-black/40 p-3 md:p-6 overflow-auto">
           <div className="mx-auto w-full max-w-4xl rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold">Editar variante #{editVariantForm?.id || ''}</h3>
+              <HelpTitle
+                as="h3"
+                className="text-lg font-semibold"
+                help="Actualiza la variante vendible: SKU, barcode principal, precios, stock minimo, estado y valores de atributos."
+              >
+                Editar variante #{editVariantForm?.id || ''}
+              </HelpTitle>
               <button type="button" className="px-3 py-2 rounded border" onClick={closeVariantEditor} disabled={saving}>
                 Cerrar
               </button>
@@ -1689,43 +1875,104 @@ export default function ProductosPage() {
               </label>
 
               <div className="space-y-2">
-                <h4 className="text-sm font-semibold">Atributos</h4>
-                {(editVariantForm.option_rows || []).map((row, idx) => (
-                  <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-                    <div className="md:col-span-5">
-                      <select
-                        className="input"
-                        value={row.attribute_code || ''}
-                        onChange={(e) => updateEditVariantOptionRow(idx, { attribute_code: e.target.value })}
-                        required
-                      >
-                        <option value="">Seleccionar atributo</option>
-                        {availableAttrsForVariantEditRow(idx).map((a) => (
-                          <option key={a.id} value={a.code}>{a.name}</option>
-                        ))}
-                      </select>
+                <HelpTitle
+                  as="h4"
+                  className="text-sm font-semibold"
+                  help="Estos valores identifican la variante dentro del producto. Cambiarlos puede modificar la combinacion que ve Tienda Nube."
+                >
+                  Atributos
+                </HelpTitle>
+                {(editVariantForm.option_rows || []).map((row, idx) => {
+                  const attrValues = valuesForAttr(attrValuesByCode, row.attribute_code).slice(0, 10);
+                  const knownValue = isKnownAttrValue(attrValuesByCode, row.attribute_code, row.value);
+                  const listId = `edit-variant-attr-values-${idx}`;
+                  return (
+                    <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+                      <div className="md:col-span-5">
+                        <select
+                          className="input"
+                          value={row.attribute_code || ''}
+                          onChange={(e) =>
+                            updateEditVariantOptionRow(idx, {
+                              attribute_code: e.target.value,
+                              value: '',
+                              attribute_value_id: undefined,
+                              confirm_new_value: false,
+                            })
+                          }
+                          required
+                        >
+                          <option value="">Seleccionar atributo</option>
+                          {availableAttrsForVariantEditRow(idx).map((a) => (
+                            <option key={a.id} value={a.code}>{a.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="md:col-span-5">
+                        <input
+                          className="input"
+                          list={listId}
+                          value={row.value || ''}
+                          onChange={(e) =>
+                            updateEditVariantOptionRow(idx, {
+                              value: e.target.value,
+                              attribute_value_id: undefined,
+                              confirm_new_value: false,
+                            })
+                          }
+                          placeholder="Valor"
+                          required
+                        />
+                        <datalist id={listId}>
+                          {attrValues.map((item) => (
+                            <option key={item.id} value={item.value_label} />
+                          ))}
+                        </datalist>
+                        {attrValues.length ? (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {attrValues.slice(0, 6).map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className="px-2 py-1 rounded border text-[11px] hover:bg-neutral-100"
+                                onClick={() =>
+                                  updateEditVariantOptionRow(idx, {
+                                    value: item.value_label,
+                                    attribute_value_id: item.id,
+                                    confirm_new_value: false,
+                                  })
+                                }
+                              >
+                                {item.value_label}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {row.value && row.attribute_code && !knownValue ? (
+                          <button
+                            type="button"
+                            className={`mt-1 px-2 py-1 rounded border text-[11px] ${
+                              row.confirm_new_value ? 'border-amber-300 bg-amber-50 text-amber-700' : 'hover:bg-neutral-100'
+                            }`}
+                            onClick={() => updateEditVariantOptionRow(idx, { confirm_new_value: !row.confirm_new_value })}
+                          >
+                            {row.confirm_new_value ? 'Nuevo valor confirmado' : 'Crear valor nuevo'}
+                          </button>
+                        ) : null}
+                      </div>
+                      <div className="md:col-span-2">
+                        <button
+                          type="button"
+                          className="px-3 py-2 rounded border w-full"
+                          onClick={() => removeEditVariantOptionRow(idx)}
+                          disabled={(editVariantForm.option_rows || []).length <= 1}
+                        >
+                          Quitar
+                        </button>
+                      </div>
                     </div>
-                    <div className="md:col-span-5">
-                      <input
-                        className="input"
-                        value={row.value || ''}
-                        onChange={(e) => updateEditVariantOptionRow(idx, { value: e.target.value })}
-                        placeholder="Valor"
-                        required
-                      />
-                    </div>
-                    <div className="md:col-span-2">
-                      <button
-                        type="button"
-                        className="px-3 py-2 rounded border w-full"
-                        onClick={() => removeEditVariantOptionRow(idx)}
-                        disabled={(editVariantForm.option_rows || []).length <= 1}
-                      >
-                        Quitar
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
 
                 <button
                   type="button"
@@ -1755,7 +2002,13 @@ export default function ProductosPage() {
           <div className="mx-auto w-full max-w-5xl rounded-xl border border-neutral-200 bg-white p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h3 className="text-lg font-semibold">Gestion de barcodes</h3>
+                <HelpTitle
+                  as="h3"
+                  className="text-lg font-semibold"
+                  help="Administra los codigos que identifican esta variante al escanear, vender o imprimir etiquetas. La variante siempre debe tener un codigo principal."
+                >
+                  Gestion de barcodes
+                </HelpTitle>
                 <p className="text-xs text-gray-500">
                   {barcodeModal?.variant?.producto || 'Variante'} {barcodeModal?.variant?.option_signature ? `(${barcodeModal.variant.option_signature})` : ''}
                 </p>
@@ -1771,7 +2024,13 @@ export default function ProductosPage() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               {canEdit ? (
                 <form className="rounded-xl border border-neutral-200 p-3 space-y-2" onSubmit={associateBarcodeFromModal}>
-                  <h4 className="text-sm font-semibold">Asociar barcode (teclado o escaner)</h4>
+                  <HelpTitle
+                    as="h4"
+                    className="text-sm font-semibold"
+                    help="Vincula un EAN-13 ya existente a esta variante. Sirve cuando el producto ya trae etiqueta o cuando se quiere usar un codigo escaneado."
+                  >
+                    Asociar barcode (teclado o escaner)
+                  </HelpTitle>
                   <input
                     ref={barcodeModalInputRef}
                     className="input"
@@ -1813,7 +2072,13 @@ export default function ProductosPage() {
               <div className="rounded-xl border border-neutral-200 p-3 space-y-2">
                 {canEdit ? (
                   <>
-                    <h4 className="text-sm font-semibold">Generar EAN-13</h4>
+                    <HelpTitle
+                      as="h4"
+                      className="text-sm font-semibold"
+                      help="Crea un codigo EAN-13 interno para esta variante cuando no tiene uno propio. Usa el codigo de proveedor si esta configurado."
+                    >
+                      Generar EAN-13
+                    </HelpTitle>
                     <select
                       className="input"
                       value={barcodeModal.supplierId}
@@ -1832,7 +2097,13 @@ export default function ProductosPage() {
                     <div className="h-px bg-neutral-200 my-1" />
                   </>
                 ) : null}
-                <h4 className="text-sm font-semibold">Impresion</h4>
+                <HelpTitle
+                  as="h4"
+                  className="text-sm font-semibold"
+                  help="Abre el PDF para imprimir etiquetas de barcodes. Puede imprimir el codigo principal, todos los codigos o uno puntual."
+                >
+                  Impresion
+                </HelpTitle>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
                   <select
                     className="input"
@@ -1917,7 +2188,13 @@ export default function ProductosPage() {
 
             <div className="rounded-xl border border-neutral-200 p-3">
               <div className="flex items-center justify-between mb-2">
-                <h4 className="text-sm font-semibold">Codigos asociados</h4>
+                <HelpTitle
+                  as="h4"
+                  className="text-sm font-semibold"
+                  help="Muestra todos los codigos vinculados a la variante y cual es el principal para busquedas, ventas e impresion."
+                >
+                  Codigos asociados
+                </HelpTitle>
                 <button
                   type="button"
                   className="px-2 py-1 rounded border text-xs"

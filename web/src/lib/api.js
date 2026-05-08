@@ -127,6 +127,14 @@ export const postRetailProducto = (payload) => api.post('/api/retail/productos/'
 export const patchRetailProducto = (id, payload) => api.patch(`/api/retail/productos/${id}/`, payload);
 
 export const getRetailAtributos = () => api.get('/api/retail/atributos/');
+export const getRetailAtributoValores = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.attribute_id) qs.set('attribute_id', String(params.attribute_id));
+  if (params.attribute_code) qs.set('attribute_code', String(params.attribute_code));
+  if (params.q) qs.set('q', String(params.q));
+  if (params.limit) qs.set('limit', String(params.limit));
+  return api.get(`/api/retail/atributos/valores/${qs.toString() ? `?${qs}` : ''}`);
+};
 export const postRetailAtributo = (payload) => api.post('/api/retail/atributos/', payload);
 export const patchRetailAtributo = (id, payload) => api.patch(`/api/retail/atributos/${id}/`, payload);
 export const deleteRetailAtributo = (id) => api.del(`/api/retail/atributos/${id}/`);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   getRetailOnlineFailedJobsSummary,
   postRetailOnlineImportCatalogo,
@@ -10,6 +11,25 @@ import {
 
 function errMsg(error) {
   return error?.message || 'Ocurrio un error inesperado';
+}
+
+function ResultCard({ title, result, emptyText, intro }) {
+  return (
+    <div className="card">
+      <h2 className="text-lg font-semibold mb-2">{title}</h2>
+      {result ? (
+        <div className="space-y-2">
+          {intro ? <p className="text-sm text-gray-600">{intro}</p> : null}
+          <details className="rounded-lg border border-neutral-200 bg-gray-50">
+            <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-neutral-700">Ver detalle tecnico</summary>
+            <pre className="max-h-72 overflow-auto border-t border-neutral-200 p-2 text-xs">{JSON.stringify(result, null, 2)}</pre>
+          </details>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">{emptyText}</p>
+      )}
+    </div>
+  );
 }
 
 export default function OnlinePage() {
@@ -159,8 +179,8 @@ export default function OnlinePage() {
           <div>
             <h1 className="h1">Online (Tienda Nube)</h1>
             <p className="text-sm text-gray-600">
-              Primero importa catalogo desde Tienda Nube a RetailHub. Despues puedes sincronizar precios y stock
-              desde RetailHub hacia Tienda Nube.
+              Esta pantalla conecta RetailHub con Tienda Nube. Los productos, variantes, precios y stock se toman desde
+              RetailHub para mantener la tienda ordenada.
             </p>
           </div>
           <div className="relative" ref={actionMenuRef}>
@@ -182,7 +202,7 @@ export default function OnlinePage() {
                   onClick={runCatalogReconcile}
                   disabled={loading}
                 >
-                  Reconciliar catalogo
+                  Corregir productos en Tienda Nube
                 </button>
               </div>
             ) : null}
@@ -190,16 +210,61 @@ export default function OnlinePage() {
         </div>
       </div>
 
+      <div className="card space-y-3 border-emerald-200 bg-emerald-50/60">
+        <div>
+          <h2 className="text-lg font-semibold text-emerald-950">Correccion automatica de productos en Tienda Nube</h2>
+          <p className="mt-1 text-sm leading-6 text-emerald-900">
+            Esta actualizacion ya esta preparada para que Tienda Nube reciba un solo producto con sus variantes adentro.
+            Para productos nuevos o variantes nuevas no hace falta hacer nada extra: RetailHub los sincroniza con esta forma nueva.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-emerald-200 bg-white p-3 text-sm leading-6 text-neutral-700">
+          <p className="font-semibold text-neutral-900">Para corregir productos que ya estaban separados antes de esta actualizacion:</p>
+          <ol className="mt-2 list-decimal space-y-1 pl-5">
+            <li>
+              Entrar a <Link to="/productos" className="font-semibold text-emerald-800 underline">Productos y variantes</Link> y revisar
+              que cada variante tenga SKU.
+            </li>
+            <li>Tocar Corregir productos en Tienda Nube.</li>
+            <li>Esperar a que termine y revisar Fallidos pendientes.</li>
+            <li>Si quedan pendientes, tocar Reintentar fallidos.</li>
+          </ol>
+          <p className="mt-2 text-xs text-neutral-600">
+            No borres productos duplicados desde Tienda Nube durante la correccion. RetailHub despublica productos viejos solo cuando ya pudo
+            vincular todas las variantes correctamente.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn" onClick={runCatalogReconcile} disabled={loading}>
+            {loading ? 'Procesando...' : 'Corregir productos en Tienda Nube'}
+          </button>
+          <button
+            type="button"
+            className={`px-3 py-2 rounded border ${
+              hasFailed
+                ? 'border-red-300 bg-red-50 text-red-700 font-semibold'
+                : 'border-emerald-300 bg-white text-emerald-900 hover:bg-emerald-100'
+            }`}
+            onClick={runRetryFailed}
+            disabled={loading}
+          >
+            Reintentar fallidos{hasFailed ? ` (${failedTotal})` : ''}
+          </button>
+        </div>
+      </div>
+
       <div className="card grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Limite de productos</label>
+          <label className="block text-xs text-gray-500 mb-1">Limite de productos a procesar</label>
           <input className="input" type="number" min="1" max="2000" value={limit} onChange={(e) => setLimit(e.target.value)} />
         </div>
         <button type="button" className="btn" onClick={runCatalogImport} disabled={loading}>
-          Importar catalogo
+          Importar desde Tienda Nube
         </button>
         <button type="button" className="btn" onClick={runStockSync} disabled={loading}>
-          Sync stock
+          Sincronizar stock
         </button>
         <button
           type="button"
@@ -210,7 +275,7 @@ export default function OnlinePage() {
           Reintentar fallidos{hasFailed ? ` (${failedTotal})` : ''}
         </button>
         <button type="button" className="btn-secondary" onClick={runJobsProcess} disabled={loading}>
-          Proceso programado jobs
+          Procesar pendientes
         </button>
         <div className="md:col-span-4 flex flex-wrap items-center gap-2 text-xs">
           <span
@@ -221,47 +286,59 @@ export default function OnlinePage() {
             Fallidos pendientes: {failedTotal}
           </span>
           <span className="inline-flex rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-neutral-700">
-            Import catalogo: {Number(failedSummary?.by_type?.import_catalogo || 0)}
+            Importacion: {Number(failedSummary?.by_type?.import_catalogo || 0)}
           </span>
           <span className="inline-flex rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-neutral-700">
-            Reconciliar catalogo: {Number(failedSummary?.by_type?.sync_catalogo || 0)}
+            Correccion productos: {Number(failedSummary?.by_type?.sync_catalogo || 0)}
           </span>
           <span className="inline-flex rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-neutral-700">
-            Sync stock: {Number(failedSummary?.by_type?.sync_stock || 0)}
+            Stock: {Number(failedSummary?.by_type?.sync_stock || 0)}
           </span>
           {summaryLoading ? <span className="text-gray-500">Actualizando estado...</span> : null}
         </div>
       </div>
 
-      <div className="card">
-        <h2 className="text-lg font-semibold mb-2">Resultado importacion</h2>
-        <pre className="text-xs bg-gray-50 border rounded p-2 overflow-auto max-h-72">{JSON.stringify(importResult, null, 2)}</pre>
-      </div>
+      <ResultCard
+        title="Resultado importacion"
+        result={importResult}
+        emptyText="Todavia no se importo catalogo desde Tienda Nube en esta sesion."
+        intro="La importacion trae productos y variantes desde Tienda Nube hacia RetailHub."
+      />
 
-      <div className="card">
-        <h2 className="text-lg font-semibold mb-2">Resultado reconciliacion catalogo</h2>
-        <pre className="text-xs bg-gray-50 border rounded p-2 overflow-auto max-h-72">{JSON.stringify(catalogResult, null, 2)}</pre>
-      </div>
+      <ResultCard
+        title="Resultado correccion de productos"
+        result={catalogResult}
+        emptyText="Todavia no se ejecuto la correccion de productos en esta sesion."
+        intro="La correccion agrupa variantes bajo su producto y vincula cada variante por SKU."
+      />
 
-      <div className="card">
-        <h2 className="text-lg font-semibold mb-2">Resultado stock</h2>
-        <pre className="text-xs bg-gray-50 border rounded p-2 overflow-auto max-h-72">{JSON.stringify(stockResult, null, 2)}</pre>
-      </div>
+      <ResultCard
+        title="Resultado stock"
+        result={stockResult}
+        emptyText="Todavia no se sincronizo stock en esta sesion."
+        intro="La sincronizacion de stock actualiza en Tienda Nube las cantidades disponibles que figuran en RetailHub."
+      />
 
-      <div className="card">
-        <h2 className="text-lg font-semibold mb-2">Resultado reintento de fallidos</h2>
-        <pre className="text-xs bg-gray-50 border rounded p-2 overflow-auto max-h-72">{JSON.stringify(retryResult, null, 2)}</pre>
-      </div>
+      <ResultCard
+        title="Resultado reintento de fallidos"
+        result={retryResult}
+        emptyText="Todavia no se reintentaron pendientes en esta sesion."
+        intro="El reintento vuelve a procesar acciones que antes no pudieron terminar."
+      />
 
-      <div className="card">
-        <h2 className="text-lg font-semibold mb-2">Fallidos recientes (online sync)</h2>
-        <pre className="text-xs bg-gray-50 border rounded p-2 overflow-auto max-h-72">{JSON.stringify(failedSummary, null, 2)}</pre>
-      </div>
+      <ResultCard
+        title="Fallidos recientes"
+        result={failedSummary}
+        emptyText="No hay estado de pendientes cargado todavia."
+        intro="Este estado muestra si quedaron acciones pendientes de Tienda Nube para revisar o reintentar."
+      />
 
-      <div className="card">
-        <h2 className="text-lg font-semibold mb-2">Resultado proceso de jobs (ARCA + online)</h2>
-        <pre className="text-xs bg-gray-50 border rounded p-2 overflow-auto max-h-72">{JSON.stringify(processResult, null, 2)}</pre>
-      </div>
+      <ResultCard
+        title="Resultado procesar pendientes"
+        result={processResult}
+        emptyText="Todavia no se proceso la cola de pendientes en esta sesion."
+        intro="Procesar pendientes intenta resolver trabajos de Tienda Nube y ARCA que quedaron en espera."
+      />
 
       {err ? <p className="text-sm text-red-700">{err}</p> : null}
       {summaryErr ? <p className="text-sm text-red-700">{summaryErr}</p> : null}

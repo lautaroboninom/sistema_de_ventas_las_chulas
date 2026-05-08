@@ -437,6 +437,32 @@ export default function App() {
                   </ul>
                 </section>
               ))}
+              {Array.isArray(UPDATE_NOTICE.actions) && UPDATE_NOTICE.actions.length ? (
+                <div className="flex flex-wrap gap-2 border-t border-neutral-200 pt-4">
+                  {UPDATE_NOTICE.actions.map((action) =>
+                    action?.to ? (
+                      <Link
+                        key={`${action.label}-${action.to}`}
+                        to={action.to}
+                        onClick={dismissUpdateNotice}
+                        className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-800"
+                      >
+                        {action.label}
+                      </Link>
+                    ) : action?.href ? (
+                      <a
+                        key={`${action.label}-${action.href}`}
+                        href={action.href}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-800 hover:bg-neutral-100"
+                      >
+                        {action.label}
+                      </a>
+                    ) : null,
+                  )}
+                </div>
+              ) : null}
             </div>
 
             <div className="flex justify-end border-t border-neutral-200 px-5 py-4">

@@ -16,6 +16,7 @@ VIEW_PERMISSION_MATRIX = {
     'RetailProductosView': {'GET': 'page.productos', 'POST': 'action.config.editar'},
     'RetailProductoDetailView': {'PATCH': 'action.config.editar'},
     'RetailAtributosView': {'GET': 'page.productos', 'POST': 'action.config.editar'},
+    'RetailAtributoValoresView': {'GET': 'page.productos'},
     'RetailAtributoDetailView': {'PATCH': 'action.config.editar', 'DELETE': 'action.config.editar'},
     'RetailVariantesView': {'GET': 'page.productos', 'POST': 'action.config.editar'},
     'RetailVarianteDetailView': {'PATCH': 'action.config.editar', 'DELETE': 'action.config.editar'},

@@ -6,10 +6,14 @@ from rest_framework.exceptions import ValidationError
 
 from service.views.retail_views import (
     RetailAtributoDetailView,
+    RetailAtributosView,
     RetailComprasView,
     RetailProductosView,
     RetailVarianteDetailView,
     RetailVariantesView,
+    _display_option_value,
+    _normalized_option_key,
+    _resolve_attribute_value,
 )
 
 
@@ -23,6 +27,46 @@ def _request(*, data=None, query=None, method='GET', role='admin'):
 
 
 class RetailCatalogManagementTests(unittest.TestCase):
+    def test_option_value_normalization_key_is_case_accent_and_space_insensitive(self):
+        self.assertEqual(_normalized_option_key('  NEGRO  '), 'negro')
+        self.assertEqual(_normalized_option_key('Marron  claro'), 'marron claro')
+        self.assertEqual(_normalized_option_key('marr\u00f3n'), 'marron')
+        self.assertEqual(_display_option_value('NEGRO', {'code': 'color'}), 'Negro')
+        self.assertEqual(_display_option_value('m', {'code': 'talle'}), 'M')
+
+    @patch('service.views.retail_views._set_audit_user')
+    @patch('service.views.retail_views.q')
+    def test_atributo_post_rejects_case_duplicate(self, q_mock, _set_audit_user_mock):
+        q_mock.return_value = [{'id': 3, 'name': 'Color', 'code': 'color'}]
+        req = _request(data={'name': 'COLOR', 'code': 'COLOR'}, method='POST')
+        with self.assertRaises(ValidationError):
+            RetailAtributosView.post.__wrapped__(RetailAtributosView(), req)
+
+    @patch('service.views.retail_views.exec_returning')
+    @patch('service.views.retail_views.q')
+    def test_option_value_typo_requires_confirmation(self, q_mock, exec_returning_mock):
+        q_mock.side_effect = [
+            None,
+            [{'id': 9, 'attribute_id': 2, 'value_label': 'Negro', 'value_key': 'negro', 'active': True}],
+        ]
+        with self.assertRaises(ValidationError) as ctx:
+            _resolve_attribute_value({'id': 2, 'code': 'color', 'name': 'Color'}, 'Nerog', confirm_new_value=False)
+        self.assertIn('Negro', str(ctx.exception))
+        exec_returning_mock.assert_not_called()
+
+    @patch('service.views.retail_views.exec_returning', return_value=15)
+    @patch('service.views.retail_views.q')
+    def test_option_value_creates_when_no_similar_value_exists(self, q_mock, exec_returning_mock):
+        q_mock.side_effect = [
+            None,
+            [],
+            {'id': 15, 'value_label': 'Chocolate', 'value_key': 'chocolate'},
+        ]
+        out = _resolve_attribute_value({'id': 2, 'code': 'color', 'name': 'Color'}, 'chocolate', confirm_new_value=False)
+        self.assertEqual(out['id'], 15)
+        self.assertEqual(out['label'], 'Chocolate')
+        exec_returning_mock.assert_called_once()
+
     @patch('service.views.retail_views.q')
     def test_productos_get_supports_limit(self, q_mock):
         q_mock.return_value = []
@@ -152,6 +196,7 @@ class RetailCatalogManagementTests(unittest.TestCase):
                 'active': True,
                 'sort_order': 100,
             },
+            [],
             {'exists': 1},
         ]
         req = _request(data={'code': 'tamano'}, method='PATCH')

@@ -1088,22 +1088,264 @@ def _product_name(product_id):
     return row
 
 
-def _attribute_by_ref(attribute_id=None, attribute_code=None):
+def _collapse_spaces(value):
+    txt = _clean_text(value)
+    if not txt:
+        return None
+    return re.sub(r'\s+', ' ', txt)
+
+
+def _normalized_option_key(value):
+    txt = _collapse_spaces(value)
+    if not txt:
+        return None
+    normalized = unicodedata.normalize('NFKD', txt)
+    ascii_text = normalized.encode('ascii', 'ignore').decode('ascii')
+    key = re.sub(r'\s+', ' ', ascii_text.casefold()).strip()
+    return key or None
+
+
+def _compact_option_key(value):
+    key = _normalized_option_key(value)
+    if not key:
+        return None
+    return re.sub(r'[^a-z0-9]+', '', key)
+
+
+def _attribute_token(value):
+    raw = _normalized_option_key(value) or ''
+    return re.sub(r'[^a-z0-9]+', '', raw)
+
+
+def _normalize_attribute_code(raw):
+    txt = _normalized_option_key(raw)
+    if not txt:
+        return None
+    code = re.sub(r'[^a-z0-9]+', '_', txt).strip('_')
+    return code or None
+
+
+def _display_attribute_name(raw):
+    txt = _collapse_spaces(raw)
+    if not txt:
+        return None
+    if txt.isupper() and len(txt) > 3:
+        return ' '.join(part[:1].upper() + part[1:].lower() for part in txt.split(' '))
+    return txt
+
+
+def _attribute_duplicate_exists(name, code, exclude_id=None):
+    name_key = _normalized_option_key(name)
+    code_key = _normalize_attribute_code(code)
+    rows = q(
+        '''
+        SELECT id, name, code
+        FROM retail_variant_attributes
+        WHERE (%s IS NOT NULL AND LOWER(code)=LOWER(%s))
+           OR (%s IS NOT NULL AND LOWER(name)=LOWER(%s))
+        ORDER BY id
+        LIMIT 5
+        ''',
+        [code_key, code_key, name, name],
+    ) or []
+    for row in rows:
+        if exclude_id and int(row.get('id') or 0) == int(exclude_id):
+            continue
+        if _normalize_attribute_code(row.get('code')) == code_key:
+            return True
+        if _normalized_option_key(row.get('name')) == name_key:
+            return True
+    return False
+
+
+def _looks_like_size_attribute(attr):
+    token = _attribute_token((attr or {}).get('code') or (attr or {}).get('name'))
+    return token in {'talle', 'size', 'tamano'}
+
+
+def _display_option_value(raw_value, attr=None):
+    txt = _collapse_spaces(raw_value)
+    if not txt:
+        return None
+    if _looks_like_size_attribute(attr):
+        return txt.upper()
+    if txt.isupper() and len(txt) > 3:
+        return ' '.join(part[:1].upper() + part[1:].lower() for part in txt.split(' '))
+    if txt.islower() and len(txt) > 1:
+        return ' '.join(part[:1].upper() + part[1:] for part in txt.split(' '))
+    return txt
+
+
+def _levenshtein_distance(left, right, max_distance=None):
+    a = str(left or '')
+    b = str(right or '')
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    if len(a) > len(b):
+        a, b = b, a
+    if max_distance is not None and len(b) - len(a) > max_distance:
+        return max_distance + 1
+    previous = list(range(len(a) + 1))
+    for j, cb in enumerate(b, start=1):
+        current = [j]
+        row_min = current[0]
+        for i, ca in enumerate(a, start=1):
+            insert_cost = current[i - 1] + 1
+            delete_cost = previous[i] + 1
+            replace_cost = previous[i - 1] + (0 if ca == cb else 1)
+            val = min(insert_cost, delete_cost, replace_cost)
+            current.append(val)
+            row_min = min(row_min, val)
+        if max_distance is not None and row_min > max_distance:
+            return max_distance + 1
+        previous = current
+    return previous[-1]
+
+
+def _attribute_by_ref(attribute_id=None, attribute_code=None, require_active=True):
     row = None
+    active_sql = ' AND active=TRUE' if require_active else ''
     if attribute_id:
-        row = q('SELECT id, code, name FROM retail_variant_attributes WHERE id=%s AND active=TRUE', [attribute_id], one=True)
+        row = q(
+            f'SELECT id, code, name, active, sort_order FROM retail_variant_attributes WHERE id=%s{active_sql}',
+            [attribute_id],
+            one=True,
+        )
     elif attribute_code:
-        row = q('SELECT id, code, name FROM retail_variant_attributes WHERE LOWER(code)=LOWER(%s) AND active=TRUE', [attribute_code], one=True)
+        row = q(
+            f'SELECT id, code, name, active, sort_order FROM retail_variant_attributes WHERE LOWER(code)=LOWER(%s){active_sql}',
+            [attribute_code],
+            one=True,
+        )
     if not row:
         raise ValidationError('Atributo invalido en option_values')
     return row
 
 
-def _normalize_option_value(value):
-    s = _clean_text(value)
-    if not s:
+def _find_attribute_value(attribute_id, value_key):
+    key = _normalized_option_key(value_key)
+    if not attribute_id or not key:
         return None
-    return s.casefold()
+    return q(
+        '''
+        SELECT id, attribute_id, value_label, value_key, active
+        FROM retail_variant_attribute_values
+        WHERE attribute_id=%s
+          AND value_key=%s
+        ORDER BY active DESC, id
+        LIMIT 1
+        ''',
+        [attribute_id, key],
+        one=True,
+    )
+
+
+def _best_attribute_value_suggestion(attribute_id, value_key):
+    key = _normalized_option_key(value_key)
+    compact_key = _compact_option_key(value_key)
+    if not attribute_id or not key or not compact_key or len(compact_key) < 3:
+        return None
+    rows = q(
+        '''
+        SELECT id, attribute_id, value_label, value_key, active
+        FROM retail_variant_attribute_values
+        WHERE attribute_id=%s
+          AND active=TRUE
+        ORDER BY value_label
+        LIMIT 300
+        ''',
+        [attribute_id],
+    ) or []
+    best = None
+    best_distance = None
+    for row in rows:
+        candidate_key = _compact_option_key(row.get('value_key') or row.get('value_label'))
+        if not candidate_key:
+            continue
+        max_distance = 1 if max(len(compact_key), len(candidate_key)) <= 4 else 2
+        distance = _levenshtein_distance(compact_key, candidate_key, max_distance=max_distance)
+        if distance > max_distance:
+            continue
+        if best is None or distance < best_distance or (
+            distance == best_distance and len(str(row.get('value_label') or '')) < len(str(best.get('value_label') or ''))
+        ):
+            best = row
+            best_distance = distance
+    return best
+
+
+def _attribute_value_error(attr, input_label, suggestion):
+    return {
+        'code': 'attribute_value_suggestion_required',
+        'detail': (
+            f'El valor "{input_label}" se parece a "{suggestion.get("value_label")}". '
+            'Selecciona el valor sugerido o confirma crear uno nuevo.'
+        ),
+        'attribute': {
+            'id': attr.get('id'),
+            'code': attr.get('code'),
+            'name': attr.get('name'),
+        },
+        'input_value': input_label,
+        'suggested_value': {
+            'id': suggestion.get('id'),
+            'value_label': suggestion.get('value_label'),
+            'value_key': suggestion.get('value_key'),
+        },
+    }
+
+
+def _resolve_attribute_value(attr, raw_value, *, confirm_new_value=False):
+    label = _display_option_value(raw_value, attr)
+    key = _normalized_option_key(label)
+    if not label or not key:
+        raise ValidationError('option_values.value requerido')
+
+    existing = _find_attribute_value(attr['id'], key)
+    if existing:
+        if not bool(existing.get('active')):
+            exec_void('UPDATE retail_variant_attribute_values SET active=TRUE WHERE id=%s', [existing['id']])
+            existing['active'] = True
+        return {
+            'id': existing['id'],
+            'label': existing.get('value_label') or label,
+            'key': existing.get('value_key') or key,
+            'created': False,
+        }
+
+    suggestion = _best_attribute_value_suggestion(attr['id'], key)
+    if suggestion and not confirm_new_value:
+        raise ValidationError(_attribute_value_error(attr, label, suggestion))
+
+    value_id = exec_returning(
+        '''
+        INSERT INTO retail_variant_attribute_values(attribute_id, value_label, value_key, active)
+        VALUES (%s,%s,%s,TRUE)
+        ON CONFLICT (attribute_id, value_key) DO UPDATE
+        SET active=TRUE
+        RETURNING id
+        ''',
+        [attr['id'], label, key],
+    )
+    row = q(
+        '''
+        SELECT id, value_label, value_key
+        FROM retail_variant_attribute_values
+        WHERE id=%s
+        ''',
+        [value_id],
+        one=True,
+    ) or {'id': value_id, 'value_label': label, 'value_key': key}
+    return {
+        'id': row['id'],
+        'label': row.get('value_label') or label,
+        'key': row.get('value_key') or key,
+        'created': True,
+    }
 
 
 def _normalize_option_values(data):
@@ -1126,20 +1368,46 @@ def _normalize_option_values(data):
             raise ValidationError(f"Atributo repetido en la variante: {attr['name']}")
         used_attributes.add(attr['id'])
 
-        val = _normalize_option_value(item.get('value'))
-        if not val:
-            raise ValidationError('option_values.value requerido')
+        confirm_new = _to_bool(item.get('confirm_new_value') or item.get('confirm_create'))
+        resolved_value = None
+        value_id = _to_int(item.get('attribute_value_id') or item.get('value_id'), 'attribute_value_id', allow_none=True)
+        if value_id:
+            value_row = q(
+                '''
+                SELECT id, attribute_id, value_label, value_key, active
+                FROM retail_variant_attribute_values
+                WHERE id=%s
+                  AND attribute_id=%s
+                  AND active=TRUE
+                ''',
+                [value_id, attr['id']],
+                one=True,
+            )
+            if not value_row:
+                raise ValidationError('attribute_value_id invalido')
+            resolved_value = {
+                'id': value_row['id'],
+                'label': value_row.get('value_label'),
+                'key': value_row.get('value_key'),
+                'created': False,
+            }
+        else:
+            resolved_value = _resolve_attribute_value(attr, item.get('value'), confirm_new_value=confirm_new)
+
         normalized.append(
             {
                 'attribute_id': attr['id'],
+                'attribute_value_id': resolved_value['id'],
                 'attribute_code': str(attr['code']).strip().lower(),
                 'attribute_name': attr['name'],
-                'value': val,
+                'value': resolved_value['label'],
+                'value_key': resolved_value['key'],
+                'sort_order': int(attr.get('sort_order') or 100),
             }
         )
 
-    normalized.sort(key=lambda x: (str(x['attribute_code']).lower(), str(x['value']).lower()))
-    signature = '|'.join([f"{x['attribute_code']}={x['value']}" for x in normalized])
+    normalized.sort(key=lambda x: (int(x.get('sort_order') or 100), str(x['attribute_code']).lower(), str(x['value_key']).lower()))
+    signature = '|'.join([f"{x['attribute_code']}={x['value_key']}" for x in normalized])
     return normalized, signature
 
 
@@ -1657,7 +1925,8 @@ def _load_variante(variante_id, include_costs=False):
         return None
     options = q(
         '''
-        SELECT ov.attribute_id, a.code AS attribute_code, a.name AS attribute_name, ov.option_value
+        SELECT ov.attribute_id, ov.attribute_value_id, a.code AS attribute_code, a.name AS attribute_name,
+               ov.option_value, ov.option_value_key
         FROM retail_variant_option_values ov
         JOIN retail_variant_attributes a ON a.id=ov.attribute_id
         WHERE ov.variant_id=%s
@@ -1955,10 +2224,12 @@ class RetailAtributosView(APIView):
         _require_staff(request)
         _set_audit_user(request)
         data = request.data or {}
-        name = _clean_text(data.get('name') or data.get('nombre'))
-        code = _clean_text(data.get('code') or data.get('codigo'))
+        name = _display_attribute_name(data.get('name') or data.get('nombre'))
+        code = _normalize_attribute_code(data.get('code') or data.get('codigo') or name)
         if not name or not code:
             raise ValidationError('name y code son requeridos')
+        if _attribute_duplicate_exists(name, code):
+            raise ValidationError('Atributo duplicado: ya existe un atributo equivalente')
         category_id = _to_int(data.get('applies_to_category_id'), 'applies_to_category_id', allow_none=True)
         sort_order = _to_int(data.get('sort_order') or 100, 'sort_order')
         aid = exec_returning(
@@ -1971,6 +2242,66 @@ class RetailAtributosView(APIView):
         )
         row = q('SELECT * FROM retail_variant_attributes WHERE id=%s', [aid], one=True)
         return Response(row, status=201)
+
+
+class RetailAtributoValoresView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        attribute_id = _to_int(request.query_params.get('attribute_id'), 'attribute_id', allow_none=True)
+        attribute_code = _clean_text(request.query_params.get('attribute_code') or request.query_params.get('code'))
+        qtxt = _clean_text(request.query_params.get('q'))
+        limit = _to_int(request.query_params.get('limit') or 300, 'limit')
+        limit = max(1, min(int(limit or 300), 500))
+
+        attr = None
+        params = []
+        filters = ['v.active=TRUE', 'a.active=TRUE']
+        if attribute_id or attribute_code:
+            attr = _attribute_by_ref(attribute_id=attribute_id, attribute_code=attribute_code)
+            filters.append('v.attribute_id=%s')
+            params.append(attr['id'])
+        if qtxt:
+            key = _normalized_option_key(qtxt)
+            if key:
+                filters.append('(v.value_key ILIKE %s OR v.value_label ILIKE %s)')
+                params.extend([f'%{key}%', f'%{qtxt}%'])
+
+        params.append(limit)
+        rows = q(
+            f'''
+            SELECT v.id, v.attribute_id, a.code AS attribute_code, a.name AS attribute_name,
+                   v.value_label, v.value_key, v.active,
+                   COALESCE(u.usage_count, 0)::int AS usage_count
+            FROM retail_variant_attribute_values v
+            JOIN retail_variant_attributes a ON a.id=v.attribute_id
+            LEFT JOIN (
+              SELECT attribute_value_id, COUNT(*)::int AS usage_count
+              FROM retail_variant_option_values
+              WHERE attribute_value_id IS NOT NULL
+              GROUP BY attribute_value_id
+            ) u ON u.attribute_value_id=v.id
+            WHERE {' AND '.join(filters)}
+            ORDER BY a.sort_order, a.code, u.usage_count DESC NULLS LAST, v.value_label
+            LIMIT %s
+            ''',
+            params,
+        ) or []
+
+        suggestion = None
+        if attr and qtxt:
+            exact = _find_attribute_value(attr['id'], qtxt)
+            if not exact:
+                candidate = _best_attribute_value_suggestion(attr['id'], qtxt)
+                if candidate:
+                    suggestion = {
+                        'id': candidate.get('id'),
+                        'value_label': candidate.get('value_label'),
+                        'value_key': candidate.get('value_key'),
+                    }
+
+        return Response({'items': rows, 'suggestion': suggestion})
 
 
 class RetailAtributoDetailView(APIView):
@@ -1997,16 +2328,20 @@ class RetailAtributoDetailView(APIView):
         params = []
 
         if 'name' in data or 'nombre' in data:
-            name = _clean_text(data.get('name') or data.get('nombre'))
+            name = _display_attribute_name(data.get('name') or data.get('nombre'))
             if not name:
                 raise ValidationError('name no puede ser vacio')
+            if _attribute_duplicate_exists(name, row.get('code'), exclude_id=atributo_id):
+                raise ValidationError('name ya existe')
             updates.append('name=%s')
             params.append(name)
 
         if 'code' in data or 'codigo' in data:
-            code = _clean_text(data.get('code') or data.get('codigo'))
+            code = _normalize_attribute_code(data.get('code') or data.get('codigo'))
             if not code:
                 raise ValidationError('code no puede ser vacio')
+            if _attribute_duplicate_exists(row.get('name'), code, exclude_id=atributo_id):
+                raise ValidationError('code ya existe')
             current_code = str(row.get('code') or '').strip().lower()
             next_code = str(code).strip().lower()
             if current_code != next_code:
@@ -2566,7 +2901,8 @@ class RetailVariantesView(APIView):
         if variant_ids:
             opt_rows = q(
                 '''
-                SELECT ov.variant_id, a.code AS attribute_code, a.name AS attribute_name, ov.option_value
+                SELECT ov.variant_id, ov.attribute_value_id, a.code AS attribute_code, a.name AS attribute_name,
+                       ov.option_value, ov.option_value_key
                 FROM retail_variant_option_values ov
                 JOIN retail_variant_attributes a ON a.id=ov.attribute_id
                 WHERE ov.variant_id = ANY(%s)
@@ -2663,10 +2999,19 @@ class RetailVariantesView(APIView):
         for opt in option_values:
             exec_void(
                 '''
-                INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value)
-                VALUES (%s,%s,%s)
+                INSERT INTO retail_variant_option_values(
+                  variant_id, attribute_id, attribute_value_id, option_value, option_value_key, sort_order
+                )
+                VALUES (%s,%s,%s,%s,%s,%s)
                 ''',
-                [vid, opt['attribute_id'], opt['value']],
+                [
+                    vid,
+                    opt['attribute_id'],
+                    opt.get('attribute_value_id'),
+                    opt['value'],
+                    opt.get('value_key'),
+                    opt.get('sort_order') or 100,
+                ],
             )
 
         if stock_on_hand != 0:
@@ -2811,8 +3156,20 @@ class RetailVarianteDetailView(APIView):
             exec_void('DELETE FROM retail_variant_option_values WHERE variant_id=%s', [variante_id])
             for opt in option_values:
                 exec_void(
-                    'INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value) VALUES (%s,%s,%s)',
-                    [variante_id, opt['attribute_id'], opt['value']],
+                    '''
+                    INSERT INTO retail_variant_option_values(
+                      variant_id, attribute_id, attribute_value_id, option_value, option_value_key, sort_order
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                    ''',
+                    [
+                        variante_id,
+                        opt['attribute_id'],
+                        opt.get('attribute_value_id'),
+                        opt['value'],
+                        opt.get('value_key'),
+                        opt.get('sort_order') or 100,
+                    ],
                 )
             exec_void('UPDATE retail_product_variants SET option_signature=%s WHERE id=%s', [signature, variante_id])
 
@@ -8474,52 +8831,357 @@ def _tiendanube_extract_variant_attributes(option_values):
         if key:
             seen.add(key)
 
-        out['attributes'].append({'name': display_name, 'value': value})
+        out['attributes'].append({'name': display_name, 'value': value, 'key': key})
 
     return out
 
 
-def _tiendanube_build_create_product_payload_from_local_variant(local_variant):
-    row = local_variant if isinstance(local_variant, dict) else {}
-    sku = _clean_text(row.get('sku'))
+def _tiendanube_variant_payload_from_local_row(row):
+    local_row = row if isinstance(row, dict) else {}
+    sku = _clean_text(local_row.get('sku'))
     if not sku:
         raise ValidationError('Variante local sin SKU para crear en Tienda Nube')
 
-    options = row.get('option_values') or []
-    attributes_info = _tiendanube_extract_variant_attributes(options)
-    name_base = _clean_text(row.get('producto')) or _clean_text(row.get('display_name')) or f"Producto RH {row.get('id') or _random_suffix(4)}"
-    product_name = name_base
-
-    price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
-    cost = _to_decimal(row.get('cost_avg_ars') or 0, 'cost_avg_ars', allow_none=True) or Decimal('0')
+    price = _to_decimal(local_row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
+    cost = _to_decimal(local_row.get('cost_avg_ars') or 0, 'cost_avg_ars', allow_none=True) or Decimal('0')
     if price < 0:
         price = Decimal('0')
     if cost < 0:
         cost = Decimal('0')
-    stock = max(0, int(_safe_int(row.get('stock_on_hand')) or 0))
+    stock = max(0, int(_safe_int(local_row.get('stock_on_hand')) or 0))
 
-    variant_payload = {
+    payload = {
         'sku': sku,
         'price': str(price.quantize(TWO_DEC, rounding=ROUND_HALF_UP)),
         'stock': stock,
     }
     if cost > 0:
-        variant_payload['cost'] = str(cost.quantize(TWO_DEC, rounding=ROUND_HALF_UP))
-    barcode = _clean_text(row.get('barcode_internal'))
+        payload['cost'] = str(cost.quantize(TWO_DEC, rounding=ROUND_HALF_UP))
+    barcode = _clean_text(local_row.get('barcode_internal'))
     if barcode:
-        variant_payload['barcode'] = barcode
+        payload['barcode'] = barcode
+    return payload
+
+
+def _tiendanube_build_product_payload_from_local_variants(local_product, local_variants):
+    product = local_product if isinstance(local_product, dict) else {}
+    rows = [row for row in (local_variants or []) if isinstance(row, dict)]
+    if not rows:
+        raise ValidationError('Producto local sin variantes activas para Tienda Nube')
+
+    product_name = (
+        _clean_text(product.get('name'))
+        or _clean_text(product.get('producto'))
+        or _clean_text(rows[0].get('producto'))
+        or f"Producto RH {product.get('id') or rows[0].get('product_id') or _random_suffix(4)}"
+    )
+    published = any(bool(row.get('active', True)) for row in rows)
+
+    canonical_attrs = None
+    canonical_keys = None
+    variant_payloads = []
+    for row in rows:
+        attrs = (_tiendanube_extract_variant_attributes(row.get('option_values') or {}).get('attributes') or [])
+        if not attrs:
+            raise ValidationError(f"SKU {_clean_text(row.get('sku')) or row.get('id')}: sin atributos de variante")
+        if len(attrs) > 3:
+            raise ValidationError('Tienda Nube admite como maximo 3 atributos por producto')
+
+        keys = [item.get('key') for item in attrs]
+        if canonical_attrs is None:
+            canonical_attrs = attrs
+            canonical_keys = keys
+        elif keys != canonical_keys:
+            raise ValidationError('Todas las variantes del producto deben usar los mismos atributos y orden para Tienda Nube')
+
+        variant_payload = _tiendanube_variant_payload_from_local_row(row)
+        variant_payload['values'] = [{'es': item['value']} for item in attrs]
+        variant_payloads.append({'local_variant_id': row.get('id'), 'sku': row.get('sku'), 'payload': variant_payload})
 
     payload = {
         'name': {'es': product_name},
-        'published': bool(row.get('active')),
-        'variants': [variant_payload],
+        'published': published,
+        'attributes': [{'es': item['name']} for item in (canonical_attrs or [])],
+        'variants': [item['payload'] for item in variant_payloads],
     }
-    attrs = attributes_info.get('attributes') or []
-    if attrs:
-        payload['attributes'] = [{'es': item['name']} for item in attrs]
-        variant_payload['values'] = [{'es': item['value']} for item in attrs]
+    return {'payload': payload, 'variant_payloads': variant_payloads, 'attribute_keys': canonical_keys or []}
 
-    return payload
+
+def _tiendanube_build_create_product_payload_from_local_variant(local_variant):
+    row = local_variant if isinstance(local_variant, dict) else {}
+    name_base = _clean_text(row.get('producto')) or _clean_text(row.get('display_name')) or f"Producto RH {row.get('id') or _random_suffix(4)}"
+    built = _tiendanube_build_product_payload_from_local_variants({'name': name_base}, [row])
+    return built['payload']
+
+
+def _tiendanube_load_local_product_group(local_product_id):
+    pid = _safe_int(local_product_id)
+    if not pid:
+        raise ValidationError('product_id local invalido')
+    rows = q(
+        '''
+        SELECT v.id, v.product_id, v.sku, v.barcode_internal, v.display_name, v.active,
+               v.stock_on_hand, v.price_online_ars, v.cost_avg_ars,
+               p.name AS producto, p.name AS name, COALESCE(p.brand,'') AS marca,
+               p.active AS product_active,
+               v.tiendanube_product_id, v.tiendanube_variant_id
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.product_id=%s
+          AND v.active=TRUE
+        ORDER BY v.id
+        ''',
+        [pid],
+    ) or []
+    if not rows:
+        return []
+
+    ids = [row['id'] for row in rows]
+    opt_rows = q(
+        '''
+        SELECT ov.variant_id, ov.attribute_value_id, a.code AS attribute_code, a.name AS attribute_name,
+               ov.option_value, ov.option_value_key
+        FROM retail_variant_option_values ov
+        JOIN retail_variant_attributes a ON a.id=ov.attribute_id
+        WHERE ov.variant_id = ANY(%s)
+        ORDER BY ov.variant_id, a.sort_order, a.code
+        ''',
+        [ids],
+    ) or []
+    by_variant = {}
+    for opt in opt_rows:
+        by_variant.setdefault(opt['variant_id'], []).append(opt)
+    for row in rows:
+        row['option_values'] = by_variant.get(row['id'], [])
+    return rows
+
+
+def _tiendanube_remote_variants_by_sku(remote_product):
+    out = {}
+    for variant in _tiendanube_listify((remote_product or {}).get('variants')):
+        if not isinstance(variant, dict):
+            continue
+        sku = _clean_text(variant.get('sku'))
+        vid = _safe_int(variant.get('id'))
+        if sku and vid:
+            out[sku.lower()] = variant
+    return out
+
+
+def _tiendanube_pick_canonical_product_id(rows):
+    counts = {}
+    first_seen = {}
+    for row in rows or []:
+        pid = _safe_int((row or {}).get('tiendanube_product_id'))
+        if not pid:
+            continue
+        counts[pid] = counts.get(pid, 0) + 1
+        first_seen.setdefault(pid, len(first_seen))
+    if not counts:
+        return None
+    return sorted(counts.keys(), key=lambda pid: (-counts[pid], first_seen.get(pid, 999999), pid))[0]
+
+
+def _tiendanube_persist_variant_mappings(mappings):
+    for item in mappings or []:
+        local_id = _safe_int(item.get('local_variant_id'))
+        product_id = _safe_int(item.get('product_id'))
+        variant_id = _safe_int(item.get('variant_id'))
+        if not (local_id and product_id and variant_id):
+            continue
+        exec_void(
+            '''
+            UPDATE retail_product_variants
+            SET tiendanube_product_id=%s,
+                tiendanube_variant_id=%s,
+                updated_at=NOW()
+            WHERE id=%s
+            ''',
+            [product_id, variant_id, local_id],
+        )
+
+
+def _tiendanube_depublish_old_products(cfg, old_product_ids, *, canonical_product_id, local_skus):
+    skipped = []
+    unpublished = 0
+    sku_set = {str(s).strip().lower() for s in (local_skus or []) if _clean_text(s)}
+    for raw_pid in old_product_ids or []:
+        pid = _safe_int(raw_pid)
+        if not pid or pid == _safe_int(canonical_product_id):
+            continue
+        remote_product = _tiendanube_request(cfg, 'GET', f'products/{pid}', timeout_cap=20, allow_404=True)
+        if remote_product is None:
+            continue
+        variants = [v for v in _tiendanube_listify(remote_product.get('variants')) if isinstance(v, dict)]
+        remote_skus = {_clean_text(v.get('sku')).lower() for v in variants if _clean_text(v.get('sku'))}
+        if remote_skus and not remote_skus.issubset(sku_set):
+            skipped.append(pid)
+            continue
+        if not remote_skus and len(variants) > 1:
+            skipped.append(pid)
+            continue
+        _tiendanube_request(
+            cfg,
+            'PUT',
+            f'products/{pid}',
+            payload={'id': pid, 'published': False},
+            timeout_cap=20,
+        )
+        unpublished += 1
+    return {'unpublished': unpublished, 'skipped': skipped}
+
+
+def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync', force_catalog=False):
+    rows = _tiendanube_load_local_product_group(local_product_id)
+    if not rows:
+        return {'mapped': 0, 'created_remote': 0, 'unpublished_old_products': 0, 'skipped_old_products': []}
+
+    before_mapping = {
+        int(row['id']): {
+            'product_id': _safe_int(row.get('tiendanube_product_id')),
+            'variant_id': _safe_int(row.get('tiendanube_variant_id')),
+        }
+        for row in rows
+    }
+    _tiendanube_autolink_rows_by_sku(cfg, rows)
+    old_product_ids = {
+        _safe_int(row.get('tiendanube_product_id'))
+        for row in rows
+        if _safe_int(row.get('tiendanube_product_id'))
+    }
+    canonical_product_id = _tiendanube_pick_canonical_product_id(rows)
+    product_payload_info = _tiendanube_build_product_payload_from_local_variants(
+        {'id': local_product_id, 'name': rows[0].get('producto'), 'active': rows[0].get('product_active')},
+        rows,
+    )
+    product_payload = product_payload_info['payload']
+    variant_payloads = product_payload_info['variant_payloads']
+
+    mappings = []
+    if not canonical_product_id:
+        created = _tiendanube_request(cfg, 'POST', 'products', payload=product_payload, timeout_cap=20)
+        canonical_product_id = _safe_int((created or {}).get('id'))
+        if not canonical_product_id:
+            raise ValidationError('Tienda Nube no devolvio product_id al crear producto agrupado')
+        remote_by_sku = _tiendanube_remote_variants_by_sku(created)
+        for item in variant_payloads:
+            sku = _clean_text(item.get('sku'))
+            remote_variant = remote_by_sku.get(sku.lower()) if sku else None
+            variant_id = _safe_int((remote_variant or {}).get('id'))
+            if not variant_id and sku:
+                mapped = _tiendanube_lookup_variant_ids_by_sku(cfg, sku)
+                if _safe_int(mapped.get('product_id')) == canonical_product_id:
+                    variant_id = _safe_int(mapped.get('variant_id'))
+            if not variant_id:
+                raise ValidationError(f'SKU {sku or item.get("local_variant_id")}: no se pudo mapear variante creada')
+            mappings.append(
+                {
+                    'local_variant_id': item.get('local_variant_id'),
+                    'product_id': canonical_product_id,
+                    'variant_id': variant_id,
+                }
+            )
+    else:
+        remote_product = _tiendanube_request(
+            cfg,
+            'GET',
+            f'products/{canonical_product_id}',
+            timeout_cap=20,
+            allow_404=True,
+        )
+        if remote_product is None:
+            created = _tiendanube_request(cfg, 'POST', 'products', payload=product_payload, timeout_cap=20)
+            canonical_product_id = _safe_int((created or {}).get('id'))
+            if not canonical_product_id:
+                raise ValidationError('Tienda Nube no devolvio product_id al recrear producto agrupado')
+            remote_product = created
+        else:
+            _tiendanube_request(
+                cfg,
+                'PUT',
+                f'products/{canonical_product_id}',
+                payload={
+                    'id': canonical_product_id,
+                    'name': product_payload.get('name'),
+                    'published': product_payload.get('published'),
+                    'attributes': product_payload.get('attributes') or [],
+                },
+                timeout_cap=20,
+            )
+
+        remote_by_sku = _tiendanube_remote_variants_by_sku(remote_product)
+        for item in variant_payloads:
+            sku = _clean_text(item.get('sku'))
+            payload = dict(item.get('payload') or {})
+            local_id = _safe_int(item.get('local_variant_id'))
+            current_row = next((row for row in rows if _safe_int(row.get('id')) == local_id), None) or {}
+            variant_id = None
+            if _safe_int(current_row.get('tiendanube_product_id')) == canonical_product_id:
+                variant_id = _safe_int(current_row.get('tiendanube_variant_id'))
+            if not variant_id and sku:
+                remote_variant = remote_by_sku.get(sku.lower())
+                variant_id = _safe_int((remote_variant or {}).get('id'))
+
+            if variant_id:
+                payload['id'] = variant_id
+                _tiendanube_request(
+                    cfg,
+                    'PUT',
+                    f'products/{canonical_product_id}/variants/{variant_id}',
+                    payload=payload,
+                    timeout_cap=20,
+                )
+            else:
+                created_variant = _tiendanube_request(
+                    cfg,
+                    'POST',
+                    f'products/{canonical_product_id}/variants',
+                    payload=payload,
+                    timeout_cap=20,
+                )
+                variant_id = _safe_int((created_variant or {}).get('id'))
+                if not variant_id and sku:
+                    mapped = _tiendanube_lookup_variant_ids_by_sku(cfg, sku)
+                    if _safe_int(mapped.get('product_id')) == canonical_product_id:
+                        variant_id = _safe_int(mapped.get('variant_id'))
+                if not variant_id:
+                    raise ValidationError(f'SKU {sku or local_id}: Tienda Nube no devolvio variant_id')
+            mappings.append({'local_variant_id': local_id, 'product_id': canonical_product_id, 'variant_id': variant_id})
+
+    expected_ids = {_safe_int(row.get('id')) for row in rows if _safe_int(row.get('id'))}
+    mapped_ids = {_safe_int(item.get('local_variant_id')) for item in mappings if _safe_int(item.get('local_variant_id'))}
+    if expected_ids != mapped_ids:
+        missing = sorted(str(v) for v in expected_ids - mapped_ids)
+        raise ValidationError(f'Mapping incompleto para producto local {local_product_id}: {", ".join(missing)}')
+
+    _tiendanube_persist_variant_mappings(mappings)
+    for row in rows:
+        mapped = next((item for item in mappings if _safe_int(item.get('local_variant_id')) == _safe_int(row.get('id'))), None)
+        if mapped:
+            row['tiendanube_product_id'] = mapped.get('product_id')
+            row['tiendanube_variant_id'] = mapped.get('variant_id')
+
+    cleanup = _tiendanube_depublish_old_products(
+        cfg,
+        old_product_ids - {canonical_product_id},
+        canonical_product_id=canonical_product_id,
+        local_skus=[row.get('sku') for row in rows],
+    )
+    created_remote = sum(
+        1
+        for item in mappings
+        if not (
+            before_mapping.get(_safe_int(item.get('local_variant_id')), {}).get('product_id')
+            and before_mapping.get(_safe_int(item.get('local_variant_id')), {}).get('variant_id')
+        )
+    )
+    return {
+        'mapped': len(mappings),
+        'created_remote': created_remote,
+        'product_id': canonical_product_id,
+        'unpublished_old_products': int(cleanup.get('unpublished') or 0),
+        'skipped_old_products': cleanup.get('skipped') or [],
+    }
 
 
 def _tiendanube_sync_remote_catalog_for_local_variant(
@@ -8617,49 +9279,62 @@ def _tiendanube_create_remote_product_for_local_variant(cfg, local_variant):
     return {'product_id': product_id, 'variant_id': variant_id}
 
 
-def _tiendanube_ensure_rows_remote_mapping(cfg, rows, *, reason='sync'):
+def _tiendanube_ensure_rows_remote_mapping(cfg, rows, *, reason='sync', sync_catalog=False):
     link_info = _tiendanube_autolink_rows_by_sku(cfg, rows)
     errors = list(link_info.get('errors') or [])
     created_remote = 0
     creation_failed = 0
+    groups = {}
 
     for row in rows or []:
         variant_id_local = _safe_int((row or {}).get('id'))
         if not variant_id_local:
             continue
-        if _safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id')):
-            continue
-        try:
+        product_id_local = _safe_int(row.get('product_id'))
+        if not product_id_local:
             local_variant = _load_variante(variant_id_local, include_costs=True)
-            if not local_variant:
-                raise ValidationError(f'Variante local {variant_id_local} no encontrada')
-            created_map = _tiendanube_create_remote_product_for_local_variant(cfg, local_variant)
-            product_id_remote = _safe_int(created_map.get('product_id'))
-            variant_id_remote = _safe_int(created_map.get('variant_id'))
-            if not product_id_remote or not variant_id_remote:
-                raise ValidationError('Respuesta invalida al crear producto remoto')
-            exec_void(
-                '''
-                UPDATE retail_product_variants
-                SET tiendanube_product_id=%s,
-                    tiendanube_variant_id=%s,
-                    updated_at=NOW()
-                WHERE id=%s
-                ''',
-                [product_id_remote, variant_id_remote, variant_id_local],
+            if local_variant:
+                product_id_local = _safe_int(local_variant.get('product_id'))
+                row['product_id'] = product_id_local
+        if not product_id_local:
+            errors.append(f'Variante local {variant_id_local}: sin product_id local')
+            continue
+        needs_group_sync = sync_catalog or not (
+            _safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id'))
+        )
+        if needs_group_sync:
+            groups.setdefault(product_id_local, []).append(row)
+
+    for product_id_local, group_rows in groups.items():
+        try:
+            out = _tiendanube_sync_local_product_group(
+                cfg,
+                product_id_local,
+                reason=reason,
+                force_catalog=sync_catalog,
             )
-            row['tiendanube_product_id'] = product_id_remote
-            row['tiendanube_variant_id'] = variant_id_remote
-            created_remote += 1
+            created_remote += int(out.get('created_remote') or 0)
+            fresh_rows = _tiendanube_load_local_product_group(product_id_local)
+            by_id = {_safe_int(item.get('id')): item for item in fresh_rows}
+            for row in group_rows:
+                fresh = by_id.get(_safe_int(row.get('id')))
+                if fresh:
+                    row['tiendanube_product_id'] = fresh.get('tiendanube_product_id')
+                    row['tiendanube_variant_id'] = fresh.get('tiendanube_variant_id')
         except Exception as exc:
-            creation_failed += 1
-            sku = _clean_text(row.get('sku')) or f'variant_{variant_id_local}'
-            errors.append(f"SKU {sku}: {exc}")
+            failed_count = sum(
+                1
+                for item in group_rows
+                if not (_safe_int(item.get('tiendanube_product_id')) and _safe_int(item.get('tiendanube_variant_id')))
+            ) or len(group_rows)
+            creation_failed += failed_count
+            product_label = _clean_text((group_rows[0] or {}).get('producto')) or f'producto_local_{product_id_local}'
+            errors.append(f"Producto {product_label}: {exc}")
             security_logger.warning(
-                "tiendanube_mapping_create_failed reason=%s variant_id=%s sku=%s error=%s",
+                "tiendanube_product_group_sync_failed reason=%s product_id=%s variants=%s error=%s",
                 reason,
-                variant_id_local,
-                _clean_text(row.get('sku')),
+                product_id_local,
+                ','.join(str(_safe_int(item.get('id'))) for item in group_rows),
                 exc,
             )
 
@@ -8999,7 +9674,7 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
 
     rows = q(
         '''
-        SELECT v.id, v.sku, v.barcode_internal, v.display_name, v.active,
+        SELECT v.id, v.product_id, v.sku, v.barcode_internal, v.display_name, v.active,
                v.stock_on_hand, v.price_online_ars, v.cost_avg_ars,
                p.name AS producto,
                v.tiendanube_product_id, v.tiendanube_variant_id
@@ -9017,7 +9692,8 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
     if sync_catalog:
         opt_rows = q(
             '''
-            SELECT ov.variant_id, a.code AS attribute_code, a.name AS attribute_name, ov.option_value
+            SELECT ov.variant_id, ov.attribute_value_id, a.code AS attribute_code, a.name AS attribute_name,
+                   ov.option_value, ov.option_value_key
             FROM retail_variant_option_values ov
             JOIN retail_variant_attributes a ON a.id=ov.attribute_id
             WHERE ov.variant_id = ANY(%s)
@@ -9031,32 +9707,10 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
         for row in rows:
             row['option_values'] = by_variant.get(row['id'], [])
 
-    mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason=reason)
-    catalog_synced = 0
-    catalog_failed = 0
+    mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason=reason, sync_catalog=sync_catalog)
+    catalog_synced = len(rows) if sync_catalog and not mapping_info.get('errors') else 0
+    catalog_failed = len(rows) - catalog_synced if sync_catalog else 0
     catalog_errors = []
-    if sync_catalog:
-        for row in rows:
-            pid = _safe_int(row.get('tiendanube_product_id'))
-            vid = _safe_int(row.get('tiendanube_variant_id'))
-            if not pid or not vid:
-                continue
-            try:
-                _tiendanube_sync_remote_catalog_for_local_variant(
-                    cfg,
-                    row,
-                    product_id_remote=pid,
-                    variant_id_remote=vid,
-                )
-                catalog_synced += 1
-            except ValidationError as exc:
-                catalog_failed += 1
-                sku = _clean_text(row.get('sku')) or f"variante {row.get('id')}"
-                catalog_errors.append(f'SKU {sku}: {exc}')
-            except Exception as exc:
-                catalog_failed += 1
-                sku = _clean_text(row.get('sku')) or f"variante {row.get('id')}"
-                catalog_errors.append(f'SKU {sku}: {exc}')
 
     ops = []
     if sync_price or sync_stock:
@@ -9772,7 +10426,7 @@ def _tiendanube_build_normalized_options(local_product_id, option_pairs, remote_
         attr_name = _clean_text((pair or {}).get('attribute_name')) or f'Opcion {idx + 1}'
         value = _clean_text((pair or {}).get('value')) or str(_safe_int(remote_variant_id) or _random_suffix(4))
         attr = _tiendanube_ensure_attribute(attr_name, sort_order=(idx + 1) * 10)
-        option_payload.append({'attribute_code': attr['code'], 'value': value})
+        option_payload.append({'attribute_code': attr['code'], 'value': value, 'confirm_new_value': True})
 
     if not option_payload:
         fallback_attr = _tiendanube_ensure_attribute('Variante', sort_order=900)
@@ -9780,6 +10434,7 @@ def _tiendanube_build_normalized_options(local_product_id, option_pairs, remote_
             {
                 'attribute_code': fallback_attr['code'],
                 'value': str(_safe_int(remote_variant_id) or _random_suffix(4)),
+                'confirm_new_value': True,
             }
         )
 
@@ -9818,7 +10473,7 @@ def _tiendanube_build_normalized_options(local_product_id, option_pairs, remote_
                 replaced = True
                 break
         if not replaced:
-            option_payload.append({'attribute_code': discriminator_attr['code'], 'value': discriminator_value})
+            option_payload.append({'attribute_code': discriminator_attr['code'], 'value': discriminator_value, 'confirm_new_value': True})
 
     raise ValidationError('No se pudo generar option_signature unico para variante importada')
 
@@ -9922,10 +10577,19 @@ def _tiendanube_upsert_catalog_variant(remote_product, remote_variant, local_pro
         for idx, opt in enumerate(normalized_options):
             exec_void(
                 '''
-                INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value, sort_order)
-                VALUES (%s,%s,%s,%s)
+                INSERT INTO retail_variant_option_values(
+                  variant_id, attribute_id, attribute_value_id, option_value, option_value_key, sort_order
+                )
+                VALUES (%s,%s,%s,%s,%s,%s)
                 ''',
-                [existing_id, opt['attribute_id'], opt['value'], (idx + 1) * 10],
+                [
+                    existing_id,
+                    opt['attribute_id'],
+                    opt.get('attribute_value_id'),
+                    opt['value'],
+                    opt.get('value_key'),
+                    (idx + 1) * 10,
+                ],
             )
 
         delta = int(stock_on_hand) - int(_safe_int(existing.get('stock_on_hand')) or 0)
@@ -9999,10 +10663,19 @@ def _tiendanube_upsert_catalog_variant(remote_product, remote_variant, local_pro
     for idx, opt in enumerate(normalized_options):
         exec_void(
             '''
-            INSERT INTO retail_variant_option_values(variant_id, attribute_id, option_value, sort_order)
-            VALUES (%s,%s,%s,%s)
+            INSERT INTO retail_variant_option_values(
+              variant_id, attribute_id, attribute_value_id, option_value, option_value_key, sort_order
+            )
+            VALUES (%s,%s,%s,%s,%s,%s)
             ''',
-            [variant_id, opt['attribute_id'], opt['value'], (idx + 1) * 10],
+            [
+                variant_id,
+                opt['attribute_id'],
+                opt.get('attribute_value_id'),
+                opt['value'],
+                opt.get('value_key'),
+                (idx + 1) * 10,
+            ],
         )
     if stock_on_hand != 0:
         exec_void(
@@ -10187,7 +10860,7 @@ def _tiendanube_run_sync_catalogo_job(job_id, payload):
     limit = max(1, min(limit, 2000))
     rows = q(
         '''
-        SELECT v.id, v.sku, v.barcode_internal, v.price_online_ars,
+        SELECT v.id, v.product_id, v.sku, v.barcode_internal, v.price_online_ars,
                v.tiendanube_product_id, v.tiendanube_variant_id,
                p.name AS producto, COALESCE(p.brand,'') AS marca,
                v.option_signature
@@ -10206,7 +10879,7 @@ def _tiendanube_run_sync_catalogo_job(job_id, payload):
         if not cfg.get('store_id') or not cfg.get('access_token'):
             raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
 
-        mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason='sync_catalogo')
+        mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason='sync_catalogo', sync_catalog=True)
         ops = []
         for row in rows:
             pid = _safe_int(row.get('tiendanube_product_id'))
@@ -10267,10 +10940,12 @@ def _tiendanube_run_sync_stock_job(job_id, payload):
     limit = max(1, min(limit, 2000))
     rows = q(
         '''
-        SELECT id, sku, stock_on_hand, tiendanube_product_id, tiendanube_variant_id
-        FROM retail_product_variants
-        WHERE active=TRUE
-        ORDER BY id
+        SELECT v.id, v.product_id, v.sku, v.stock_on_hand, v.tiendanube_product_id, v.tiendanube_variant_id,
+               p.name AS producto
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.active=TRUE
+        ORDER BY v.id
         LIMIT %s
         ''',
         [limit],
@@ -13224,6 +13899,7 @@ __all__ = [
     'RetailProductoDetailView',
     'RetailProductoImagenView',
     'RetailAtributosView',
+    'RetailAtributoValoresView',
     'RetailAtributoDetailView',
     'RetailVariantesView',
     'RetailVarianteDetailView',
