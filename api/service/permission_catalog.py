@@ -25,6 +25,7 @@ PERMISSION_CATALOG = [
     {'code': 'action.facturacion.emitir', 'label': 'Emitir factura', 'type': 'action', 'group': 'Facturacion'},
     {'code': 'action.facturacion.nota_credito', 'label': 'Emitir nota de credito', 'type': 'action', 'group': 'Facturacion'},
     {'code': 'action.online.sync', 'label': 'Sincronizar Tienda Nube', 'type': 'action', 'group': 'Online'},
+    {'code': 'action.online.support', 'label': 'Auditar y asistir Tienda Nube', 'type': 'action', 'group': 'Online'},
     {'code': 'action.reportes.ver_costos', 'label': 'Ver costos y rentabilidad', 'type': 'action', 'group': 'Reportes'},
     {'code': 'action.config.editar', 'label': 'Editar configuracion y permisos', 'type': 'action', 'group': 'Configuracion'},
     {
@@ -65,6 +66,7 @@ ROLE_DEFAULTS = {
         'action.facturacion.emitir': True,
         'action.facturacion.nota_credito': False,
         'action.online.sync': False,
+        'action.online.support': False,
         'action.reportes.ver_costos': False,
         'action.config.editar': False,
         'action.config.online_credentials': False,

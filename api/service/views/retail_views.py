@@ -1411,6 +1411,47 @@ def _normalize_option_values(data):
     return normalized, signature
 
 
+def _find_variant_signature_duplicate(product_id, signature, exclude_variant_id=None):
+    sql = '''
+        SELECT v.id, v.product_id, v.active, v.sku, v.stock_on_hand,
+               v.option_signature, v.display_name, p.name AS producto
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.product_id=%s AND LOWER(v.option_signature)=LOWER(%s)
+    '''
+    params = [product_id, signature]
+    if exclude_variant_id is not None:
+        sql += ' AND v.id<>%s'
+        params.append(exclude_variant_id)
+    return q(sql, params, one=True)
+
+
+def _variant_signature_duplicate_message(duplicate_row):
+    if duplicate_row and duplicate_row.get('active') is False:
+        return 'Ya existe una variante inactiva con esa combinacion de atributos. Reactiva o edita la existente en lugar de crear otra.'
+    return 'Ya existe una variante con esa combinacion de atributos'
+
+
+def _variant_signature_conflict_payload(duplicate_row):
+    row = dict(duplicate_row or {})
+    return {
+        'code': 'variant_combination_conflict',
+        'detail': _variant_signature_duplicate_message(row),
+        'conflict': {
+            'variant': {
+                'id': row.get('id'),
+                'product_id': row.get('product_id'),
+                'producto': row.get('producto'),
+                'display_name': row.get('display_name'),
+                'option_signature': row.get('option_signature'),
+                'sku': row.get('sku'),
+                'stock_on_hand': row.get('stock_on_hand'),
+                'active': row.get('active'),
+            },
+        },
+    }
+
+
 def _ensure_payment_account(payload, payment_method):
     account_id = _to_int(payload.get('payment_account_id'), 'payment_account_id', allow_none=True)
     account_code = _clean_text(payload.get('payment_account_code'))
@@ -2749,6 +2790,7 @@ def _associate_variant_barcode(
             _set_variant_primary_barcode(variante_id, existing['id'])
         _ensure_variant_primary_barcode(variante_id, source='auto_repair')
         _sync_variant_primary_barcode(variante_id)
+        _tiendanube_schedule_local_variants_sync([variante_id], sync_catalog=True, reason='variant_barcode_update')
         return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [existing['id']], one=True)
 
     if existing and int(existing['variant_id']) != int(variante_id):
@@ -2780,6 +2822,11 @@ def _associate_variant_barcode(
             )
         else:
             _sync_variant_primary_barcode(old_variant_id)
+        _tiendanube_schedule_local_variants_sync(
+            [variante_id, old_variant_id],
+            sync_catalog=True,
+            reason='variant_barcode_update',
+        )
         return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [existing['id']], one=True)
 
     if make_primary:
@@ -2796,6 +2843,7 @@ def _associate_variant_barcode(
     )
     _ensure_variant_primary_barcode(variante_id, source='auto_repair')
     _sync_variant_primary_barcode(variante_id)
+    _tiendanube_schedule_local_variants_sync([variante_id], sync_catalog=True, reason='variant_barcode_update')
     return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [bid], one=True)
 
 
@@ -2930,8 +2978,9 @@ class RetailVariantesView(APIView):
         if not signature:
             raise ValidationError('Debe informar option_values para la variante')
 
-        if q('SELECT id FROM retail_product_variants WHERE product_id=%s AND LOWER(option_signature)=LOWER(%s)', [product_id, signature], one=True):
-            raise ValidationError('Ya existe una variante con esa combinacion de atributos')
+        duplicate = _find_variant_signature_duplicate(product_id, signature)
+        if duplicate:
+            return Response(_variant_signature_conflict_payload(duplicate), status=409)
 
         supplier_id = _to_int(data.get('supplier_id'), 'supplier_id', allow_none=True)
         sku = _clean_text(data.get('sku')) or _autogen_sku(product_row)
@@ -3146,13 +3195,9 @@ class RetailVarianteDetailView(APIView):
             option_values, signature = _normalize_option_values(data)
             if not signature:
                 raise ValidationError('option_values invalido')
-            duplicate = q(
-                'SELECT id FROM retail_product_variants WHERE product_id=%s AND LOWER(option_signature)=LOWER(%s) AND id<>%s',
-                [existing['product_id'], signature, variante_id],
-                one=True,
-            )
+            duplicate = _find_variant_signature_duplicate(existing['product_id'], signature, exclude_variant_id=variante_id)
             if duplicate:
-                raise ValidationError('Ya existe una variante con esa combinacion')
+                return Response(_variant_signature_conflict_payload(duplicate), status=409)
             exec_void('DELETE FROM retail_variant_option_values WHERE variant_id=%s', [variante_id])
             for opt in option_values:
                 exec_void(
@@ -3407,10 +3452,9 @@ def _draw_barcode_label(
     pad_x = 6 if not compact else 4
     top_pad = 8 if not compact else 6
     line_gap = 3 if not compact else 2
-    title_font = 8 if not compact else 6
-    text_font = 7 if not compact else 5.5
-    price_font = 7.5 if not compact else 6
-    code_font = 9 if not compact else 7
+    title_font = 9.5 if not compact else 9
+    text_font = 8.5 if not compact else 8
+    price_font = 9 if not compact else 9
 
     if draw_border:
         pdf.setLineWidth(0.6)
@@ -3423,49 +3467,53 @@ def _draw_barcode_label(
         ('price', f'Precio: {price_text}'),
     ]
     text_cursor = y + label_h - top_pad
-    text_bottom_limit = y + (label_h * (0.50 if not compact else 0.58))
+    text_bottom_limit = y + (label_h * (0.42 if not compact else 0.38))
+    max_text_w = max(12, label_w - (2 * pad_x))
     for kind, line in lines:
         if not line:
             continue
         if kind == 'title':
             fnt = title_font
-            pdf.setFont('Helvetica-Bold', fnt)
+            font_name = 'Helvetica-Bold'
         elif kind == 'price':
             fnt = price_font
-            pdf.setFont('Helvetica-Bold', fnt)
+            font_name = 'Helvetica-Bold'
         else:
             fnt = text_font
-            pdf.setFont('Helvetica', fnt)
+            font_name = 'Helvetica'
+        min_font = 6 if compact else 7
+        while fnt > min_font and pdf.stringWidth(line, font_name, fnt) > max_text_w:
+            fnt -= 0.25
+        while len(line) > 4 and pdf.stringWidth(line, font_name, fnt) > max_text_w:
+            line = f'{line[:-4]}...'
+        pdf.setFont(font_name, fnt)
         baseline = text_cursor - fnt
         if baseline <= text_bottom_limit:
             break
         pdf.drawString(x + pad_x, baseline, line)
         text_cursor = baseline - line_gap
 
-    code_y = y + (5 if not compact else 4)
-    barcode_y = y + (14 if not compact else 11)
+    barcode_y = y + (5 if not compact else 4)
     barcode_top = min(y + label_h - 4, text_cursor - 2)
-    target_h = max(10, barcode_top - barcode_y)
+    available_h = max(10, barcode_top - barcode_y)
+    max_barcode_h = label_h * (0.30 if not compact else 0.28)
+    target_h = max(10, min(available_h, max_barcode_h))
     target_w = max(12, label_w - (2 * pad_x))
-    bar_height = max(10, min(30, target_h * 0.9))
+    bar_height = max(10, target_h)
     drawing = createBarcodeDrawing('EAN13', value=code, humanReadable=False, barHeight=bar_height)
 
     sx = target_w / float(drawing.width or 1)
     sy = target_h / float(drawing.height or 1)
-    scale = max(0.1, min(sx, sy))
-    draw_w = drawing.width * scale
-    draw_h = drawing.height * scale
+    draw_w = drawing.width * sx
+    draw_h = drawing.height * sy
     draw_x = x + pad_x + ((target_w - draw_w) / 2)
     draw_y = barcode_y + ((target_h - draw_h) / 2)
 
     pdf.saveState()
     pdf.translate(draw_x, draw_y)
-    pdf.scale(scale, scale)
+    pdf.scale(sx, sy)
     renderPDF.draw(drawing, pdf, 0, 0)
     pdf.restoreState()
-
-    pdf.setFont('Helvetica-Bold', code_font)
-    pdf.drawCentredString(x + (label_w / 2), code_y, code)
 
 
 def _build_barcodes_labels_pdf(
@@ -3670,6 +3718,7 @@ class RetailVarianteBarcodePrimaryView(APIView):
 
         _set_variant_primary_barcode(variante_id, target['id'])
         _sync_variant_primary_barcode(variante_id)
+        _tiendanube_schedule_local_variants_sync([variante_id], sync_catalog=True, reason='variant_barcode_primary')
         return Response({'ok': True, 'barcodes': _list_variant_barcodes(variante_id)})
 
 
@@ -11284,6 +11333,91 @@ class RetailOnlineSyncStockView(APIView):
         return Response(result.get('body') or {}, status=int(result.get('status_code') or 200))
 
 
+def _tiendanube_audit_catalogo_local(limit=200):
+    lim = max(1, min(int(limit or 200), 2000))
+    total_row = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.active=TRUE AND p.active=TRUE
+        ''',
+        one=True,
+    ) or {'cnt': 0}
+    missing_sku_row = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.active=TRUE AND p.active=TRUE AND COALESCE(v.sku,'')=''
+        ''',
+        one=True,
+    ) or {'cnt': 0}
+    unlinked_row = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.active=TRUE AND p.active=TRUE
+          AND (v.tiendanube_product_id IS NULL OR v.tiendanube_variant_id IS NULL)
+        ''',
+        one=True,
+    ) or {'cnt': 0}
+    items = q(
+        '''
+        SELECT v.id, v.product_id, v.sku, v.tiendanube_product_id, v.tiendanube_variant_id,
+               p.name AS producto, v.option_signature
+        FROM retail_product_variants v
+        JOIN retail_products p ON p.id=v.product_id
+        WHERE v.active=TRUE AND p.active=TRUE
+          AND (
+            COALESCE(v.sku,'')=''
+            OR v.tiendanube_product_id IS NULL
+            OR v.tiendanube_variant_id IS NULL
+          )
+        ORDER BY p.name, v.id
+        LIMIT %s
+        ''',
+        [lim],
+    ) or []
+    return {
+        'ok': True,
+        'total_active_variants': int(total_row.get('cnt') or 0),
+        'missing_sku': int(missing_sku_row.get('cnt') or 0),
+        'unlinked': int(unlinked_row.get('cnt') or 0),
+        'items': items,
+    }
+
+
+class RetailOnlineAuditCatalogoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        _require_staff(request)
+        limit = _to_int((request.query_params or {}).get('limit') or 200, 'limit')
+        return Response(_tiendanube_audit_catalogo_local(limit=limit))
+
+    def post(self, request):
+        _require_staff(request)
+        limit = _to_int((request.data or {}).get('limit') or 200, 'limit')
+        return Response(_tiendanube_audit_catalogo_local(limit=limit))
+
+
+class RetailOnlineRepairCatalogoView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        _require_staff(request)
+        limit = _to_int((request.data or {}).get('limit') or 200, 'limit')
+        limit = max(1, min(limit, 2000))
+        job_id = _create_job('tiendanube', 'sync_catalogo', {'limit': limit, 'source': 'repair_catalogo'}, status='pending')
+        result = _tiendanube_run_sync_catalogo_job(job_id, {'limit': limit})
+        body = result.get('body') or {}
+        if isinstance(body, dict):
+            body.setdefault('audit_after', _tiendanube_audit_catalogo_local(limit=limit))
+        return Response(body, status=int(result.get('status_code') or 200))
+
+
 class RetailOnlineFailedJobsSummaryView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -13949,6 +14083,8 @@ __all__ = [
     'RetailOnlineImportCatalogoView',
     'RetailOnlineSyncCatalogoView',
     'RetailOnlineSyncStockView',
+    'RetailOnlineAuditCatalogoView',
+    'RetailOnlineRepairCatalogoView',
     'RetailOnlineFailedJobsSummaryView',
     'RetailOnlineRetryFailedJobsView',
     'RetailOnlineJobsProcessView',

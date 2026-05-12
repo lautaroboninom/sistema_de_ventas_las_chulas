@@ -30,6 +30,31 @@ function errMsg(error) {
   return error?.message || 'Ocurrio un error inesperado';
 }
 
+function explainVariantCombinationError(error) {
+  const detail = String(error?.data?.detail || error?.message || '').toLowerCase();
+  if (!detail.includes('ya existe una variante con esa combinacion')) return errMsg(error);
+  if (detail.includes('inactiva')) {
+    return 'Ya existe una variante inactiva de este producto con esos mismos atributos. Reactiva o edita la existente en lugar de crear otra.';
+  }
+  return 'Ya existe otra variante de este producto con esos mismos atributos. Ejemplo: si ya existe Color Negro + Talle M, no se puede crear otra igual.';
+}
+
+function duplicateVariantConflict(error) {
+  const data = error?.data || {};
+  if (error?.status !== 409 || data?.code !== 'variant_combination_conflict') return null;
+  const variant = data?.conflict?.variant;
+  if (!variant?.id) return null;
+  return { detail: data?.detail || '', variant };
+}
+
+function variantLabel(row) {
+  if (!row) return 'la variante existente';
+  const product = row.producto || row.display_name || 'Variante existente';
+  const signature = row.option_signature ? ` (${row.option_signature})` : '';
+  const sku = row.sku ? ` [SKU ${row.sku}]` : '';
+  return `${product}${signature}${sku}`;
+}
+
 const moneyFmt = new Intl.NumberFormat('es-AR', {
   style: 'currency',
   currency: 'ARS',
@@ -120,6 +145,13 @@ function buildOptionValues(rows) {
   }
 
   return out;
+}
+
+function buildOptionalOptionValues(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const hasAnyValue = list.some((row) => attrCode(row?.attribute_code) || String(row?.value || '').trim());
+  if (!hasAnyValue) return null;
+  return buildOptionValues(list);
 }
 
 const BARCODE_PRINT_PREFS_KEY = 'las_chulas_barcode_print_prefs_v1';
@@ -218,12 +250,13 @@ const EMPTY_EDIT_VARIANT = {
   display_name: '',
   sku: '',
   barcode_internal: '',
+  original_barcode_internal: '',
   price_store_ars: '0',
   price_online_ars: '0',
   cost_avg_ars: '0',
   stock_min: '0',
   active: true,
-  option_rows: [{ attribute_code: '', value: '' }],
+  option_rows: [],
 };
 
 const EMPTY_BARCODE_MODAL = {
@@ -257,6 +290,18 @@ const EMPTY_ONLINE_SYNC_SUMMARY = {
   lastUpdated: '',
 };
 
+function barcodeConflictDetail(error) {
+  const payload = error?.data || {};
+  if (error?.status !== 409 || payload?.code !== 'barcode_conflict') {
+    return errMsg(error);
+  }
+  const owner = payload?.conflict?.current_owner?.variant;
+  const ownerTxt = owner
+    ? `${owner.producto || 'Variante'} ${owner.option_signature ? `(${owner.option_signature})` : ''} [SKU ${owner.sku || '-'}]`
+    : 'otra variante';
+  return `${payload?.detail || 'Conflicto de barcode'}: actualmente pertenece a ${ownerTxt}. Marca "Forzar mover" para transferirlo.`;
+}
+
 export default function ProductosPage() {
   const { user } = useAuth();
   const canEdit = can(user, PERMISSION_CODES.ACTION_CONFIG_EDITAR);
@@ -279,6 +324,7 @@ export default function ProductosPage() {
   const [editVariantForm, setEditVariantForm] = useState({ ...EMPTY_EDIT_VARIANT });
   const [editVariantOpen, setEditVariantOpen] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
+  const [duplicateStockPrompt, setDuplicateStockPrompt] = useState(null);
   const prodImageInputRef = useRef(null);
   const barcodeInputRef = useRef(null);
   const barcodeModalInputRef = useRef(null);
@@ -563,12 +609,13 @@ export default function ProductosPage() {
           value: opt.option_value || '',
           attribute_value_id: opt.attribute_value_id || undefined,
         }))
-      : [{ attribute_code: '', value: '' }];
+      : [];
     setEditVariantForm({
       id: row.id,
       display_name: row.display_name || '',
       sku: row.sku || '',
       barcode_internal: row.barcode_internal || '',
+      original_barcode_internal: row.barcode_internal || '',
       price_store_ars: String(row.price_store_ars ?? 0),
       price_online_ars: String(row.price_online_ars ?? 0),
       cost_avg_ars: String(row.cost_avg_ars ?? 0),
@@ -624,7 +671,7 @@ export default function ProductosPage() {
       const next = (prev.option_rows || []).filter((_, i) => i !== idx);
       return {
         ...prev,
-        option_rows: next.length ? next : [{ attribute_code: '', value: '' }],
+        option_rows: next,
       };
     });
   }
@@ -632,28 +679,47 @@ export default function ProductosPage() {
   async function saveVariantEditor(e) {
     e.preventDefault();
     if (!canEdit || !editVariantForm?.id) return;
-    setSaving(true);
     setErr('');
     setMsg('');
+    const nextBarcode = String(editVariantForm.barcode_internal || '').trim();
+    const currentBarcode = String(editVariantForm.original_barcode_internal || '').trim();
+    if (!nextBarcode && currentBarcode) {
+      setErr('No se puede quitar el barcode principal desde este formulario. Usa Gestionar barcodes para moverlo, reemplazarlo o generar otro.');
+      return;
+    }
+
+    let option_values = null;
     try {
-      const option_values = buildOptionValues(editVariantForm.option_rows);
-      await patchRetailVariante(editVariantForm.id, {
+      option_values = buildOptionalOptionValues(editVariantForm.option_rows);
+    } catch (error) {
+      setErr(error?.message || errMsg(error));
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const payload = {
         display_name: editVariantForm.display_name || undefined,
         sku: editVariantForm.sku,
-        barcode_internal: editVariantForm.barcode_internal || undefined,
         price_store_ars: Number(editVariantForm.price_store_ars || 0),
         price_online_ars: Number(editVariantForm.price_online_ars || 0),
         cost_avg_ars: Number(editVariantForm.cost_avg_ars || 0),
         stock_min: Number(editVariantForm.stock_min || 0),
         active: !!editVariantForm.active,
-        option_values,
-      });
+      };
+      if (nextBarcode) {
+        payload.barcode_internal = nextBarcode;
+      }
+      if (option_values) {
+        payload.option_values = option_values;
+      }
+      await patchRetailVariante(editVariantForm.id, payload);
       setMsg('Variante actualizada');
       closeVariantEditor();
       await loadAll();
     } catch (error) {
       const suggestion = normalizeValueError(error);
-      setErr(suggestion?.detail || errMsg(error));
+      setErr(suggestion?.detail || barcodeConflictDetail(error));
     } finally {
       setSaving(false);
     }
@@ -720,10 +786,12 @@ export default function ProductosPage() {
     setSaving(true);
     setErr('');
     setMsg('');
+    setDuplicateStockPrompt(null);
     try {
       const barcode = String(varForm.barcode_internal || '').trim();
       const supplierId = String(varForm.supplier_id || '').trim();
       const option_values = buildOptionValues(varForm.option_rows);
+      const stockQty = Math.trunc(Number(varForm.stock_on_hand || 0));
       await postRetailVariante({
         product_id: Number(varForm.product_id),
         option_values,
@@ -733,17 +801,61 @@ export default function ProductosPage() {
         price_store_ars: Number(varForm.price_store_ars || 0),
         price_online_ars: Number(varForm.price_online_ars || 0),
         cost_avg_ars: Number(varForm.cost_avg_ars || 0),
-        stock_on_hand: Number(varForm.stock_on_hand || 0),
+        stock_on_hand: stockQty,
         stock_min: Number(varForm.stock_min || 0),
       });
       setVarForm({ ...EMPTY_VARIANT });
       setMsg(barcode ? 'Variante creada con barcode manual' : 'Variante creada con barcode EAN-13 generado');
       await loadAll();
     } catch (error) {
+      const conflict = duplicateVariantConflict(error);
+      const stockQty = Math.trunc(Number(varForm.stock_on_hand || 0));
+      if (conflict && conflict.variant?.active !== false && Number.isFinite(stockQty) && stockQty > 0) {
+        setDuplicateStockPrompt({
+          detail: explainVariantCombinationError(error),
+          variant: conflict.variant,
+          qty: stockQty,
+        });
+      } else {
+        setErr(explainVariantCombinationError(error));
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function acceptDuplicateStockPrompt() {
+    if (!canEdit || !duplicateStockPrompt?.variant?.id) return;
+    const prompt = duplicateStockPrompt;
+    const variantId = Number(prompt.variant.id);
+    const qty = Math.trunc(Number(prompt.qty || 0));
+    if (!Number.isInteger(variantId) || variantId <= 0 || !Number.isFinite(qty) || qty <= 0) {
+      setDuplicateStockPrompt(null);
+      return;
+    }
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      await patchRetailVariante(variantId, {
+        stock_adjust_qty: qty,
+        stock_adjust_note: 'Stock sumado desde alta de variante duplicada',
+      });
+      setDuplicateStockPrompt(null);
+      setVarForm({ ...EMPTY_VARIANT });
+      setMsg(`Se sumaron ${qty} unidad(es) al stock de ${variantLabel(prompt.variant)}.`);
+      await loadAll();
+    } catch (error) {
       setErr(errMsg(error));
     } finally {
       setSaving(false);
     }
+  }
+
+  function rejectDuplicateStockPrompt() {
+    setDuplicateStockPrompt(null);
+    setErr('');
+    setMsg('No se modifico el stock.');
   }
 
   async function onBatchCreated(rows) {
@@ -801,6 +913,50 @@ export default function ProductosPage() {
     }
   }
 
+  async function hideVariant(row) {
+    if (!canEdit) return;
+    const variantId = Number(row?.id || 0);
+    if (!variantId) return;
+    const label = `${row?.producto || 'Variante'}${row?.option_signature ? ` (${row.option_signature})` : ''}`;
+    if (!window.confirm(`Ocultar variante?\n\n${label}\n\nSe marcara como inactiva y dejara de verse en las pantallas normales.`)) return;
+
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      await patchRetailVariante(variantId, { active: false });
+      setMsg('Variante oculta');
+      if (Number(editVariantForm?.id) === variantId) closeVariantEditor();
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function hideProduct(row) {
+    if (!canEdit) return;
+    const productId = Number(row?.id || 0);
+    if (!productId) return;
+    const label = String(row?.name || 'Producto').trim() || `Producto #${productId}`;
+    if (!window.confirm(`Ocultar producto?\n\n${label}\n\nSe marcara como inactivo y sus variantes activas tambien quedaran ocultas.`)) return;
+
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      await patchRetailProducto(productId, { active: false });
+      setMsg('Producto oculto junto con sus variantes activas');
+      if (Number(editProductForm?.id) === productId) closeProductEditor();
+      await loadAll();
+    } catch (error) {
+      setErr(errMsg(error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function loadBarcodeRows(variantId, options = {}) {
     const keepState = Boolean(options.keepState);
     if (!variantId) return;
@@ -846,18 +1002,6 @@ export default function ProductosPage() {
 
   function closeBarcodeModal() {
     setBarcodeModal({ ...EMPTY_BARCODE_MODAL });
-  }
-
-  function conflictDetail(error) {
-    const payload = error?.data || {};
-    if (error?.status !== 409 || payload?.code !== 'barcode_conflict') {
-      return errMsg(error);
-    }
-    const owner = payload?.conflict?.current_owner?.variant;
-    const ownerTxt = owner
-      ? `${owner.producto || 'Variante'} ${owner.option_signature ? `(${owner.option_signature})` : ''} [SKU ${owner.sku || '-'}]`
-      : 'otra variante';
-    return `${payload?.detail || 'Conflicto de barcode'}: actualmente pertenece a ${ownerTxt}. Marca "Forzar mover" para transferirlo.`;
   }
 
   async function quickGenerateBarcode(variantId) {
@@ -929,7 +1073,7 @@ export default function ProductosPage() {
       await loadAll();
       setTimeout(() => barcodeModalInputRef.current?.focus(), 0);
     } catch (error) {
-      setBarcodeModal((prev) => ({ ...prev, saving: false, err: conflictDetail(error) }));
+      setBarcodeModal((prev) => ({ ...prev, saving: false, err: barcodeConflictDetail(error) }));
     }
   }
 
@@ -1396,6 +1540,26 @@ export default function ProductosPage() {
                   </button>
                 </div>
 
+                {duplicateStockPrompt ? (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                    <p className="font-semibold">{duplicateStockPrompt.detail}</p>
+                    <p className="mt-1">
+                      Desea sumar {duplicateStockPrompt.qty} unidad(es) al stock de {variantLabel(duplicateStockPrompt.variant)}?
+                    </p>
+                    <p className="mt-1 text-xs text-amber-800">
+                      Stock actual: {Number(duplicateStockPrompt.variant?.stock_on_hand || 0)}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" className="btn" onClick={acceptDuplicateStockPrompt} disabled={saving}>
+                        Aceptar
+                      </button>
+                      <button type="button" className="px-3 py-2 rounded border bg-white" onClick={rejectDuplicateStockPrompt} disabled={saving}>
+                        Rechazar
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
                 <button className="btn" disabled={saving} type="submit">Crear variante</button>
               </form>
 
@@ -1453,9 +1617,19 @@ export default function ProductosPage() {
                       </td>
                       <td className="py-2 pr-3">{Number(row.variantes || 0)}</td>
                       <td className="py-2 pr-3">
-                        <button type="button" className="px-2 py-1 rounded border text-xs" onClick={() => openProductEditor(row)}>
-                          Editar
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" className="px-2 py-1 rounded border text-xs" onClick={() => openProductEditor(row)}>
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded border text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
+                            onClick={() => hideProduct(row)}
+                            disabled={saving}
+                          >
+                            Ocultar
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1535,6 +1709,14 @@ export default function ProductosPage() {
                 </label>
                 <div className="flex gap-2">
                   <button type="button" className="btn" onClick={saveProductEditor} disabled={saving}>Guardar</button>
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded border text-amber-700 border-amber-300 hover:bg-amber-50"
+                    onClick={() => hideProduct(editProductForm)}
+                    disabled={saving}
+                  >
+                    Ocultar producto
+                  </button>
                   <button type="button" className="px-3 py-2 rounded border" onClick={closeProductEditor}>Cancelar</button>
                 </div>
               </div>
@@ -1664,6 +1846,7 @@ export default function ProductosPage() {
                 <th className="py-2 pr-3">Stock</th>
                 <th className="py-2 pr-3">Ajuste</th>
                 <th className="py-2 pr-3">Barcodes</th>
+                <th className="py-2 pr-3">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -1685,10 +1868,6 @@ export default function ProductosPage() {
                   </td>
                   <td className="py-2 pr-3">
                     {row.sku}
-                    <div className="text-xs text-gray-500">{row.barcode_internal}</div>
-                    <div className="text-[11px] text-gray-400">
-                      {Math.max(Number(row.barcode_count || 0), row.barcode_internal ? 1 : 0)} codigos
-                    </div>
                   </td>
                   <td className="py-2 pr-3">
                     {row.producto}
@@ -1718,54 +1897,76 @@ export default function ProductosPage() {
                     </div>
                   </td>
                   <td className="py-2 pr-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {canEdit ? (
+                    <div className="space-y-2 min-w-[220px]">
+                      <div>
+                        <div className="text-xs text-gray-700">{row.barcode_internal || 'Sin barcode principal'}</div>
+                        <div className="text-[11px] text-gray-400">
+                          {Math.max(Number(row.barcode_count || 0), row.barcode_internal ? 1 : 0)} codigos vinculados
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {canEdit ? (
+                          <button
+                            type="button"
+                            className="px-2 py-1 rounded border text-xs"
+                            onClick={() => quickGenerateBarcode(row.id)}
+                            disabled={saving}
+                          >
+                            Generar EAN
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="px-2 py-1 rounded border text-xs"
-                          onClick={() => quickGenerateBarcode(row.id)}
+                          onClick={() => openBarcodeModal(row)}
                           disabled={saving}
                         >
-                          Generar
+                          {canEdit ? 'Gestionar' : 'Ver'}
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="px-2 py-1 rounded border text-xs"
-                        onClick={() => openBarcodeModal(row)}
-                        disabled={saving}
-                      >
-                        {canEdit ? 'Asociar' : 'Ver'}
-                      </button>
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded border text-xs"
+                          onClick={() => {
+                            const prefs = loadBarcodePrintPrefs();
+                            const layout = normalizePrintLayout(prefs.layout);
+                            const params = {
+                              scope: 'primary',
+                              copies: 1,
+                              layout,
+                            };
+                            if (layout === PRINT_LAYOUTS.THERMAL) {
+                              params.label_width_mm = normalizePrintMm(prefs.labelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm);
+                              params.label_height_mm = normalizePrintMm(prefs.labelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm);
+                            }
+                            const url = getRetailVarianteBarcodeLabelsUrl(row.id, params);
+                            window.open(url, '_blank', 'noopener,noreferrer');
+                          }}
+                        >
+                          Imprimir
+                        </button>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-2 pr-3">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         className="px-2 py-1 rounded border text-xs"
                         onClick={() => openVariantEditor(row)}
                         disabled={saving || !canEdit}
                       >
-                        Editar
+                        Editar variante
                       </button>
-                      <button
-                        type="button"
-                        className="px-2 py-1 rounded border text-xs"
-                        onClick={() => {
-                          const prefs = loadBarcodePrintPrefs();
-                          const layout = normalizePrintLayout(prefs.layout);
-                          const params = {
-                            scope: 'primary',
-                            copies: 1,
-                            layout,
-                          };
-                          if (layout === PRINT_LAYOUTS.THERMAL) {
-                            params.label_width_mm = normalizePrintMm(prefs.labelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm);
-                            params.label_height_mm = normalizePrintMm(prefs.labelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm);
-                          }
-                          const url = getRetailVarianteBarcodeLabelsUrl(row.id, params);
-                          window.open(url, '_blank', 'noopener,noreferrer');
-                        }}
-                      >
-                        Imprimir
-                      </button>
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          className="px-2 py-1 rounded border text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
+                          onClick={() => hideVariant(row)}
+                          disabled={saving}
+                        >
+                          Ocultar
+                        </button>
+                      ) : null}
                       {canEdit ? (
                         <button
                           type="button"
@@ -1782,7 +1983,7 @@ export default function ProductosPage() {
               ))}
               {!variantes.length && !loading ? (
                 <tr>
-                  <td className="py-3 text-gray-500" colSpan={7}>Sin variantes para mostrar.</td>
+                  <td className="py-3 text-gray-500" colSpan={8}>Sin variantes para mostrar.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -1865,6 +2066,10 @@ export default function ProductosPage() {
                 />
               </div>
 
+              <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
+                El barcode principal no se puede quitar desde este formulario. Para moverlo, reemplazarlo o generar uno nuevo usa Gestionar barcodes.
+              </div>
+
               <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
                 <input
                   type="checkbox"
@@ -1882,6 +2087,11 @@ export default function ProductosPage() {
                 >
                   Atributos
                 </HelpTitle>
+                {!(editVariantForm.option_rows || []).length ? (
+                  <p className="text-xs text-neutral-500">
+                    Esta variante no tiene atributos cargados. Puedes guardar otros cambios igual, o agregar atributos si corresponde.
+                  </p>
+                ) : null}
                 {(editVariantForm.option_rows || []).map((row, idx) => {
                   const attrValues = valuesForAttr(attrValuesByCode, row.attribute_code).slice(0, 10);
                   const knownValue = isKnownAttrValue(attrValuesByCode, row.attribute_code, row.value);
@@ -1983,6 +2193,9 @@ export default function ProductosPage() {
                   Agregar atributo
                 </button>
               </div>
+
+              {err ? <p className="text-sm text-red-700">{err}</p> : null}
+              {msg ? <p className="text-sm text-green-700">{msg}</p> : null}
 
               <div className="flex gap-2">
                 <button className="btn" type="submit" disabled={saving}>

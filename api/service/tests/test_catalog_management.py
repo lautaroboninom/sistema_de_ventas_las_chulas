@@ -9,6 +9,7 @@ from service.views.retail_views import (
     RetailAtributosView,
     RetailComprasView,
     RetailProductosView,
+    RetailVarianteBarcodePrimaryView,
     RetailVarianteDetailView,
     RetailVariantesView,
     _display_option_value,
@@ -246,6 +247,58 @@ class RetailCatalogManagementTests(unittest.TestCase):
         self.assertEqual(response.data.get('mode'), 'hard')
         exec_void_mock.assert_called_once()
         remote_delete_mock.assert_called_once()
+
+    @patch('service.views.retail_views._set_audit_user')
+    @patch('service.views.retail_views._tiendanube_schedule_local_variants_sync')
+    @patch('service.views.retail_views._associate_variant_barcode')
+    @patch('service.views.retail_views.exec_void')
+    @patch('service.views.retail_views._load_variante')
+    def test_variante_patch_barcode_schedules_catalog_sync(
+        self,
+        load_mock,
+        exec_void_mock,
+        associate_mock,
+        schedule_sync_mock,
+        _set_audit_user_mock,
+    ):
+        load_mock.side_effect = [
+            {'id': 51, 'product_id': 9, 'sku': 'SKU-51', 'barcode_internal': '7791234567890'},
+            {'id': 51, 'product_id': 9, 'sku': 'SKU-51', 'barcode_internal': '7791234567891'},
+        ]
+        req = _request(data={'barcode_internal': '7791234567891'}, method='PATCH')
+
+        response = RetailVarianteDetailView.patch.__wrapped__(RetailVarianteDetailView(), req, variante_id=51)
+
+        self.assertEqual(response.status_code, 200)
+        associate_mock.assert_called_once()
+        schedule_sync_mock.assert_called_once_with([51], sync_catalog=True, reason='variant_barcode_update')
+        exec_void_mock.assert_not_called()
+
+    @patch('service.views.retail_views._set_audit_user')
+    @patch('service.views.retail_views._tiendanube_schedule_local_variants_sync')
+    @patch('service.views.retail_views._sync_variant_primary_barcode')
+    @patch('service.views.retail_views._set_variant_primary_barcode')
+    @patch('service.views.retail_views._load_variante')
+    @patch('service.views.retail_views.q')
+    def test_barcode_primary_schedules_catalog_sync(
+        self,
+        q_mock,
+        load_mock,
+        set_primary_mock,
+        sync_primary_mock,
+        schedule_sync_mock,
+        _set_audit_user_mock,
+    ):
+        q_mock.return_value = {'id': 88}
+        load_mock.return_value = {'id': 51, 'sku': 'SKU-51'}
+        req = _request(data={'barcode_id': 88}, method='POST')
+
+        response = RetailVarianteBarcodePrimaryView.post.__wrapped__(RetailVarianteBarcodePrimaryView(), req, variante_id=51)
+
+        self.assertEqual(response.status_code, 200)
+        set_primary_mock.assert_called_once_with(51, 88)
+        sync_primary_mock.assert_called_once_with(51)
+        schedule_sync_mock.assert_called_once_with([51], sync_catalog=True, reason='variant_barcode_primary')
 
 
 if __name__ == '__main__':

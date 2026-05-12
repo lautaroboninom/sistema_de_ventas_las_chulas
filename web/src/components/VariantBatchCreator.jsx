@@ -6,6 +6,15 @@ function errMsg(error) {
   return error?.message || 'Ocurrio un error inesperado';
 }
 
+function explainVariantCombinationError(error) {
+  const detail = String(error?.data?.detail || error?.message || '').toLowerCase();
+  if (!detail.includes('ya existe una variante con esa combinacion')) return errMsg(error);
+  if (detail.includes('inactiva')) {
+    return 'Ya existe una variante inactiva de este producto con esos mismos atributos.';
+  }
+  return 'Ya existe otra variante de este producto con esos mismos atributos.';
+}
+
 function normalizeValueError(error) {
   const data = error?.data || {};
   if (data?.code === 'attribute_value_suggestion_required') return data;
@@ -96,6 +105,52 @@ function toNum(value, fallback = 0) {
 function inputMoney(value, fallback = '') {
   if (value === null || value === undefined || value === '') return fallback;
   return String(value);
+}
+
+const BARCODE_PRINT_PREFS_KEY = 'las_chulas_barcode_print_prefs_v1';
+const PRINT_LAYOUTS = {
+  A4: 'a4_grid',
+  THERMAL: 'thermal_custom',
+};
+const DEFAULT_PRINT_PREFS = {
+  layout: PRINT_LAYOUTS.THERMAL,
+  labelWidthMm: '50',
+  labelHeightMm: '30',
+};
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizePrintLayout(value) {
+  return value === PRINT_LAYOUTS.A4 ? PRINT_LAYOUTS.A4 : PRINT_LAYOUTS.THERMAL;
+}
+
+function normalizePrintMm(value, fallback) {
+  const n = clampNumber(value, 10, 200, Number(fallback));
+  return String(Math.round((n + Number.EPSILON) * 100) / 100);
+}
+
+function normalizeBarcodePrintPrefs(raw) {
+  const source = raw || {};
+  return {
+    layout: normalizePrintLayout(source.layout),
+    labelWidthMm: normalizePrintMm(source.labelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm),
+    labelHeightMm: normalizePrintMm(source.labelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm),
+  };
+}
+
+function loadBarcodePrintPrefs() {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return { ...DEFAULT_PRINT_PREFS };
+    const raw = window.localStorage.getItem(BARCODE_PRINT_PREFS_KEY);
+    if (!raw) return { ...DEFAULT_PRINT_PREFS };
+    return normalizeBarcodePrintPrefs(JSON.parse(raw));
+  } catch (_error) {
+    return { ...DEFAULT_PRINT_PREFS };
+  }
 }
 
 const EMPTY_ATTR_ROW = { attribute_code: '', values_text: '' };
@@ -315,7 +370,7 @@ export default function VariantBatchCreator({
               ? {
                   ...curr,
                   status: 'err',
-                  detail: suggestion?.detail || errMsg(error),
+                  detail: suggestion?.detail || explainVariantCombinationError(error),
                   created: null,
                 }
               : curr,
@@ -359,11 +414,18 @@ export default function VariantBatchCreator({
   function printGeneratedBarcode(row) {
     const variantId = Number(row?.created?.id || 0);
     if (!Number.isInteger(variantId) || variantId <= 0) return;
-    const url = getRetailVarianteBarcodeLabelsUrl(variantId, {
+    const prefs = loadBarcodePrintPrefs();
+    const layout = normalizePrintLayout(prefs.layout);
+    const params = {
       scope: 'primary',
       copies: 1,
-      layout: 'thermal_custom',
-    });
+      layout,
+    };
+    if (layout === PRINT_LAYOUTS.THERMAL) {
+      params.label_width_mm = normalizePrintMm(prefs.labelWidthMm, DEFAULT_PRINT_PREFS.labelWidthMm);
+      params.label_height_mm = normalizePrintMm(prefs.labelHeightMm, DEFAULT_PRINT_PREFS.labelHeightMm);
+    }
+    const url = getRetailVarianteBarcodeLabelsUrl(variantId, params);
     if (typeof window !== 'undefined') {
       window.open(url, '_blank', 'noopener,noreferrer');
     }

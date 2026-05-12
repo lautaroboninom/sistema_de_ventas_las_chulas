@@ -73,6 +73,8 @@ VIEW_PERMISSION_MATRIX = {
     # Online
     'RetailOnlineSyncCatalogoView': {'POST': 'action.online.sync'},
     'RetailOnlineSyncStockView': {'POST': 'action.online.sync'},
+    'RetailOnlineAuditCatalogoView': {'GET': 'action.online.sync', 'POST': 'action.online.sync'},
+    'RetailOnlineRepairCatalogoView': {'POST': 'action.online.sync'},
     'RetailOnlineFailedJobsSummaryView': {'GET': 'action.online.sync'},
     'RetailOnlineRetryFailedJobsView': {'POST': 'action.online.sync'},
     'RetailOnlineJobsProcessView': {'POST': 'action.online.sync'},

@@ -73,13 +73,36 @@ async function http(path, { method = 'GET', body, headers } = {}) {
   const data = ct.includes('application/json') ? await res.json() : await res.text();
 
   if (!res.ok) {
-    const msg = typeof data === 'string' ? data : data?.detail || JSON.stringify(data);
+    const msg = formatErrorMessage(data);
     const err = new Error(`${res.status} ${res.statusText}: ${msg}`);
     err.status = res.status;
     err.data = data;
     throw err;
   }
   return data;
+}
+
+function formatErrorMessage(data) {
+  if (typeof data === 'string') return data;
+  if (Array.isArray(data)) {
+    const parts = data
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && typeof item.detail === 'string') return item.detail;
+        return JSON.stringify(item);
+      })
+      .filter(Boolean);
+    return parts.join(' ') || 'Error de validacion';
+  }
+  if (data && typeof data === 'object') {
+    if (typeof data.detail === 'string') return data.detail;
+    if (Array.isArray(data.detail)) return formatErrorMessage(data.detail);
+    const values = Object.values(data);
+    if (values.length) {
+      return values.map((value) => formatErrorMessage(value)).filter(Boolean).join(' ');
+    }
+  }
+  return JSON.stringify(data);
 }
 
 export const api = {
