@@ -1,32 +1,38 @@
 const UPDATE_NOTICE = {
-  id: '2026-05-12-correcciones-generales-sumar-stock',
-  title: 'Correcciones generales (Etiquetas, edición de variantes y eliminación de productos) y suma de stock con variantes existentes',
-  subtitle: 'Variantes',
+  id: '2026-05-13-variantes-barcodes-cliente',
+  title: 'Actualizacion de variantes y barcodes',
+  subtitle: 'Productos',
   intro:
-    'Esta actualizacion corrije el error al guardar cambios en variantes, agrega la opción de eliminar variantes y ocultar productos no utilizados. También agrega la opción de modificar stock cuando se crea una variante ya existente desde productos.',
+    'Esta actualizacion separa la edicion de variantes de la gestion de barcodes, para que un codigo viejo o invalido no bloquee cambios de talle, color, precios o stock minimo.',
   sections: [
     {
-      title: 'Correción de guardado de variantes',
+      title: 'Edicion de variantes',
       items: [
-        'Se corrigió el error al guardar cambios en variantes.',
-        'Ahora se guardan correctamente los cambios realizados en las variantes de los productos.',
+        'Guardar una variante ya no cambia ni revalida el barcode principal.',
+        'El modal queda enfocado en nombre, SKU, precios, costo, stock minimo, estado y atributos.',
       ],
     },
-    //{
-      //title: 'Creación de variantes ya existente desde Productos',
-      //items: [
-       // 'Antes si se creaba una variante con la opción de crear combinaciónes, el sismtea bloqueba la variatne que se quería crear.',
-        //'Ahora, al detectar queuna variante ya existe, el sistema te permite sumar el stock de la nueva variante a la variante existente, para no tener que volverlo a cagar desde Compras o desde el producto.',
-      //],
-    //},
     {
-      title: 'Correción de etiqueta',
+      title: 'Barcodes',
       items: [
-        'Se cambio el layout de la etiqueta para que el nombre y el precio se puedan ver mas claros.',
-        'Se achico el tamaño del código y se sacó el código explícito.',
+        'Se quito el boton Generar EAN de la tabla para evitar crear codigos que no se van a usar.',
+        'Los cambios de codigo quedan en Gestionar barcode: asociar, mover, generar un principal nuevo e imprimir etiquetas.',
       ],
     },
-  ]
+    {
+      title: 'Actualizacion en cliente',
+      items: [
+        'Este aviso se muestra de nuevo para confirmar que el cliente esta usando el flujo corregido.',
+        'Si la pantalla anterior quedo abierta en el navegador, cerrar y volver a abrir RetailHub aplica la version nueva.',
+      ],
+    },
+  ],
+  actions: [
+    {
+      label: 'Ir a productos',
+      to: '/productos',
+    },
+  ],
 };
 
 export default UPDATE_NOTICE;

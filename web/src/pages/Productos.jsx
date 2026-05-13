@@ -681,12 +681,6 @@ export default function ProductosPage() {
     if (!canEdit || !editVariantForm?.id) return;
     setErr('');
     setMsg('');
-    const nextBarcode = String(editVariantForm.barcode_internal || '').trim();
-    const currentBarcode = String(editVariantForm.original_barcode_internal || '').trim();
-    if (!nextBarcode && currentBarcode) {
-      setErr('No se puede quitar el barcode principal desde este formulario. Usa Gestionar barcodes para moverlo, reemplazarlo o generar otro.');
-      return;
-    }
 
     let option_values = null;
     try {
@@ -707,9 +701,6 @@ export default function ProductosPage() {
         stock_min: Number(editVariantForm.stock_min || 0),
         active: !!editVariantForm.active,
       };
-      if (nextBarcode) {
-        payload.barcode_internal = nextBarcode;
-      }
       if (option_values) {
         payload.option_values = option_values;
       }
@@ -723,6 +714,29 @@ export default function ProductosPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function openBarcodeModalFromVariantEditor() {
+    if (!editVariantForm?.id) return;
+    const optionSignature = (editVariantForm.option_rows || [])
+      .map((row) => {
+        const attr = atributos.find((a) => attrCode(a.code) === attrCode(row.attribute_code));
+        const attrName = attr?.name || row.attribute_code;
+        const value = String(row.value || '').trim();
+        if (attrName && value) return `${attrName}: ${value}`;
+        return value || attrName || '';
+      })
+      .filter(Boolean)
+      .join(' / ');
+    const variant = {
+      id: editVariantForm.id,
+      producto: editVariantForm.display_name || 'Variante',
+      option_signature: optionSignature,
+      sku: editVariantForm.sku || '',
+      barcode_internal: editVariantForm.original_barcode_internal || editVariantForm.barcode_internal || '',
+    };
+    closeVariantEditor();
+    await openBarcodeModal(variant);
   }
 
   async function createProducto(e) {
@@ -1002,26 +1016,6 @@ export default function ProductosPage() {
 
   function closeBarcodeModal() {
     setBarcodeModal({ ...EMPTY_BARCODE_MODAL });
-  }
-
-  async function quickGenerateBarcode(variantId) {
-    if (!canEdit) return;
-    if (!variantId) return;
-    setSaving(true);
-    setErr('');
-    setMsg('');
-    try {
-      await postRetailVarianteBarcodeGenerate(variantId, {});
-      setMsg('EAN-13 generado y asignado como principal');
-      await loadAll();
-      if (barcodeModal.open && Number(barcodeModal?.variant?.id) === Number(variantId)) {
-        await loadBarcodeRows(variantId, { keepState: true });
-      }
-    } catch (error) {
-      setErr(errMsg(error));
-    } finally {
-      setSaving(false);
-    }
   }
 
   async function generateBarcodeFromModal() {
@@ -1905,16 +1899,6 @@ export default function ProductosPage() {
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        {canEdit ? (
-                          <button
-                            type="button"
-                            className="px-2 py-1 rounded border text-xs"
-                            onClick={() => quickGenerateBarcode(row.id)}
-                            disabled={saving}
-                          >
-                            Generar EAN
-                          </button>
-                        ) : null}
                         <button
                           type="button"
                           className="px-2 py-1 rounded border text-xs"
@@ -1998,7 +1982,7 @@ export default function ProductosPage() {
               <HelpTitle
                 as="h3"
                 className="text-lg font-semibold"
-                help="Actualiza la variante vendible: SKU, barcode principal, precios, stock minimo, estado y valores de atributos."
+                help="Actualiza la variante vendible: SKU, precios, stock minimo, estado y valores de atributos. El barcode se administra aparte para no bloquear estos cambios."
               >
                 Editar variante #{editVariantForm?.id || ''}
               </HelpTitle>
@@ -2021,12 +2005,6 @@ export default function ProductosPage() {
                   onChange={(e) => setEditVariantForm((prev) => ({ ...prev, sku: e.target.value }))}
                   placeholder="SKU"
                   required
-                />
-                <input
-                  className="input"
-                  value={editVariantForm.barcode_internal}
-                  onChange={(e) => setEditVariantForm((prev) => ({ ...prev, barcode_internal: e.target.value }))}
-                  placeholder="Barcode interno"
                 />
                 <input
                   className="input"
@@ -2066,8 +2044,26 @@ export default function ProductosPage() {
                 />
               </div>
 
-              <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-                El barcode principal no se puede quitar desde este formulario. Para moverlo, reemplazarlo o generar uno nuevo usa Gestionar barcodes.
+              <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs text-neutral-600 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="font-semibold text-neutral-800">Barcode principal</div>
+                  <div className="mt-0.5 font-mono text-sm text-neutral-700">
+                    {editVariantForm.original_barcode_internal || editVariantForm.barcode_internal || 'Sin barcode principal'}
+                  </div>
+                  <div className="mt-1">
+                    Guardar esta variante no cambia ni revalida el barcode. Si hay que moverlo, reemplazarlo o crear uno nuevo, se hace desde Gestionar barcode.
+                  </div>
+                </div>
+                {canEdit ? (
+                  <button
+                    type="button"
+                    className="self-start rounded border border-neutral-300 bg-white px-3 py-2 text-xs font-semibold text-neutral-800 hover:bg-neutral-100 md:self-center"
+                    onClick={openBarcodeModalFromVariantEditor}
+                    disabled={saving}
+                  >
+                    Gestionar barcode
+                  </button>
+                ) : null}
               </div>
 
               <label className="inline-flex items-center gap-2 text-sm text-neutral-700">

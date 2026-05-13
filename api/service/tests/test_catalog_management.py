@@ -276,6 +276,32 @@ class RetailCatalogManagementTests(unittest.TestCase):
 
     @patch('service.views.retail_views._set_audit_user')
     @patch('service.views.retail_views._tiendanube_schedule_local_variants_sync')
+    @patch('service.views.retail_views._associate_variant_barcode')
+    @patch('service.views.retail_views.exec_void')
+    @patch('service.views.retail_views._load_variante')
+    def test_variante_patch_same_barcode_does_not_revalidate_barcode(
+        self,
+        load_mock,
+        exec_void_mock,
+        associate_mock,
+        schedule_sync_mock,
+        _set_audit_user_mock,
+    ):
+        load_mock.side_effect = [
+            {'id': 51, 'product_id': 9, 'sku': 'SKU-51', 'barcode_internal': '7791234000025'},
+            {'id': 51, 'product_id': 9, 'sku': 'SKU-51', 'barcode_internal': '7791234000025'},
+        ]
+        req = _request(data={'barcode_internal': '7791234000025'}, method='PATCH')
+
+        response = RetailVarianteDetailView.patch.__wrapped__(RetailVarianteDetailView(), req, variante_id=51)
+
+        self.assertEqual(response.status_code, 200)
+        associate_mock.assert_not_called()
+        schedule_sync_mock.assert_not_called()
+        exec_void_mock.assert_not_called()
+
+    @patch('service.views.retail_views._set_audit_user')
+    @patch('service.views.retail_views._tiendanube_schedule_local_variants_sync')
     @patch('service.views.retail_views._sync_variant_primary_barcode')
     @patch('service.views.retail_views._set_variant_primary_barcode')
     @patch('service.views.retail_views._load_variante')

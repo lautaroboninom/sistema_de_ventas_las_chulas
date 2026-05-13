@@ -2762,7 +2762,8 @@ def _associate_variant_barcode(
     force_move=False,
     supplier_id=None,
     created_by=None,
-    source='manual_association'
+    source='manual_association',
+    schedule_sync=True,
 ):
     barcode = _validate_new_ean13(code)
     supplier_ref, _ = _resolve_supplier_code(supplier_id, allow_generic=True)
@@ -2790,8 +2791,13 @@ def _associate_variant_barcode(
             _set_variant_primary_barcode(variante_id, existing['id'])
         _ensure_variant_primary_barcode(variante_id, source='auto_repair')
         _sync_variant_primary_barcode(variante_id)
-        _tiendanube_schedule_local_variants_sync([variante_id], sync_catalog=True, reason='variant_barcode_update')
-        return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [existing['id']], one=True)
+        affected_variant_ids = [variante_id]
+        if schedule_sync:
+            _tiendanube_schedule_local_variants_sync(affected_variant_ids, sync_catalog=True, reason='variant_barcode_update')
+        row = q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [existing['id']], one=True)
+        if row is not None and not schedule_sync:
+            row['_affected_variant_ids'] = affected_variant_ids
+        return row
 
     if existing and int(existing['variant_id']) != int(variante_id):
         old_variant_id = int(existing['variant_id'])
@@ -2822,12 +2828,17 @@ def _associate_variant_barcode(
             )
         else:
             _sync_variant_primary_barcode(old_variant_id)
-        _tiendanube_schedule_local_variants_sync(
-            [variante_id, old_variant_id],
-            sync_catalog=True,
-            reason='variant_barcode_update',
-        )
-        return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [existing['id']], one=True)
+        affected_variant_ids = [variante_id, old_variant_id]
+        if schedule_sync:
+            _tiendanube_schedule_local_variants_sync(
+                affected_variant_ids,
+                sync_catalog=True,
+                reason='variant_barcode_update',
+            )
+        row = q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [existing['id']], one=True)
+        if row is not None and not schedule_sync:
+            row['_affected_variant_ids'] = affected_variant_ids
+        return row
 
     if make_primary:
         exec_void('UPDATE retail_variant_barcodes SET is_primary=FALSE WHERE variant_id=%s', [variante_id])
@@ -2843,8 +2854,13 @@ def _associate_variant_barcode(
     )
     _ensure_variant_primary_barcode(variante_id, source='auto_repair')
     _sync_variant_primary_barcode(variante_id)
-    _tiendanube_schedule_local_variants_sync([variante_id], sync_catalog=True, reason='variant_barcode_update')
-    return q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [bid], one=True)
+    affected_variant_ids = [variante_id]
+    if schedule_sync:
+        _tiendanube_schedule_local_variants_sync(affected_variant_ids, sync_catalog=True, reason='variant_barcode_update')
+    row = q('SELECT * FROM retail_variant_barcodes WHERE id=%s', [bid], one=True)
+    if row is not None and not schedule_sync:
+        row['_affected_variant_ids'] = affected_variant_ids
+    return row
 
 
 def _autogen_barcode(product_row, supplier_id=None):
@@ -3168,9 +3184,9 @@ class RetailVarianteDetailView(APIView):
             params.append(sku)
         if 'barcode_internal' in data:
             barcode = _clean_text(data.get('barcode_internal'))
-            if not barcode:
-                raise ValidationError('barcode_internal invalido')
-            barcode_update = barcode
+            current_barcode = _clean_text(existing.get('barcode_internal'))
+            if barcode and barcode.lower() != (current_barcode or '').lower():
+                barcode_update = barcode
         if 'price_store_ars' in data:
             updates.append('price_store_ars=%s')
             params.append(_money(data.get('price_store_ars')))
@@ -3249,7 +3265,7 @@ class RetailVarianteDetailView(APIView):
             force_move = _to_bool(data.get('force_move'))
             supplier_id = _to_int(data.get('supplier_id'), 'supplier_id', allow_none=True)
             try:
-                _associate_variant_barcode(
+                barcode_row = _associate_variant_barcode(
                     variante_id,
                     barcode_update,
                     make_primary=True,
@@ -3257,9 +3273,20 @@ class RetailVarianteDetailView(APIView):
                     supplier_id=supplier_id,
                     created_by=getattr(request.user, 'id', None),
                     source='variant_patch_primary',
+                    schedule_sync=False,
                 )
             except BarcodeConflictError as exc:
                 return Response(exc.payload, status=409)
+            affected_variant_ids = (
+                barcode_row.get('_affected_variant_ids')
+                if isinstance(barcode_row, dict)
+                else None
+            )
+            _tiendanube_schedule_local_variants_sync(
+                affected_variant_ids or [variante_id],
+                sync_catalog=True,
+                reason='variant_barcode_update',
+            )
 
         if deactivate_variant:
             _tiendanube_schedule_local_variants_delete(
