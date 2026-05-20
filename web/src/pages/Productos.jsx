@@ -23,7 +23,9 @@ import {
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { can, PERMISSION_CODES } from '../lib/permissions';
+import { attrCode, normalizeValueError } from '../lib/variantAttributes';
 import InfoHint from '../components/InfoHint';
+import { VariantAttributeRows } from '../components/VariantAttributeRows';
 import VariantBatchCreator from '../components/VariantBatchCreator';
 
 function errMsg(error) {
@@ -73,36 +75,6 @@ function inputMoney(v, fallback = '') {
 
 function sameMoney(a, b) {
   return Number(a || 0) === Number(b || 0);
-}
-
-function attrCode(v) {
-  return String(v || '').trim().toLowerCase();
-}
-
-function optionKey(v) {
-  return String(v || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
-}
-
-function valuesForAttr(valuesByCode, code) {
-  return valuesByCode?.[attrCode(code)] || [];
-}
-
-function isKnownAttrValue(valuesByCode, code, value) {
-  const key = optionKey(value);
-  if (!key) return false;
-  return valuesForAttr(valuesByCode, code).some((item) => optionKey(item?.value_label) === key || optionKey(item?.value_key) === key);
-}
-
-function normalizeValueError(error) {
-  const data = error?.data || {};
-  if (data?.code === 'attribute_value_suggestion_required') return data;
-  if (data?.detail?.code === 'attribute_value_suggestion_required') return data.detail;
-  return null;
 }
 
 function HelpTitle({ as: Tag = 'h3', className = '', children, help }) {
@@ -1432,107 +1404,20 @@ export default function ProductosPage() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <HelpTitle
-                    as="h4"
-                    className="text-sm font-semibold"
-                    help="Define que valores distinguen esta variante dentro del producto. Elegir valores ya existentes evita duplicados como Negro, negro o NEGRO."
-                  >
-                    Atributos de la variante
-                  </HelpTitle>
-                  {(varForm.option_rows || []).map((row, idx) => {
-                    const options = availableAttrsForRow(idx);
-                    const attrValues = valuesForAttr(attrValuesByCode, row.attribute_code).slice(0, 10);
-                    const knownValue = isKnownAttrValue(attrValuesByCode, row.attribute_code, row.value);
-                    const listId = `variant-attr-values-${idx}`;
-                    return (
-                      <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-                        <div className="md:col-span-5">
-                          <label className="block text-xs text-gray-500 mb-1">Atributo</label>
-                          <select
-                            className="input"
-                            value={row.attribute_code || ''}
-                            onChange={(e) => updateOptionRow(idx, { attribute_code: e.target.value, value: '', attribute_value_id: undefined, confirm_new_value: false })}
-                            required
-                          >
-                            <option value="">Seleccionar atributo</option>
-                            {options.map((a) => (
-                              <option key={a.id} value={a.code}>{a.name}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div className="md:col-span-5">
-                          <label className="block text-xs text-gray-500 mb-1">Valor</label>
-                          <input
-                            className="input"
-                            list={listId}
-                            placeholder="Ej: S, Negro, 36"
-                            value={row.value || ''}
-                            onChange={(e) => updateOptionRow(idx, { value: e.target.value, attribute_value_id: undefined, confirm_new_value: false })}
-                            required
-                          />
-                          <datalist id={listId}>
-                            {attrValues.map((item) => (
-                              <option key={item.id} value={item.value_label} />
-                            ))}
-                          </datalist>
-                          {attrValues.length ? (
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {attrValues.slice(0, 6).map((item) => (
-                                <button
-                                  key={item.id}
-                                  type="button"
-                                  className="px-2 py-1 rounded border text-[11px] hover:bg-neutral-100"
-                                  onClick={() =>
-                                    updateOptionRow(idx, {
-                                      value: item.value_label,
-                                      attribute_value_id: item.id,
-                                      confirm_new_value: false,
-                                    })
-                                  }
-                                >
-                                  {item.value_label}
-                                </button>
-                              ))}
-                            </div>
-                          ) : null}
-                          {row.value && row.attribute_code && !knownValue ? (
-                            <button
-                              type="button"
-                              className={`mt-1 px-2 py-1 rounded border text-[11px] ${
-                                row.confirm_new_value ? 'border-amber-300 bg-amber-50 text-amber-700' : 'hover:bg-neutral-100'
-                              }`}
-                              onClick={() => updateOptionRow(idx, { confirm_new_value: !row.confirm_new_value })}
-                            >
-                              {row.confirm_new_value ? 'Nuevo valor confirmado' : 'Crear valor nuevo'}
-                            </button>
-                          ) : null}
-                        </div>
-
-                        <div className="md:col-span-2">
-                          <button
-                            type="button"
-                            className="px-3 py-2 rounded border w-full"
-                            onClick={() => removeOptionRow(idx)}
-                            disabled={(varForm.option_rows || []).length <= 1}
-                          >
-                            Quitar
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded border"
-                    onClick={addOptionRow}
-                    disabled={!canAddOptionRow}
-                  >
-                    Agregar atributo
-                  </button>
-                </div>
+                <VariantAttributeRows
+                  rows={varForm.option_rows || []}
+                  attributes={atributos}
+                  attributeValuesByCode={attrValuesByCode}
+                  getAvailableAttributesForRow={availableAttrsForRow}
+                  onUpdateRow={updateOptionRow}
+                  onRemoveRow={removeOptionRow}
+                  onAddRow={addOptionRow}
+                  canAddRow={canAddOptionRow}
+                  disabled={saving}
+                  title="Atributos de la variante"
+                  help="Define que valores distinguen esta variante dentro del producto. Elegir valores ya existentes evita duplicados como Negro, negro o NEGRO."
+                  listIdPrefix="product-create-variant-attr-values"
+                />
 
                 {duplicateStockPrompt ? (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
@@ -2075,120 +1960,21 @@ export default function ProductosPage() {
                 Activa
               </label>
 
-              <div className="space-y-2">
-                <HelpTitle
-                  as="h4"
-                  className="text-sm font-semibold"
-                  help="Estos valores identifican la variante dentro del producto. Cambiarlos puede modificar la combinacion que ve Tienda Nube."
-                >
-                  Atributos
-                </HelpTitle>
-                {!(editVariantForm.option_rows || []).length ? (
-                  <p className="text-xs text-neutral-500">
-                    Esta variante no tiene atributos cargados. Puedes guardar otros cambios igual, o agregar atributos si corresponde.
-                  </p>
-                ) : null}
-                {(editVariantForm.option_rows || []).map((row, idx) => {
-                  const attrValues = valuesForAttr(attrValuesByCode, row.attribute_code).slice(0, 10);
-                  const knownValue = isKnownAttrValue(attrValuesByCode, row.attribute_code, row.value);
-                  const listId = `edit-variant-attr-values-${idx}`;
-                  return (
-                    <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-                      <div className="md:col-span-5">
-                        <select
-                          className="input"
-                          value={row.attribute_code || ''}
-                          onChange={(e) =>
-                            updateEditVariantOptionRow(idx, {
-                              attribute_code: e.target.value,
-                              value: '',
-                              attribute_value_id: undefined,
-                              confirm_new_value: false,
-                            })
-                          }
-                          required
-                        >
-                          <option value="">Seleccionar atributo</option>
-                          {availableAttrsForVariantEditRow(idx).map((a) => (
-                            <option key={a.id} value={a.code}>{a.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="md:col-span-5">
-                        <input
-                          className="input"
-                          list={listId}
-                          value={row.value || ''}
-                          onChange={(e) =>
-                            updateEditVariantOptionRow(idx, {
-                              value: e.target.value,
-                              attribute_value_id: undefined,
-                              confirm_new_value: false,
-                            })
-                          }
-                          placeholder="Valor"
-                          required
-                        />
-                        <datalist id={listId}>
-                          {attrValues.map((item) => (
-                            <option key={item.id} value={item.value_label} />
-                          ))}
-                        </datalist>
-                        {attrValues.length ? (
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {attrValues.slice(0, 6).map((item) => (
-                              <button
-                                key={item.id}
-                                type="button"
-                                className="px-2 py-1 rounded border text-[11px] hover:bg-neutral-100"
-                                onClick={() =>
-                                  updateEditVariantOptionRow(idx, {
-                                    value: item.value_label,
-                                    attribute_value_id: item.id,
-                                    confirm_new_value: false,
-                                  })
-                                }
-                              >
-                                {item.value_label}
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-                        {row.value && row.attribute_code && !knownValue ? (
-                          <button
-                            type="button"
-                            className={`mt-1 px-2 py-1 rounded border text-[11px] ${
-                              row.confirm_new_value ? 'border-amber-300 bg-amber-50 text-amber-700' : 'hover:bg-neutral-100'
-                            }`}
-                            onClick={() => updateEditVariantOptionRow(idx, { confirm_new_value: !row.confirm_new_value })}
-                          >
-                            {row.confirm_new_value ? 'Nuevo valor confirmado' : 'Crear valor nuevo'}
-                          </button>
-                        ) : null}
-                      </div>
-                      <div className="md:col-span-2">
-                        <button
-                          type="button"
-                          className="px-3 py-2 rounded border w-full"
-                          onClick={() => removeEditVariantOptionRow(idx)}
-                          disabled={(editVariantForm.option_rows || []).length <= 1}
-                        >
-                          Quitar
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                <button
-                  type="button"
-                  className="px-3 py-2 rounded border"
-                  onClick={addEditVariantOptionRow}
-                  disabled={!canAddEditOptionRow}
-                >
-                  Agregar atributo
-                </button>
-              </div>
+              <VariantAttributeRows
+                rows={editVariantForm.option_rows || []}
+                attributes={atributos}
+                attributeValuesByCode={attrValuesByCode}
+                getAvailableAttributesForRow={availableAttrsForVariantEditRow}
+                onUpdateRow={updateEditVariantOptionRow}
+                onRemoveRow={removeEditVariantOptionRow}
+                onAddRow={addEditVariantOptionRow}
+                canAddRow={canAddEditOptionRow}
+                disabled={saving}
+                title="Atributos"
+                help="Estos valores identifican la variante dentro del producto. Cambiarlos puede modificar la combinacion que ve Tienda Nube."
+                emptyMessage="Esta variante no tiene atributos cargados. Puedes guardar otros cambios igual, o agregar atributos si corresponde."
+                listIdPrefix="product-edit-variant-attr-values"
+              />
 
               {err ? <p className="text-sm text-red-700">{err}</p> : null}
               {msg ? <p className="text-sm text-green-700">{msg}</p> : null}

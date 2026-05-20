@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getRetailVarianteBarcodeLabelsUrl, postRetailVariante } from '../lib/api';
+import { attrCode, dedupValues, normalizeValueError, splitValues } from '../lib/variantAttributes';
 import InfoHint from './InfoHint';
+import { VariantAttributeMultiRows } from './VariantAttributeRows';
 
 function errMsg(error) {
   return error?.message || 'Ocurrio un error inesperado';
@@ -15,13 +17,6 @@ function explainVariantCombinationError(error) {
   return 'Ya existe otra variante de este producto con esos mismos atributos.';
 }
 
-function normalizeValueError(error) {
-  const data = error?.data || {};
-  if (data?.code === 'attribute_value_suggestion_required') return data;
-  if (data?.detail?.code === 'attribute_value_suggestion_required') return data.detail;
-  return null;
-}
-
 function HelpTitle({ as: Tag = 'h3', className = '', children, help }) {
   return (
     <Tag className={`inline-flex items-center gap-2 ${className}`}>
@@ -29,50 +24,6 @@ function HelpTitle({ as: Tag = 'h3', className = '', children, help }) {
       <InfoHint text={help} />
     </Tag>
   );
-}
-
-function attrCode(v) {
-  return String(v || '').trim().toLowerCase();
-}
-
-function optionKey(v) {
-  return String(v || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
-}
-
-function valuesForAttr(valuesByCode, code) {
-  return valuesByCode?.[attrCode(code)] || [];
-}
-
-function appendToken(raw, token) {
-  const value = String(token || '').trim();
-  if (!value) return raw || '';
-  const parts = splitValues(raw);
-  if (parts.some((item) => optionKey(item) === optionKey(value))) return raw || '';
-  return [...parts, value].join(', ');
-}
-
-function splitValues(raw) {
-  return String(raw || '')
-    .split(/[,\n;]+/)
-    .map((v) => String(v || '').trim())
-    .filter(Boolean);
-}
-
-function dedupValues(values) {
-  const out = [];
-  const seen = new Set();
-  values.forEach((value) => {
-    const key = String(value).trim().toLowerCase();
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    out.push(String(value).trim());
-  });
-  return out;
 }
 
 function cartesianProduct(groups) {
@@ -516,80 +467,20 @@ export default function VariantBatchCreator({
         </select>
       </div>
 
-      <div className="space-y-2">
-        <HelpTitle
-          as="h4"
-          className="text-sm font-semibold"
-          help="Carga un atributo y varios valores separados por coma, punto y coma o salto de linea. El sistema combina esos valores para armar variantes."
-        >
-          Atributos multivalor
-        </HelpTitle>
-        {attrRows.map((row, idx) => {
-          const attrValues = valuesForAttr(attributeValuesByCode, row.attribute_code).slice(0, 12);
-          return (
-            <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-              <div className="md:col-span-4">
-                <label className="block text-xs text-gray-500 mb-1">Atributo</label>
-                <select
-                  className="input"
-                  value={row.attribute_code || ''}
-                  onChange={(e) => updateAttrRow(idx, { attribute_code: e.target.value, values_text: '' })}
-                  disabled={!canEdit || saving}
-                >
-                  <option value="">Seleccionar atributo</option>
-                  {availableAttrsForRow(idx).map((a) => (
-                    <option key={a.id} value={a.code}>{a.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="md:col-span-7">
-                <label className="block text-xs text-gray-500 mb-1">Valores (coma, punto y coma o salto de linea)</label>
-                <input
-                  className="input"
-                  placeholder="Ej: azul, violeta, negro"
-                  value={row.values_text || ''}
-                  onChange={(e) => updateAttrRow(idx, { values_text: e.target.value })}
-                  disabled={!canEdit || saving}
-                />
-                {attrValues.length ? (
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {attrValues.slice(0, 8).map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className="px-2 py-1 rounded border text-[11px] hover:bg-neutral-100"
-                        onClick={() => updateAttrRow(idx, { values_text: appendToken(row.values_text, item.value_label) })}
-                        disabled={!canEdit || saving}
-                      >
-                        {item.value_label}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-              <div className="md:col-span-1">
-                <button
-                  type="button"
-                  className="px-3 py-2 rounded border w-full"
-                  onClick={() => removeAttrRow(idx)}
-                  disabled={!canEdit || saving || attrRows.length <= 1}
-                >
-                  Quitar
-                </button>
-              </div>
-            </div>
-          );
-        })}
-
-        <button
-          type="button"
-          className="px-3 py-2 rounded border"
-          onClick={addAttrRow}
-          disabled={!canEdit || saving || !canAddAttrRow}
-        >
-          Agregar atributo
-        </button>
-      </div>
+      <VariantAttributeMultiRows
+        rows={attrRows}
+        attributes={attributes}
+        attributeValuesByCode={attributeValuesByCode}
+        getAvailableAttributesForRow={availableAttrsForRow}
+        onUpdateRow={updateAttrRow}
+        onRemoveRow={removeAttrRow}
+        onAddRow={addAttrRow}
+        canAddRow={canAddAttrRow}
+        disabled={!canEdit || saving}
+        title="Atributos multivalor"
+        help="Carga un atributo y varios valores separados por coma, punto y coma o salto de linea. El sistema combina esos valores para armar variantes."
+        listIdPrefix="batch-attr-values"
+      />
 
       {generatedRows.length ? (
         <div className="space-y-2">

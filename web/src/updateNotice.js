@@ -1,28 +1,28 @@
 const UPDATE_NOTICE = {
-  id: '2026-05-13-variantes-barcodes-cliente',
-  title: 'Actualizacion de variantes y barcodes',
-  subtitle: 'Productos',
+  id: '2026-05-20-atributos-unificados-variantes',
+  title: 'Actualizacion de atributos en variantes',
+  subtitle: 'Productos y Compras',
   intro:
-    'Esta actualizacion separa la edicion de variantes de la gestion de barcodes, para que un codigo viejo o invalido no bloquee cambios de talle, color, precios o stock minimo.',
+    'Esta actualizacion unifica la seleccion de atributos de variantes para que el mismo criterio se use en Productos, Compras y las altas masivas.',
   sections: [
     {
-      title: 'Edicion de variantes',
+      title: 'Seleccion consistente',
       items: [
-        'Guardar una variante ya no cambia ni revalida el barcode principal.',
-        'El modal queda enfocado en nombre, SKU, precios, costo, stock minimo, estado y atributos.',
+        'Nueva variante, los modales de Compras y el generador masivo ahora muestran la misma forma de elegir atributo y valor.',
+        'Cuando ya existen valores conocidos, se pueden reutilizar desde sugerencias rapidas para evitar duplicados por mayusculas o escritura distinta.',
       ],
     },
     {
-      title: 'Barcodes',
+      title: 'Valores nuevos',
       items: [
-        'Se quito el boton Generar EAN de la tabla para evitar crear codigos que no se van a usar.',
-        'Los cambios de codigo quedan en Gestionar barcode: asociar, mover, generar un principal nuevo e imprimir etiquetas.',
+        'Si hace falta cargar un valor nuevo para un atributo, el sistema ahora lo deja marcado de forma explicita antes de guardar.',
+        'Esto ayuda a distinguir mejor cuando se esta usando un valor existente y cuando se va a crear uno nuevo en el catalogo.',
       ],
     },
     {
       title: 'Actualizacion en cliente',
       items: [
-        'Este aviso se muestra de nuevo para confirmar que el cliente esta usando el flujo corregido.',
+        'Este aviso se muestra de nuevo para confirmar que el cliente ya esta usando el flujo unificado de atributos.',
         'Si la pantalla anterior quedo abierta en el navegador, cerrar y volver a abrir RetailHub aplica la version nueva.',
       ],
     },

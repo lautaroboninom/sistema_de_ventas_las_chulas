@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import {
   getRetailAtributos,
+  getRetailAtributoValores,
   getRetailComprasConfig,
   getRetailComprasProveedores,
   getRetailProductos,
@@ -12,6 +13,8 @@ import {
   postRetailProducto,
   postRetailVariante,
 } from '../lib/api';
+import { attrCode, dedupValues, normalizeValueError, splitValues } from '../lib/variantAttributes';
+import { VariantAttributeMultiRows, VariantAttributeRows } from '../components/VariantAttributeRows';
 import VariantBatchCreator from '../components/VariantBatchCreator';
 
 function errMsg(error) {
@@ -141,10 +144,6 @@ function variantName(row) {
   return sku ? `${base} - SKU ${sku}` : base;
 }
 
-function attrCode(v) {
-  return String(v || '').trim().toLowerCase();
-}
-
 function buildOptionValues(rows) {
   const list = Array.isArray(rows) ? rows : [];
   const out = [];
@@ -163,33 +162,18 @@ function buildOptionValues(rows) {
     }
 
     seen.add(code);
-    out.push({ attribute_code: code, value });
+    out.push({
+      attribute_code: code,
+      value,
+      attribute_value_id: row?.attribute_value_id || undefined,
+      confirm_new_value: !!row?.confirm_new_value,
+    });
   });
 
   if (!out.length) {
     throw new Error('Debes cargar al menos un atributo con valor');
   }
 
-  return out;
-}
-
-function splitValues(raw) {
-  return String(raw || '')
-    .split(/[,\n;]+/)
-    .map((value) => String(value || '').trim())
-    .filter(Boolean);
-}
-
-function dedupValues(values) {
-  const out = [];
-  const seen = new Set();
-  (Array.isArray(values) ? values : []).forEach((value) => {
-    const clean = String(value || '').trim();
-    const key = clean.toLowerCase();
-    if (!clean || seen.has(key)) return;
-    seen.add(key);
-    out.push(clean);
-  });
   return out;
 }
 
@@ -351,6 +335,7 @@ export default function ComprasPage() {
   const [createTargetIndex, setCreateTargetIndex] = useState(null);
   const [createProducts, setCreateProducts] = useState([]);
   const [createAttributes, setCreateAttributes] = useState([]);
+  const [createAttrValuesByCode, setCreateAttrValuesByCode] = useState({});
   const [createProductForm, setCreateProductForm] = useState({ ...EMPTY_CREATE_PRODUCT });
   const [createVariantForm, setCreateVariantForm] = useState({ ...EMPTY_CREATE_VARIANT });
   const [createLoadingData, setCreateLoadingData] = useState(false);
@@ -505,18 +490,28 @@ export default function ComprasPage() {
     (async () => {
       setCreateLoadingData(true);
       try {
-        const [prods, attrs] = await Promise.all([
+        const [prods, attrs, attrVals] = await Promise.all([
           getRetailProductos({ active: 1 }),
           getRetailAtributos(),
+          getRetailAtributoValores({ limit: 500 }),
         ]);
         if (cancelled) return;
         setCreateProducts(Array.isArray(prods) ? prods : []);
         setCreateAttributes(Array.isArray(attrs) ? attrs : []);
+        const groupedValues = {};
+        const valueItems = Array.isArray(attrVals?.items) ? attrVals.items : Array.isArray(attrVals) ? attrVals : [];
+        valueItems.forEach((item) => {
+          const code = attrCode(item?.attribute_code);
+          if (!code) return;
+          groupedValues[code] = [...(groupedValues[code] || []), item];
+        });
+        setCreateAttrValuesByCode(groupedValues);
       } catch (error) {
         if (cancelled) return;
         setCreateErr(errMsg(error));
         setCreateProducts([]);
         setCreateAttributes([]);
+        setCreateAttrValuesByCode({});
       } finally {
         if (!cancelled) setCreateLoadingData(false);
       }
@@ -1175,6 +1170,7 @@ export default function ComprasPage() {
     );
 
     return createAttributes.filter((a) => {
+      if (a?.active === false) return false;
       const code = attrCode(a.code);
       return !selected.has(code) || code === current;
     });
@@ -1190,7 +1186,7 @@ export default function ComprasPage() {
   function addCreateOptionRow() {
     setCreateVariantForm((prev) => {
       const used = new Set((prev.option_rows || []).map((row) => attrCode(row.attribute_code)).filter(Boolean));
-      const firstFree = createAttributes.find((a) => !used.has(attrCode(a.code)));
+      const firstFree = createAttributes.find((a) => a?.active !== false && !used.has(attrCode(a.code)));
       return {
         ...prev,
         option_rows: [
@@ -1276,7 +1272,8 @@ export default function ComprasPage() {
 
       closeCreateModal();
     } catch (error) {
-      setCreateErr(errMsg(error));
+      const suggestion = normalizeValueError(error);
+      setCreateErr(suggestion?.detail || errMsg(error));
     } finally {
       setCreateVariantSaving(false);
     }
@@ -1841,58 +1838,21 @@ export default function ComprasPage() {
               {!createLoadingData && createErr ? <p className="text-sm text-red-700">{createErr}</p> : null}
               {createLoadingData ? <p className="text-sm text-gray-500">Cargando atributos...</p> : null}
 
-              <div className="space-y-2">
-                <h3 className="text-sm font-semibold">Atributos multivalor</h3>
-                {(quickAttrRows || []).map((row, idx) => (
-                  <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-                    <div className="md:col-span-4">
-                      <label className="block text-xs text-gray-500 mb-1">Atributo</label>
-                      <select
-                        className="input"
-                        value={row.attribute_code || ''}
-                        onChange={(e) => updateQuickAttrRow(idx, { attribute_code: e.target.value })}
-                        disabled={quickApplying || createLoadingData}
-                      >
-                        <option value="">Seleccionar atributo</option>
-                        {availableQuickAttrsForRow(idx).map((attr) => (
-                          <option key={attr.id} value={attr.code}>{attr.name}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="md:col-span-6">
-                      <label className="block text-xs text-gray-500 mb-1">Valores</label>
-                      <input
-                        className="input"
-                        placeholder="Ej: Azul, Violeta, Negro"
-                        value={row.values_text || ''}
-                        onChange={(e) => updateQuickAttrRow(idx, { values_text: e.target.value })}
-                        disabled={quickApplying}
-                      />
-                    </div>
-
-                    <div className="md:col-span-2">
-                      <button
-                        type="button"
-                        className="w-full px-3 py-2 rounded border"
-                        onClick={() => removeQuickAttrRow(idx)}
-                        disabled={quickApplying || quickAttrRows.length <= 1}
-                      >
-                        Quitar
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-                <button
-                  type="button"
-                  className="px-3 py-2 rounded border"
-                  onClick={addQuickAttrRow}
-                  disabled={quickApplying || !canAddQuickAttrRow}
-                >
-                  Agregar atributo
-                </button>
-              </div>
+              <VariantAttributeMultiRows
+                rows={quickAttrRows || []}
+                attributes={createAttributes}
+                attributeValuesByCode={createAttrValuesByCode}
+                getAvailableAttributesForRow={availableQuickAttrsForRow}
+                onUpdateRow={updateQuickAttrRow}
+                onRemoveRow={removeQuickAttrRow}
+                onAddRow={addQuickAttrRow}
+                canAddRow={canAddQuickAttrRow}
+                disabled={quickApplying || createLoadingData}
+                title="Atributos multivalor"
+                help="Carga un atributo y varios valores separados por coma, punto y coma o salto de linea. El sistema combina esos valores para armar variantes o reaprovechar las que ya existen."
+                listIdPrefix="purchase-quick-attr-values"
+                valuePlaceholder="Ej: Azul, Violeta, Negro"
+              />
 
               <div className="flex flex-wrap justify-end gap-2 pt-2 border-t">
                 <button
@@ -2006,61 +1966,20 @@ export default function ComprasPage() {
                     ))}
                   </select>
 
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-semibold">Atributos</h4>
-                    {(createVariantForm.option_rows || []).map((row, idx) => {
-                      const options = availableCreateAttrsForRow(idx);
-                      return (
-                        <div key={idx} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-                          <div className="md:col-span-5">
-                            <label className="block text-xs text-gray-500 mb-1">Atributo</label>
-                            <select
-                              className="input"
-                              value={row.attribute_code || ''}
-                              onChange={(e) => updateCreateOptionRow(idx, { attribute_code: e.target.value })}
-                              required
-                            >
-                              <option value="">Seleccionar atributo</option>
-                              {options.map((a) => (
-                                <option key={a.id} value={a.code}>{a.name}</option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div className="md:col-span-5">
-                            <label className="block text-xs text-gray-500 mb-1">Valor</label>
-                            <input
-                              className="input"
-                              placeholder="Ej: S, Negro, 36"
-                              value={row.value || ''}
-                              onChange={(e) => updateCreateOptionRow(idx, { value: e.target.value })}
-                              required
-                            />
-                          </div>
-
-                          <div className="md:col-span-2">
-                            <button
-                              type="button"
-                              className="px-3 py-2 rounded border w-full"
-                              onClick={() => removeCreateOptionRow(idx)}
-                              disabled={(createVariantForm.option_rows || []).length <= 1}
-                            >
-                              Quitar
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    <button
-                      type="button"
-                      className="px-3 py-2 rounded border"
-                      onClick={addCreateOptionRow}
-                      disabled={!canAddCreateOptionRow}
-                    >
-                      Agregar atributo
-                    </button>
-                  </div>
+                  <VariantAttributeRows
+                    rows={createVariantForm.option_rows || []}
+                    attributes={createAttributes}
+                    attributeValuesByCode={createAttrValuesByCode}
+                    getAvailableAttributesForRow={availableCreateAttrsForRow}
+                    onUpdateRow={updateCreateOptionRow}
+                    onRemoveRow={removeCreateOptionRow}
+                    onAddRow={addCreateOptionRow}
+                    canAddRow={canAddCreateOptionRow}
+                    disabled={createBusy}
+                    title="Atributos"
+                    help="Usa valores ya conocidos cuando existan para evitar duplicados como Negro, negro o NEGRO, igual que en Nueva variante de Productos."
+                    listIdPrefix="purchase-create-variant-attr-values"
+                  />
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     <input
@@ -2313,6 +2232,7 @@ export default function ComprasPage() {
                 title="Alta masiva por combinaciones"
                 products={createProducts}
                 attributes={createAttributes}
+                attributeValuesByCode={createAttrValuesByCode}
                 suppliers={suppliersRows}
                 canEdit={!createBusy}
                 initialProductId={createVariantForm.product_id}
