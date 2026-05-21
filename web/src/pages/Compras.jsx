@@ -266,7 +266,7 @@ function buildLookupItems(variantRows, productRows, queryText = '') {
     .map((row) => ({ kind: 'product', key: `p-${row.id}`, score: productMatchScore(row, queryText), row }))
     .sort((a, b) => a.score - b.score || Number(a.row?.id || 0) - Number(b.row?.id || 0));
 
-  return [...variants.slice(0, 25), ...products.slice(0, 15)];
+  return [...products.slice(0, 15), ...variants.slice(0, 25)];
 }
 
 function payloadItems(items) {

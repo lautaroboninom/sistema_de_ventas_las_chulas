@@ -1,5 +1,5 @@
 const UPDATE_NOTICE = {
-  id: '2026-05-20-atributos-unificados-variantes',
+  id: '2026-05-20-atributos-unificados-variantes-compras-lista',
   title: 'Actualizacion de atributos en variantes',
   subtitle: 'Productos y Compras',
   intro:
@@ -23,6 +23,7 @@ const UPDATE_NOTICE = {
       title: 'Actualizacion en cliente',
       items: [
         'Este aviso se muestra de nuevo para confirmar que el cliente ya esta usando el flujo unificado de atributos.',
+        'En Compras, la busqueda rapida para dar de alta ahora muestra primero los productos y despues las variantes para que sea mas natural arrancar desde el articulo base.',
         'Si la pantalla anterior quedo abierta en el navegador, cerrar y volver a abrir RetailHub aplica la version nueva.',
       ],
     },
