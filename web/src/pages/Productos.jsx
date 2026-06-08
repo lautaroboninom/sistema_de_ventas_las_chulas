@@ -68,6 +68,10 @@ function money(v) {
   return moneyFmt.format(Number.isFinite(n) ? n : 0);
 }
 
+function variantBarcodes(row) {
+  return Array.isArray(row?.barcodes) ? row.barcodes : [];
+}
+
 function inputMoney(v, fallback = '') {
   if (v === null || v === undefined || v === '') return fallback;
   return String(v);
@@ -1721,6 +1725,7 @@ export default function ProductosPage() {
                 <th className="py-2 pr-3">Img</th>
                 <th className="py-2 pr-3">SKU</th>
                 <th className="py-2 pr-3">Producto</th>
+                <th className="py-2 pr-3">Proveedor / articulo</th>
                 <th className="py-2 pr-3">Precios</th>
                 <th className="py-2 pr-3">Stock</th>
                 <th className="py-2 pr-3">Ajuste</th>
@@ -1751,6 +1756,33 @@ export default function ProductosPage() {
                   <td className="py-2 pr-3">
                     {row.producto}
                     <div className="text-xs text-gray-500">{row.option_signature}</div>
+                  </td>
+                  <td className="py-2 pr-3">
+                    <div className="min-w-[220px] space-y-1">
+                      {variantBarcodes(row).length ? (
+                        variantBarcodes(row).map((barcode) => (
+                          <div key={barcode.id || barcode.barcode} className="text-xs">
+                            <div className="font-medium text-gray-800">
+                              {barcode.supplier_name || 'Sin proveedor'}
+                              {barcode.is_primary ? <span className="ml-1 text-green-700">(Principal)</span> : null}
+                            </div>
+                            <div className="text-[11px] text-gray-500">
+                              Articulo: {barcode.supplier_item_code || '-'} - Codigo: {barcode.barcode || '-'}
+                            </div>
+                            {barcode.supplier_ean_code ? (
+                              <div className="text-[11px] text-gray-400">EAN Prov {barcode.supplier_ean_code}</div>
+                            ) : null}
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-xs text-gray-400">Sin proveedor vinculado</span>
+                      )}
+                      {row.last_purchase_supplier_product_name ? (
+                        <div className="text-[11px] text-gray-500">
+                          Ref. ultima compra: {row.last_purchase_supplier_product_name}
+                        </div>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="py-2 pr-3">
                     <div>Local: {money(row.price_store_ars)}</div>
@@ -1852,7 +1884,7 @@ export default function ProductosPage() {
               ))}
               {!variantes.length && !loading ? (
                 <tr>
-                  <td className="py-3 text-gray-500" colSpan={8}>Sin variantes para mostrar.</td>
+                  <td className="py-3 text-gray-500" colSpan={9}>Sin variantes para mostrar.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -2207,6 +2239,7 @@ export default function ProductosPage() {
                       <tr className="text-left border-b">
                         <th className="py-2 pr-3">Codigo</th>
                         <th className="py-2 pr-3">Proveedor</th>
+                        <th className="py-2 pr-3">Articulo</th>
                         <th className="py-2 pr-3">Origen</th>
                         <th className="py-2 pr-3">Accion</th>
                       </tr>
@@ -2222,6 +2255,7 @@ export default function ProductosPage() {
                             {r.supplier_name || 'Sin especificar'}
                             {r.supplier_ean_code ? <div className="text-[11px] text-gray-500">EAN Prov {r.supplier_ean_code}</div> : null}
                           </td>
+                          <td className="py-2 pr-3">{r.supplier_item_code || '-'}</td>
                           <td className="py-2 pr-3">{r.source || '-'}</td>
                           <td className="py-2 pr-3">
                             <div className="flex flex-wrap gap-2">

@@ -2650,8 +2650,28 @@ def _variant_summary(variante_id):
     }
 
 
+def _barcode_supplier_item_code(row):
+    digits = _digits(row.get('barcode'))
+    supplier_code = _digits(row.get('supplier_ean_code'))
+    if len(digits) != 13:
+        return ''
+    if supplier_code and len(supplier_code) == 4:
+        return digits[7:12] if digits[3:7] == supplier_code else ''
+    if _clean_text(row.get('source')).lower() in ('generated', 'variant_create_auto', 'auto_repair'):
+        country, _ = _ean13_settings()
+        if digits.startswith(country):
+            return digits[7:12]
+    return ''
+
+
+def _decorate_barcode_rows(rows):
+    for row in rows or []:
+        row['supplier_item_code'] = _barcode_supplier_item_code(row)
+    return rows or []
+
+
 def _list_variant_barcodes(variante_id):
-    return q(
+    rows = q(
         '''
         SELECT b.id, b.variant_id, b.barcode, b.is_primary, b.supplier_id, b.source,
                b.created_by, b.created_at, b.updated_at,
@@ -2664,6 +2684,29 @@ def _list_variant_barcodes(variante_id):
         ''',
         [variante_id],
     ) or []
+    return _decorate_barcode_rows(rows)
+
+
+def _list_barcodes_for_variants(variant_ids):
+    if not variant_ids:
+        return {}
+    rows = q(
+        '''
+        SELECT b.id, b.variant_id, b.barcode, b.is_primary, b.supplier_id, b.source,
+               b.created_by, b.created_at, b.updated_at,
+               COALESCE(s.name,'') AS supplier_name,
+               COALESCE(s.ean_supplier_code,'') AS supplier_ean_code
+        FROM retail_variant_barcodes b
+        LEFT JOIN retail_suppliers s ON s.id=b.supplier_id
+        WHERE b.variant_id = ANY(%s)
+        ORDER BY b.variant_id, b.is_primary DESC, b.id
+        ''',
+        [variant_ids],
+    ) or []
+    out = {}
+    for row in _decorate_barcode_rows(rows):
+        out.setdefault(row['variant_id'], []).append(row)
+    return out
 
 
 def _set_variant_primary_barcode(variante_id, barcode_row_id):
@@ -2977,8 +3020,10 @@ class RetailVariantesView(APIView):
         by_variant = {}
         for opt in opt_rows:
             by_variant.setdefault(opt['variant_id'], []).append(opt)
+        barcode_by_variant = _list_barcodes_for_variants(variant_ids)
         for row in rows:
             row['option_values'] = by_variant.get(row['id'], [])
+            row['barcodes'] = barcode_by_variant.get(row['id'], [])
 
         return Response(rows)
 
