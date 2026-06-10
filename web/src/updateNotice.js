@@ -1,29 +1,29 @@
 const UPDATE_NOTICE = {
-  id: '2026-06-08-detalle-proveedores-articulos-productos',
-  title: 'Detalle de proveedores en productos',
+  id: '2026-06-09-detalle-profesional-productos-proveedores',
+  title: 'Detalle completo de productos y proveedores',
   subtitle: 'Productos y Compras',
   intro:
-    'Esta actualizacion agrega mas detalle visible en el catalogo para identificar mejor los codigos asociados a cada variante.',
+    'Esta actualizacion ordena la informacion de cada variante para que sea mas facil identificar proveedores, articulos, compras y codigos sin recargar la tabla.',
   sections: [
     {
       title: 'Productos',
       items: [
-        'La lista de variantes ahora muestra el proveedor asociado a cada codigo y el numero de articulo interno del EAN cuando corresponde.',
-        'Si la variante tiene varios codigos, se ven todos con su proveedor para identificar rapidamente cual pertenece a cada origen.',
+        'La lista de variantes ahora muestra un resumen mas limpio del proveedor principal o de la ultima compra disponible.',
+        'Cada variante tiene un boton Detalles para ver informacion completa sin agrandar los renglones.',
       ],
     },
     {
-      title: 'Gestion de codigos',
+      title: 'Detalle de variante',
       items: [
-        'El modal de Gestionar barcode tambien muestra el numero de articulo junto al proveedor.',
-        'Esto evita tener que interpretar el codigo completo para saber que articulo corresponde.',
+        'El nuevo detalle muestra precios, stock, proveedor destacado, ultima compra, codigos asociados y datos de catalogo online.',
+        'Tambien se ven otras variantes del mismo producto para comparar talles, colores, stock y proveedores rapidamente.',
       ],
     },
     {
       title: 'Compras',
       items: [
-        'Cuando existe una referencia de la ultima compra, tambien queda visible en la fila de la variante.',
-        'Sirve como apoyo para reconocer el articulo del proveedor desde el catalogo.',
+        'La ultima compra ahora incluye proveedor, fecha y comprobante cuando esa informacion esta disponible.',
+        'Los costos siguen respetando los permisos del usuario, pero la referencia operativa del proveedor queda visible.',
       ],
     },
   ],

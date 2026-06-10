@@ -2966,6 +2966,11 @@ class RetailVariantesView(APIView):
                    lpi.last_purchase_unit_cost_currency,
                    lpi.last_purchase_suggested_markup_pct,
                    lpi.last_purchase_supplier_product_name,
+                   lpi.last_purchase_date,
+                   lpi.last_purchase_supplier_id,
+                   lpi.last_purchase_supplier_name,
+                   lpi.last_purchase_supplier_ean_code,
+                   lpi.last_purchase_invoice_number,
                    COALESCE(vb.cnt, 0) AS barcode_count,
                    v.active, v.created_at, v.updated_at,
                    v.tiendanube_product_id, v.tiendanube_variant_id
@@ -2975,9 +2980,15 @@ class RetailVariantesView(APIView):
               SELECT pi.quantity AS last_purchase_quantity,
                      pi.unit_cost_currency AS last_purchase_unit_cost_currency,
                      pi.suggested_markup_pct AS last_purchase_suggested_markup_pct,
-                     pi.supplier_product_name AS last_purchase_supplier_product_name
+                     pi.supplier_product_name AS last_purchase_supplier_product_name,
+                     rp2.purchase_date AS last_purchase_date,
+                     rp2.supplier_id AS last_purchase_supplier_id,
+                     COALESCE(sp.name, '') AS last_purchase_supplier_name,
+                     COALESCE(sp.ean_supplier_code, '') AS last_purchase_supplier_ean_code,
+                     rp2.invoice_number AS last_purchase_invoice_number
               FROM retail_purchase_items pi
               JOIN retail_purchases rp2 ON rp2.id=pi.purchase_id
+              LEFT JOIN retail_suppliers sp ON sp.id=rp2.supplier_id
               WHERE pi.variant_id=v.id
               ORDER BY rp2.purchase_date DESC NULLS LAST, rp2.id DESC, pi.id DESC
               LIMIT 1

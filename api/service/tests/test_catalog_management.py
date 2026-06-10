@@ -92,6 +92,12 @@ class RetailCatalogManagementTests(unittest.TestCase):
         self.assertIn('last_purchase_unit_cost_currency', sql)
         self.assertIn('last_purchase_suggested_markup_pct', sql)
         self.assertIn('last_purchase_supplier_product_name', sql)
+        self.assertIn('last_purchase_date', sql)
+        self.assertIn('last_purchase_supplier_id', sql)
+        self.assertIn('last_purchase_supplier_name', sql)
+        self.assertIn('last_purchase_supplier_ean_code', sql)
+        self.assertIn('last_purchase_invoice_number', sql)
+        self.assertIn('LEFT JOIN retail_suppliers sp', sql)
 
     @patch('service.views.retail_views._can_view_costs', return_value=False)
     @patch('service.views.retail_views.q')
@@ -117,6 +123,12 @@ class RetailCatalogManagementTests(unittest.TestCase):
                     'last_purchase_quantity': 3,
                     'last_purchase_unit_cost_currency': 120,
                     'last_purchase_suggested_markup_pct': 45,
+                    'last_purchase_supplier_product_name': 'Remera proveedor',
+                    'last_purchase_date': '2026-06-01',
+                    'last_purchase_supplier_id': 7,
+                    'last_purchase_supplier_name': 'Proveedor X',
+                    'last_purchase_supplier_ean_code': '1234',
+                    'last_purchase_invoice_number': 'FAC-9',
                     'barcode_count': 1,
                     'active': True,
                     'created_at': None,
@@ -125,6 +137,7 @@ class RetailCatalogManagementTests(unittest.TestCase):
                     'tiendanube_variant_id': None,
                 }
             ],
+            [],
             [],
         ]
         req = _request(query={'active': '1'}, method='GET')
@@ -136,6 +149,12 @@ class RetailCatalogManagementTests(unittest.TestCase):
         self.assertIsNone(row.get('last_purchase_unit_cost_currency'))
         self.assertIsNone(row.get('last_purchase_suggested_markup_pct'))
         self.assertEqual(row.get('last_purchase_quantity'), 3)
+        self.assertEqual(row.get('last_purchase_supplier_product_name'), 'Remera proveedor')
+        self.assertEqual(row.get('last_purchase_date'), '2026-06-01')
+        self.assertEqual(row.get('last_purchase_supplier_id'), 7)
+        self.assertEqual(row.get('last_purchase_supplier_name'), 'Proveedor X')
+        self.assertEqual(row.get('last_purchase_supplier_ean_code'), '1234')
+        self.assertEqual(row.get('last_purchase_invoice_number'), 'FAC-9')
 
     @patch('service.views.retail_views._load_compra', return_value={'id': 99, 'items': []})
     @patch('service.views.retail_views._tiendanube_schedule_local_variants_sync')
@@ -315,7 +334,24 @@ class RetailCatalogManagementTests(unittest.TestCase):
         schedule_sync_mock,
         _set_audit_user_mock,
     ):
-        q_mock.return_value = {'id': 88}
+        q_mock.side_effect = [
+            {'id': 88},
+            [
+                {
+                    'id': 88,
+                    'variant_id': 51,
+                    'barcode': '7791234000025',
+                    'is_primary': True,
+                    'supplier_id': None,
+                    'source': 'manual',
+                    'created_by': None,
+                    'created_at': None,
+                    'updated_at': None,
+                    'supplier_name': '',
+                    'supplier_ean_code': '',
+                }
+            ],
+        ]
         load_mock.return_value = {'id': 51, 'sku': 'SKU-51'}
         req = _request(data={'barcode_id': 88}, method='POST')
 

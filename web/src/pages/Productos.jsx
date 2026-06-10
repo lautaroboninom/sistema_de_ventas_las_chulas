@@ -72,6 +72,90 @@ function variantBarcodes(row) {
   return Array.isArray(row?.barcodes) ? row.barcodes : [];
 }
 
+function fmtDate(value) {
+  if (!value) return '-';
+  try {
+    return new Date(`${String(value).slice(0, 10)}T00:00:00`).toLocaleDateString('es-AR');
+  } catch (_error) {
+    return String(value).slice(0, 10);
+  }
+}
+
+function fmtDateTime(value) {
+  if (!value) return '-';
+  return String(value).slice(0, 16).replace('T', ' ');
+}
+
+function primaryBarcode(row) {
+  const barcodes = variantBarcodes(row);
+  return barcodes.find((barcode) => barcode?.is_primary) || barcodes[0] || (row?.barcode_internal ? {
+    barcode: row.barcode_internal,
+    is_primary: true,
+    supplier_name: '',
+    supplier_item_code: '',
+    supplier_ean_code: '',
+  } : null);
+}
+
+function variantOptionsText(row) {
+  const values = Array.isArray(row?.option_values) ? row.option_values : [];
+  const labels = values
+    .map((opt) => {
+      const attr = opt?.attribute_name || opt?.attribute_code || '';
+      const value = opt?.option_value || '';
+      if (attr && value) return `${attr}: ${value}`;
+      return value || attr;
+    })
+    .filter(Boolean);
+  return labels.length ? labels.join(' / ') : (row?.option_signature || '-');
+}
+
+function variantSupplierSummary(row) {
+  const barcodes = variantBarcodes(row);
+  const primary = primaryBarcode(row);
+  if (primary?.supplier_name) {
+    return {
+      name: primary.supplier_name,
+      source: 'Barcode principal',
+      barcode: primary.barcode || '',
+      article: primary.supplier_item_code || '',
+      ean: primary.supplier_ean_code || '',
+    };
+  }
+  if (row?.last_purchase_supplier_name) {
+    return {
+      name: row.last_purchase_supplier_name,
+      source: 'Ultima compra',
+      barcode: primary?.barcode || row?.barcode_internal || '',
+      article: row.last_purchase_supplier_product_name || '',
+      ean: row.last_purchase_supplier_ean_code || '',
+      date: row.last_purchase_date || '',
+    };
+  }
+  const linked = barcodes.find((barcode) => barcode?.supplier_name);
+  if (linked) {
+    return {
+      name: linked.supplier_name,
+      source: linked.is_primary ? 'Barcode principal' : 'Barcode asociado',
+      barcode: linked.barcode || '',
+      article: linked.supplier_item_code || '',
+      ean: linked.supplier_ean_code || '',
+    };
+  }
+  return {
+    name: 'Sin proveedor vinculado',
+    source: primary?.barcode ? 'Barcode principal sin proveedor' : 'Sin vinculo',
+    barcode: primary?.barcode || row?.barcode_internal || '',
+    article: primary?.supplier_item_code || '',
+    ean: primary?.supplier_ean_code || '',
+  };
+}
+
+function detailValue(value, fallback = '-') {
+  const txt = String(value ?? '').trim();
+  return txt || fallback;
+}
+
 function inputMoney(v, fallback = '') {
   if (v === null || v === undefined || v === '') return fallback;
   return String(v);
@@ -254,6 +338,11 @@ const EMPTY_BARCODE_MODAL = {
   printLabelHeightMm: DEFAULT_PRINT_PREFS.labelHeightMm,
 };
 
+const EMPTY_DETAIL_MODAL = {
+  open: false,
+  variant: null,
+};
+
 const EMPTY_ONLINE_SYNC_SUMMARY = {
   failed_total: 0,
   by_type: {
@@ -307,6 +396,7 @@ export default function ProductosPage() {
 
   const [adjustByVariant, setAdjustByVariant] = useState({});
   const [barcodeModal, setBarcodeModal] = useState({ ...EMPTY_BARCODE_MODAL });
+  const [detailModal, setDetailModal] = useState({ ...EMPTY_DETAIL_MODAL });
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
@@ -994,6 +1084,15 @@ export default function ProductosPage() {
     setBarcodeModal({ ...EMPTY_BARCODE_MODAL });
   }
 
+  function openVariantDetails(row) {
+    if (!row) return;
+    setDetailModal({ open: true, variant: row });
+  }
+
+  function closeVariantDetails() {
+    setDetailModal({ ...EMPTY_DETAIL_MODAL });
+  }
+
   async function generateBarcodeFromModal() {
     if (!canEdit) return;
     const variantId = barcodeModal?.variant?.id;
@@ -1108,6 +1207,13 @@ export default function ProductosPage() {
   const failedSyncTotal = Number(onlineSyncSummary?.failed_total || 0);
   const syncStatusAvailable = Boolean(onlineSyncSummary?.statusAvailable);
   const hasFailedSync = syncStatusAvailable && failedSyncTotal > 0;
+  const detailVariant = detailModal.open
+    ? (variantes.find((row) => Number(row.id) === Number(detailModal.variant?.id)) || detailModal.variant)
+    : null;
+  const detailSupplier = detailVariant ? variantSupplierSummary(detailVariant) : null;
+  const detailRelatedVariants = detailVariant
+    ? variantes.filter((row) => Number(row.product_id) === Number(detailVariant.product_id) && Number(row.id) !== Number(detailVariant.id))
+    : [];
 
   return (
     <div className="space-y-4">
@@ -1734,8 +1840,11 @@ export default function ProductosPage() {
               </tr>
             </thead>
             <tbody>
-              {variantes.map((row) => (
-                <tr key={row.id} className="border-b last:border-b-0">
+              {variantes.map((row) => {
+                const supplier = variantSupplierSummary(row);
+                const primary = primaryBarcode(row);
+                return (
+                  <tr key={row.id} className="border-b last:border-b-0 align-top">
                   <td className="py-2 pr-3">
                     {row.product_image_url ? (
                       <img
@@ -1758,29 +1867,25 @@ export default function ProductosPage() {
                     <div className="text-xs text-gray-500">{row.option_signature}</div>
                   </td>
                   <td className="py-2 pr-3">
-                    <div className="min-w-[220px] space-y-1">
-                      {variantBarcodes(row).length ? (
-                        variantBarcodes(row).map((barcode) => (
-                          <div key={barcode.id || barcode.barcode} className="text-xs">
-                            <div className="font-medium text-gray-800">
-                              {barcode.supplier_name || 'Sin proveedor'}
-                              {barcode.is_primary ? <span className="ml-1 text-green-700">(Principal)</span> : null}
-                            </div>
-                            <div className="text-[11px] text-gray-500">
-                              Articulo: {barcode.supplier_item_code || '-'} - Codigo: {barcode.barcode || '-'}
-                            </div>
-                            {barcode.supplier_ean_code ? (
-                              <div className="text-[11px] text-gray-400">EAN Prov {barcode.supplier_ean_code}</div>
-                            ) : null}
-                          </div>
-                        ))
-                      ) : (
-                        <span className="text-xs text-gray-400">Sin proveedor vinculado</span>
-                      )}
+                    <div className="min-w-[210px] max-w-[280px] space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-medium text-gray-800">{supplier.name}</span>
+                        <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-neutral-500">
+                          {supplier.source}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-gray-500">
+                        {supplier.article ? `Articulo: ${supplier.article}` : 'Articulo: -'}
+                        {supplier.barcode ? ` - Codigo: ${supplier.barcode}` : ''}
+                      </div>
                       {row.last_purchase_supplier_product_name ? (
-                        <div className="text-[11px] text-gray-500">
-                          Ref. ultima compra: {row.last_purchase_supplier_product_name}
+                        <div className="text-[11px] text-gray-400">
+                          Ultima compra: {row.last_purchase_supplier_product_name}
+                          {row.last_purchase_date ? ` (${fmtDate(row.last_purchase_date)})` : ''}
                         </div>
+                      ) : null}
+                      {!row.last_purchase_supplier_product_name && primary?.barcode && !supplier.article ? (
+                        <div className="text-[11px] text-gray-400">Barcode principal sin articulo de proveedor</div>
                       ) : null}
                     </div>
                   </td>
@@ -1853,6 +1958,14 @@ export default function ProductosPage() {
                       <button
                         type="button"
                         className="px-2 py-1 rounded border text-xs"
+                        onClick={() => openVariantDetails(row)}
+                        disabled={saving}
+                      >
+                        Detalles
+                      </button>
+                      <button
+                        type="button"
+                        className="px-2 py-1 rounded border text-xs"
                         onClick={() => openVariantEditor(row)}
                         disabled={saving || !canEdit}
                       >
@@ -1880,8 +1993,9 @@ export default function ProductosPage() {
                       ) : null}
                     </div>
                   </td>
-                </tr>
-              ))}
+                  </tr>
+                );
+              })}
               {!variantes.length && !loading ? (
                 <tr>
                   <td className="py-3 text-gray-500" colSpan={9}>Sin variantes para mostrar.</td>
@@ -1891,6 +2005,195 @@ export default function ProductosPage() {
           </table>
         </div>
       </div>
+
+      {detailVariant ? (
+        <div className="fixed inset-0 z-50 bg-black/40 p-3 md:p-6 overflow-auto">
+          <div className="mx-auto w-full max-w-6xl rounded-xl border border-neutral-200 bg-white p-4 space-y-4">
+            <div className="flex items-start justify-between gap-3 border-b border-neutral-100 pb-3">
+              <div className="flex min-w-0 gap-3">
+                {detailVariant.product_image_url ? (
+                  <img
+                    src={detailVariant.product_image_url}
+                    alt={detailVariant.producto || 'Producto'}
+                    className="h-16 w-16 rounded object-cover border border-neutral-200"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="h-16 w-16 shrink-0 rounded border border-neutral-200 bg-neutral-50 text-xs text-neutral-400 flex items-center justify-center">
+                    -
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold leading-tight">{detailVariant.producto || 'Variante'}</h3>
+                  <p className="text-sm text-gray-600">{variantOptionsText(detailVariant)}</p>
+                  <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-500">
+                    <span>SKU: {detailValue(detailVariant.sku)}</span>
+                    <span>ID variante: {detailValue(detailVariant.id)}</span>
+                    <span className={detailVariant.active ? 'text-green-700' : 'text-amber-700'}>
+                      {detailVariant.active ? 'Activa' : 'Oculta'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button type="button" className="px-3 py-2 rounded border" onClick={closeVariantDetails}>
+                Cerrar
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              <div className="rounded-xl border border-neutral-200 p-3">
+                <h4 className="text-sm font-semibold mb-2">Proveedor destacado</h4>
+                <div className="space-y-1 text-sm">
+                  <div className="font-medium text-gray-900">{detailSupplier?.name || 'Sin proveedor vinculado'}</div>
+                  <div className="text-xs text-gray-500">Fuente: {detailSupplier?.source || '-'}</div>
+                  <div className="text-xs text-gray-500">Articulo: {detailValue(detailSupplier?.article)}</div>
+                  <div className="text-xs text-gray-500">Codigo: {detailValue(detailSupplier?.barcode)}</div>
+                  <div className="text-xs text-gray-500">EAN proveedor: {detailValue(detailSupplier?.ean)}</div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-neutral-200 p-3">
+                <h4 className="text-sm font-semibold mb-2">Precios y stock</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div><div className="text-xs text-gray-500">Precio local</div><div className="font-medium">{money(detailVariant.price_store_ars)}</div></div>
+                  <div><div className="text-xs text-gray-500">Precio online</div><div className="font-medium">{money(detailVariant.price_online_ars)}</div></div>
+                  <div><div className="text-xs text-gray-500">Stock actual</div><div className="font-medium">{detailValue(detailVariant.stock_on_hand)}</div></div>
+                  <div><div className="text-xs text-gray-500">Stock minimo</div><div className="font-medium">{detailValue(detailVariant.stock_min)}</div></div>
+                  <div><div className="text-xs text-gray-500">Reservado</div><div className="font-medium">{detailValue(detailVariant.stock_reserved)}</div></div>
+                  <div><div className="text-xs text-gray-500">Costo promedio</div><div className="font-medium">{detailVariant.cost_avg_ars === null ? '-' : money(detailVariant.cost_avg_ars)}</div></div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-neutral-200 p-3">
+                <h4 className="text-sm font-semibold mb-2">Catalogo online</h4>
+                <div className="space-y-1 text-sm">
+                  <div className="text-xs text-gray-500">Producto Tienda Nube: {detailValue(detailVariant.tiendanube_product_id)}</div>
+                  <div className="text-xs text-gray-500">Variante Tienda Nube: {detailValue(detailVariant.tiendanube_variant_id)}</div>
+                  <div className="text-xs text-gray-500">Creada: {fmtDateTime(detailVariant.created_at)}</div>
+                  <div className="text-xs text-gray-500">Actualizada: {fmtDateTime(detailVariant.updated_at)}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-neutral-200 p-3">
+              <h4 className="text-sm font-semibold mb-2">Ultima compra</h4>
+              {detailVariant.last_purchase_date || detailVariant.last_purchase_supplier_name || detailVariant.last_purchase_supplier_product_name ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <div className="text-xs text-gray-500">Proveedor</div>
+                    <div className="font-medium">{detailValue(detailVariant.last_purchase_supplier_name)}</div>
+                    <div className="text-xs text-gray-500">EAN proveedor: {detailValue(detailVariant.last_purchase_supplier_ean_code)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Fecha / comprobante</div>
+                    <div className="font-medium">{fmtDate(detailVariant.last_purchase_date)}</div>
+                    <div className="text-xs text-gray-500">Comprobante: {detailValue(detailVariant.last_purchase_invoice_number)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Articulo proveedor</div>
+                    <div className="font-medium">{detailValue(detailVariant.last_purchase_supplier_product_name)}</div>
+                    <div className="text-xs text-gray-500">Cantidad: {detailValue(detailVariant.last_purchase_quantity)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Costo unitario</div>
+                    <div className="font-medium">{detailVariant.last_purchase_unit_cost_currency === null ? '-' : money(detailVariant.last_purchase_unit_cost_currency)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">Markup sugerido</div>
+                    <div className="font-medium">{detailVariant.last_purchase_suggested_markup_pct === null || detailVariant.last_purchase_suggested_markup_pct === undefined ? '-' : `${detailVariant.last_purchase_suggested_markup_pct}%`}</div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">No hay compras registradas para esta variante.</p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              <div className="rounded-xl border border-neutral-200 p-3">
+                <h4 className="text-sm font-semibold mb-2">Codigos asociados</h4>
+                {variantBarcodes(detailVariant).length ? (
+                  <div className="overflow-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left border-b">
+                          <th className="py-2 pr-3">Codigo</th>
+                          <th className="py-2 pr-3">Proveedor</th>
+                          <th className="py-2 pr-3">Articulo</th>
+                          <th className="py-2 pr-3">Origen</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {variantBarcodes(detailVariant).map((barcode) => (
+                          <tr key={barcode.id || barcode.barcode} className="border-b last:border-b-0">
+                            <td className="py-2 pr-3">
+                              <span className={barcode.is_primary ? 'font-semibold text-green-700' : ''}>{barcode.barcode}</span>
+                              {barcode.is_primary ? <div className="text-[11px] text-green-700">Principal</div> : null}
+                            </td>
+                            <td className="py-2 pr-3">
+                              {barcode.supplier_name || 'Sin especificar'}
+                              {barcode.supplier_ean_code ? <div className="text-[11px] text-gray-500">EAN Prov {barcode.supplier_ean_code}</div> : null}
+                            </td>
+                            <td className="py-2 pr-3">{barcode.supplier_item_code || '-'}</td>
+                            <td className="py-2 pr-3">{barcode.source || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">La variante no tiene codigos asociados.</p>
+                )}
+              </div>
+
+              <div className="rounded-xl border border-neutral-200 p-3">
+                <h4 className="text-sm font-semibold mb-2">Otras variantes del producto</h4>
+                {detailRelatedVariants.length ? (
+                  <div className="overflow-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left border-b">
+                          <th className="py-2 pr-3">SKU</th>
+                          <th className="py-2 pr-3">Atributos</th>
+                          <th className="py-2 pr-3">Proveedor</th>
+                          <th className="py-2 pr-3">Stock</th>
+                          <th className="py-2 pr-3">Precio</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailRelatedVariants.map((related) => {
+                          const relatedSupplier = variantSupplierSummary(related);
+                          return (
+                            <tr key={related.id} className="border-b last:border-b-0">
+                              <td className="py-2 pr-3">{detailValue(related.sku)}</td>
+                              <td className="py-2 pr-3">{variantOptionsText(related)}</td>
+                              <td className="py-2 pr-3">{relatedSupplier.name}<div className="text-[11px] text-gray-500">{relatedSupplier.source}</div></td>
+                              <td className="py-2 pr-3">{detailValue(related.stock_on_hand)} (min {detailValue(related.stock_min)})</td>
+                              <td className="py-2 pr-3">{money(related.price_store_ars)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">No hay otras variantes activas para este producto.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t border-neutral-100 pt-3">
+              <button type="button" className="px-3 py-2 rounded border" onClick={() => { closeVariantDetails(); openBarcodeModal(detailVariant); }} disabled={saving}>
+                Gestionar codigos
+              </button>
+              {canEdit ? (
+                <button type="button" className="btn" onClick={() => { closeVariantDetails(); openVariantEditor(detailVariant); }} disabled={saving}>
+                  Editar variante
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {editVariantOpen ? (
         <div className="fixed inset-0 z-50 bg-black/40 p-3 md:p-6 overflow-auto">
