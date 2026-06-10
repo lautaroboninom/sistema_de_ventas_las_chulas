@@ -1865,6 +1865,14 @@ export default function ProductosPage() {
                   <td className="py-2 pr-3">
                     {row.producto}
                     <div className="text-xs text-gray-500">{row.option_signature}</div>
+                    <button
+                      type="button"
+                      className="mt-2 inline-flex items-center rounded border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                      onClick={() => openVariantDetails(row)}
+                      disabled={saving}
+                    >
+                      Detalles
+                    </button>
                   </td>
                   <td className="py-2 pr-3">
                     <div className="min-w-[210px] max-w-[280px] space-y-1">
@@ -1955,14 +1963,6 @@ export default function ProductosPage() {
                   </td>
                   <td className="py-2 pr-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        className="px-2 py-1 rounded border text-xs"
-                        onClick={() => openVariantDetails(row)}
-                        disabled={saving}
-                      >
-                        Detalles
-                      </button>
                       <button
                         type="button"
                         className="px-2 py-1 rounded border text-xs"
