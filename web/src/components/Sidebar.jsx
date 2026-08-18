@@ -19,10 +19,10 @@ const LinkItem = ({ to, children, onClick, indicator = null }) => (
     to={to}
     onClick={onClick}
     className={({ isActive }) =>
-      `block rounded-xl border-l-4 px-3 py-2.5 text-sm font-semibold tracking-wide transition ${
+      `block rounded-xl border-l-4 px-3 py-2.5 font-display text-sm font-semibold tracking-wide transition ${
         isActive
-          ? 'border-[#ef6f61] bg-[#ef6f61]/10 text-[#111111]'
-          : 'border-transparent text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900'
+          ? 'border-brand-accent bg-brand-accent/10 text-brand-ink'
+          : 'border-transparent text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'
       }`
     }
   >
@@ -77,10 +77,10 @@ export default function Sidebar({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-300 text-neutral-700 hover:bg-neutral-100"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-neutral-200 text-lg leading-none text-neutral-500 transition hover:border-neutral-300 hover:bg-neutral-50 hover:text-neutral-900"
             aria-label="Cerrar menu"
           >
-            X
+            &times;
           </button>
         </div>
 
@@ -88,9 +88,9 @@ export default function Sidebar({
           <img
             src="/branding/las-chulas-mark.svg"
             alt="Las Chulas"
-            className="h-12 w-full rounded-lg border border-neutral-200 object-contain"
+            className="h-12 w-full rounded-xl object-contain"
           />
-          <div className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+          <div className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-400">
             {sectionTitle || 'Operaciones'}
           </div>
         </div>

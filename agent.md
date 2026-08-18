@@ -1,5 +1,6 @@
 # Reglas Operativas del Agente
 
+- En la computadora de la clienta, el entorno de produccion local corre **sin Docker**. No asumir Docker para diagnosticar actualizaciones, reinicios, backend, frontend ni despliegues en cliente. Para prod cliente, razonar sobre procesos/servicios locales, entorno Python/Node local y scripts PowerShell de actualizacion.
 - A partir de ahora, los cambios incrementales de DB deben implementarse con `SQL applies` versionados en `api/sql/applies/*.sql` (archivo nuevo por cambio, nunca editar uno ya aplicado).
 - El sistema debe auto-aplicar esos scripts al iniciar/actualizar mediante `python manage.py apply_sql_patches`, con registro en `retail_db_applies` (script_name + sha256 + applied_at).
 - `deploy/retailhub_update_manager.ps1` en modo `apply-on-start` debe intentar `migrate + apply_sql_patches` incluso sin `git pending`, para recuperar applies no ejecutados en instalaciones cliente.

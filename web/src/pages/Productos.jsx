@@ -26,6 +26,7 @@ import { can, PERMISSION_CODES } from '../lib/permissions';
 import { attrCode, normalizeValueError } from '../lib/variantAttributes';
 import InfoHint from '../components/InfoHint';
 import { VariantAttributeRows } from '../components/VariantAttributeRows';
+import ProductAddAttribute from '../components/ProductAddAttribute';
 import VariantBatchCreator from '../components/VariantBatchCreator';
 
 function errMsg(error) {
@@ -1708,6 +1709,14 @@ export default function ProductosPage() {
                   </button>
                   <button type="button" className="px-3 py-2 rounded border" onClick={closeProductEditor}>Cancelar</button>
                 </div>
+
+                <ProductAddAttribute
+                  product={editProductForm}
+                  attributes={atributos}
+                  attributeValuesByCode={attrValuesByCode}
+                  disabled={saving}
+                  onDone={loadAll}
+                />
               </div>
             ) : null}
           </div>

@@ -31,6 +31,17 @@ Applies SQL incrementales (auto)
 - Estado guardado en tabla `retail_db_applies` (script + hash + fecha).
 - Si un parche ya aplicado cambia de contenido, el proceso falla para evitar inconsistencias.
 
+Tareas post-actualizacion (auto)
+- Tabla `retail_post_update_tasks`: tareas de una sola vez que corren en la instalacion del cliente
+  despues de una actualizacion (reparaciones de datos, republicaciones en Tienda Nube).
+- Se siembran desde un apply SQL y las ejecuta `service/post_update_tasks.py`.
+- Disparadores: el frontend al primer ingreso despues de actualizar, y
+  `python manage.py run_post_update_tasks` desde `deploy/retailhub_update_manager.ps1`.
+- El runner nunca corta el arranque: si una tarea falla queda registrada y se reintenta
+  (hasta `max_attempts`).
+- Interruptor de emergencia: `RETAILHUB_POST_UPDATE_TASKS_ENABLED=0`.
+- El resultado se muestra en el aviso de novedades de la app.
+
 Integraciones externas (estado)
 - ARCA WSAA/WSFEv1: disponible segun configuracion fiscal/certificados.
 - Tienda Nube API + webhooks: disponible segun credenciales, OAuth y URL HTTPS publica.

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  getRetailOnlineAuditCatalogo,
   getRetailOnlineFailedJobsSummary,
   postRetailOnlineImportCatalogo,
   postRetailOnlineJobsProcess,
@@ -50,9 +51,11 @@ export default function OnlinePage() {
       import_catalogo: 0,
       sync_catalogo: 0,
       sync_stock: 0,
+      sync_variants: 0,
     },
     items: [],
   });
+  const [mixedProducts, setMixedProducts] = useState([]);
   const actionMenuRef = useRef(null);
 
   async function loadFailedSummary() {
@@ -66,6 +69,7 @@ export default function OnlinePage() {
           import_catalogo: Number(row?.by_type?.import_catalogo || 0),
           sync_catalogo: Number(row?.by_type?.sync_catalogo || 0),
           sync_stock: Number(row?.by_type?.sync_stock || 0),
+          sync_variants: Number(row?.by_type?.sync_variants || 0),
         },
         items: Array.isArray(row?.items) ? row.items : [],
       });
@@ -76,8 +80,20 @@ export default function OnlinePage() {
     }
   }
 
+  // Variantes que no se pueden publicar porque no comparten atributos con el resto
+  // del producto. Se calcula en el momento, asi que siempre refleja el estado real.
+  async function loadMixedProducts() {
+    try {
+      const row = await getRetailOnlineAuditCatalogo({ limit: 200 });
+      setMixedProducts(Array.isArray(row?.productos_atributos_mezclados) ? row.productos_atributos_mezclados : []);
+    } catch {
+      setMixedProducts([]);
+    }
+  }
+
   useEffect(() => {
     loadFailedSummary();
+    loadMixedProducts();
   }, []);
 
   useEffect(() => {
@@ -255,9 +271,36 @@ export default function OnlinePage() {
         </div>
       </div>
 
+      {mixedProducts.length ? (
+        <div className="card space-y-2 border-amber-300 bg-amber-50/60">
+          <h2 className="text-lg font-semibold text-amber-950">Variantes que no se estan publicando</h2>
+          <p className="text-sm leading-6 text-amber-900">
+            Estos productos tienen variantes con atributos incompletos. El resto del producto se publica igual; para que
+            estas tambien salgan a la web hay que completarles el atributo que falta desde{' '}
+            <Link to="/productos" className="font-semibold underline">Productos y variantes</Link>.
+          </p>
+          <ul className="space-y-2 text-sm text-neutral-800">
+            {mixedProducts.map((item) => (
+              <li key={item.product_id} className="rounded-lg border border-amber-200 bg-white p-2">
+                <p className="font-semibold">{item.producto}</p>
+                <p className="text-xs text-neutral-600">Se publica con: {item.atributos_publicados || 'sin atributos'}</p>
+                <ul className="mt-1 space-y-1 text-xs text-neutral-700">
+                  {(item.variantes_sin_publicar || []).map((variante) => (
+                    <li key={variante.variant_id}>
+                      {variante.sku || `Variante ${variante.variant_id}`}
+                      {variante.faltan?.length ? ` - le falta: ${variante.faltan.join(', ')}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <div className="card grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Limite de productos a procesar</label>
+          <label className="block text-xs text-gray-500 mb-1">Cantidad de variantes por lote</label>
           <input className="input" type="number" min="1" max="2000" value={limit} onChange={(e) => setLimit(e.target.value)} />
         </div>
         <button type="button" className="btn" onClick={runCatalogImport} disabled={loading}>
@@ -293,6 +336,9 @@ export default function OnlinePage() {
           </span>
           <span className="inline-flex rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-neutral-700">
             Stock: {Number(failedSummary?.by_type?.sync_stock || 0)}
+          </span>
+          <span className="inline-flex rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-neutral-700">
+            Variantes puntuales: {Number(failedSummary?.by_type?.sync_variants || 0)}
           </span>
           {summaryLoading ? <span className="text-gray-500">Actualizando estado...</span> : null}
         </div>

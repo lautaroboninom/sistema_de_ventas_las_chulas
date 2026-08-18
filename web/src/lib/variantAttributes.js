@@ -11,6 +11,33 @@ export function optionKey(value) {
     .toLowerCase();
 }
 
+function titleCase(value) {
+  const clean = String(value || '').trim();
+  if (!clean) return '';
+  return clean
+    .split(/\s+/)
+    .map((word) => (word.length > 3 ? word[0].toUpperCase() + word.slice(1) : word.toUpperCase()))
+    .join(' ');
+}
+
+// El backend guarda option_signature como "talle=m,color=negro".
+// Devuelve [{ label: 'Talle', value: 'M' }, { label: 'Color', value: 'Negro' }]
+// para poder mostrarlo como chips en lugar del string crudo.
+export function parseOptionSignature(signature) {
+  const raw = String(signature || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((piece) => String(piece || '').trim())
+    .filter(Boolean)
+    .map((piece) => {
+      if (!piece.includes('=')) return { label: '', value: titleCase(piece) };
+      const [left, right] = piece.split('=', 2);
+      return { label: titleCase(left), value: titleCase(right) };
+    })
+    .filter((row) => row.label || row.value);
+}
+
 export function valuesForAttr(valuesByCode, code) {
   return valuesByCode?.[attrCode(code)] || [];
 }

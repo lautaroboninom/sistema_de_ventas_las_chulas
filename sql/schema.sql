@@ -1829,6 +1829,35 @@ CREATE TRIGGER trg_integration_jobs_updated_at
 BEFORE UPDATE ON integration_jobs
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- Tareas que se ejecutan una sola vez despues de aplicar una actualizacion.
+CREATE TABLE IF NOT EXISTS retail_post_update_tasks (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code          TEXT NOT NULL UNIQUE,
+  title         TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'pending',
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  max_attempts  INTEGER NOT NULL DEFAULT 3,
+  payload       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  result        JSONB,
+  last_error    TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  started_at    TIMESTAMPTZ,
+  finished_at   TIMESTAMPTZ,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_retail_post_update_tasks_status
+    CHECK (status IN ('pending', 'running', 'done', 'failed', 'skipped')),
+  CONSTRAINT chk_retail_post_update_tasks_attempts
+    CHECK (attempts >= 0 AND max_attempts > 0)
+);
+
+DROP TRIGGER IF EXISTS trg_retail_post_update_tasks_updated_at ON retail_post_update_tasks;
+CREATE TRIGGER trg_retail_post_update_tasks_updated_at
+BEFORE UPDATE ON retail_post_update_tasks
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX IF NOT EXISTS idx_retail_post_update_tasks_status
+  ON retail_post_update_tasks(status);
+
 -- =============================
 -- Indexes
 -- =============================

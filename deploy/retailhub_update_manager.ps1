@@ -290,6 +290,14 @@ function Run-BackendMigrations {
     if ($LASTEXITCODE -ne 0) {
       throw 'No se pudieron ejecutar apply SQL pendientes (manage.py apply_sql_patches).'
     }
+
+    # Tareas post-actualizacion: NO deben interrumpir la actualizacion nunca.
+    # Si fallan, quedan registradas en la base y se reintentan al proximo inicio.
+    try {
+      & $pythonExe 'manage.py' run_post_update_tasks *> $null
+    } catch {
+      Write-Verbose "Tareas post-actualizacion omitidas: $($_.Exception.Message)"
+    }
   } finally {
     Pop-Location
   }

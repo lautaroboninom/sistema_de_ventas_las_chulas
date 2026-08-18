@@ -14,6 +14,8 @@ from .system_update_views import (
     SystemUpdateStatusView,
     SystemUpdateCheckView,
     SystemUpdateRestartView,
+    SystemPostUpdateStatusView,
+    SystemPostUpdateRunView,
 )
 
 from .usuarios_views import (
@@ -31,6 +33,7 @@ from .retail_views import (
     RetailProductosView,
     RetailProductoDetailView,
     RetailProductoImagenView,
+    RetailProductoAgregarAtributoView,
     RetailAtributosView,
     RetailAtributoValoresView,
     RetailAtributoDetailView,
@@ -125,6 +128,8 @@ __all__ = [
     'SystemUpdateStatusView',
     'SystemUpdateCheckView',
     'SystemUpdateRestartView',
+    'SystemPostUpdateStatusView',
+    'SystemPostUpdateRunView',
     'UsuariosView',
     'UsuarioActivoView',
     'UsuarioResetPassView',
@@ -136,6 +141,7 @@ __all__ = [
     'RetailProductosView',
     'RetailProductoDetailView',
     'RetailProductoImagenView',
+    'RetailProductoAgregarAtributoView',
     'RetailAtributosView',
     'RetailAtributoValoresView',
     'RetailAtributoDetailView',

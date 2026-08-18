@@ -10,12 +10,10 @@ import {
   getRetailPosDrafts,
   getRetailVarianteByScan,
   getRetailVariantes,
-  getRetailVentas,
   patchRetailPosDraft,
   postRetailCajaApertura,
   postRetailCajaCierre,
   postRetailCajaCierreAsistido,
-  postRetailOperacionIncidenciaResolver,
   postRetailPosDraft,
   postRetailPosDraftConfirm,
   postRetailVentaConfirmar,
@@ -23,6 +21,7 @@ import {
 } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { can, PERMISSION_CODES } from '../lib/permissions';
+import { parseOptionSignature } from '../lib/variantAttributes';
 
 const PAYMENT_OPTIONS = [
   { value: 'cash', label: 'Efectivo' },
@@ -179,8 +178,39 @@ function normalizeItemPayload(raw) {
   };
 }
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+function Chevron({ open }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-neutral-200 text-neutral-500 transition-transform ${
+        open ? 'rotate-90' : ''
+      }`}
+    >
+      <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6 3.5L11 8L6 12.5" />
+      </svg>
+    </span>
+  );
+}
+
+function Accordion({ title, open, onToggle, badge = null, children }) {
+  return (
+    <div className="panel">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 text-left"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-2">
+          <span className="h2">{title}</span>
+          {badge}
+        </span>
+        <Chevron open={open} />
+      </button>
+      {open ? <div className="mt-3 space-y-3">{children}</div> : null}
+    </div>
+  );
 }
 
 export default function PosPage() {
@@ -205,6 +235,7 @@ export default function PosPage() {
 
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [paymentAccountCode, setPaymentAccountCode] = useState('cash');
+  const [cashReceived, setCashReceived] = useState('');
   const [splitPaymentsEnabled, setSplitPaymentsEnabled] = useState(false);
   const [splitPayments, setSplitPayments] = useState([
     { method: 'cash', account_code: 'cash', amount_ars: '', store_credit_id: '', modifier_pct: '' },
@@ -239,12 +270,15 @@ export default function PosPage() {
   const [selectedDraftId, setSelectedDraftId] = useState(null);
   const [draftName, setDraftName] = useState('');
   const [draftsLoading, setDraftsLoading] = useState(false);
-  const [pendingRows, setPendingRows] = useState([]);
   const [pendingSummary, setPendingSummary] = useState(null);
-  const [pendingLoading, setPendingLoading] = useState(false);
 
-  const [recentSales, setRecentSales] = useState([]);
-  const [recentLoading, setRecentLoading] = useState(false);
+  const [manualSearchOpen, setManualSearchOpen] = useState(false);
+  const [customerPanelOpen, setCustomerPanelOpen] = useState(false);
+  const [draftsPanelOpen, setDraftsPanelOpen] = useState(false);
+  const [cajaPanelOpen, setCajaPanelOpen] = useState(true);
+  const [totalsDetailOpen, setTotalsDetailOpen] = useState(false);
+  const cajaWasOpenRef = useRef(false);
+  const [flashVariantId, setFlashVariantId] = useState(null);
 
   const [busy, setBusy] = useState(false);
   const [quoteBusy, setQuoteBusy] = useState(false);
@@ -255,6 +289,9 @@ export default function PosPage() {
     () => items.reduce((acc, it) => acc + Number(it.quantity || 0), 0),
     [items]
   );
+
+  const totalDue = Number(quote?.total_ars || 0);
+  const cashChange = Math.max(0, Number(cashReceived || 0) - totalDue);
 
   const filteredAccounts = useMemo(() => {
     const rows = normalizeAccounts(accounts);
@@ -350,6 +387,16 @@ export default function PosPage() {
     setMsg('');
   }
 
+  function toggleManualSearch() {
+    setManualSearchOpen((prev) => {
+      if (prev) {
+        setManualQuery('');
+        setManualRows([]);
+      }
+      return !prev;
+    });
+  }
+
   function addOrIncreaseItem(raw) {
     const row = normalizeItemPayload(raw);
     if (!row) return;
@@ -362,6 +409,7 @@ export default function PosPage() {
       next[idx] = { ...next[idx], quantity: Number(next[idx].quantity || 0) + 1 };
       return next;
     });
+    setFlashVariantId(row.variant_id);
     setQuote(null);
     setTicketLookup(null);
   }
@@ -372,6 +420,7 @@ export default function PosPage() {
     setTicketLookup(null);
     setCouponCodes('');
     setPriceOverrideReason('');
+    setCashReceived('');
   }
 
   function changeQty(variantId, qty) {
@@ -749,59 +798,14 @@ export default function PosPage() {
     }
   }
 
-  async function loadRecentSales() {
-    setRecentLoading(true);
-    try {
-      const day = todayIso();
-      const resp = await getRetailVentas({
-        desde: day,
-        hasta: day,
-        channel: 'local',
-        limit: 8,
-        offset: 0,
-      });
-      setRecentSales(Array.isArray(resp?.rows) ? resp.rows : []);
-    } catch {
-      setRecentSales([]);
-    } finally {
-      setRecentLoading(false);
-    }
-  }
-
   async function loadOperationalPending() {
-    setPendingLoading(true);
     try {
       const resp = await getRetailOperacionPendientes({ limit: 30 });
       const allRows = Array.isArray(resp?.rows) ? resp.rows : [];
       const posRows = allRows.filter((row) => String(row?.source || '').toLowerCase() !== 'online');
-      setPendingRows(posRows);
       setPendingSummary(summarizePendingRows(posRows));
     } catch {
-      setPendingRows([]);
       setPendingSummary(summarizePendingRows([]));
-    } finally {
-      setPendingLoading(false);
-    }
-  }
-
-  async function resolveOperationalIncident(id) {
-    if (!id) return;
-    const incidentId = String(id).startsWith('incident:') ? String(id).split(':')[1] : String(id);
-    const parsed = Number(incidentId);
-    if (!Number.isFinite(parsed) || parsed <= 0) return;
-    resetMessages();
-    setBusy(true);
-    try {
-      await postRetailOperacionIncidenciaResolver(parsed, {
-        resolution_note: 'Resuelto desde POS',
-        status: 'resolved',
-      });
-      setMsg('Incidencia resuelta');
-      await loadOperationalPending();
-    } catch (error) {
-      setErr(errMsg(error));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -810,7 +814,6 @@ export default function PosPage() {
     loadAccounts();
     loadArcaAccounts();
     loadDrafts();
-    loadRecentSales();
     loadOperationalPending();
   }, []);
 
@@ -821,6 +824,27 @@ export default function PosPage() {
   useEffect(() => {
     window.localStorage.setItem('retailhub_pos_quick_mode', quickMode ? '1' : '0');
   }, [quickMode]);
+
+  // Los avisos de exito se autodescartan; los errores quedan hasta que la cajera los cierre.
+  useEffect(() => {
+    if (!msg) return undefined;
+    const timer = window.setTimeout(() => setMsg(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [msg]);
+
+  // Caja recien abierta: colapsa el panel. Caja cerrada: lo despliega.
+  useEffect(() => {
+    const isOpenNow = Boolean(cashSession);
+    if (isOpenNow === cajaWasOpenRef.current) return;
+    cajaWasOpenRef.current = isOpenNow;
+    setCajaPanelOpen(!isOpenNow);
+  }, [cashSession]);
+
+  useEffect(() => {
+    if (!flashVariantId) return undefined;
+    const timer = window.setTimeout(() => setFlashVariantId(null), 700);
+    return () => window.clearTimeout(timer);
+  }, [flashVariantId]);
 
   useEffect(() => {
     if (quickMode) {
@@ -1207,6 +1231,7 @@ export default function PosPage() {
       setStoreCredits([]);
       setSelectedStoreCreditId('');
       setNotes('');
+      setCashReceived('');
       setInvoiceOverrideMode('default');
       setInvoiceOverrideArcaAccountId('');
       setSplitPaymentsEnabled(false);
@@ -1220,7 +1245,7 @@ export default function PosPage() {
         },
       ]);
       setMsg('Venta confirmada');
-      await Promise.all([loadCashSession(), loadDrafts(), loadRecentSales(), loadOperationalPending()]);
+      await Promise.all([loadCashSession(), loadDrafts(), loadOperationalPending()]);
     } catch (error) {
       setErr(errMsg(error));
     } finally {
@@ -1395,68 +1420,82 @@ export default function PosPage() {
     setSplitPayments((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  function selectPaymentMethod(next) {
+    setPaymentMethod(next);
+    setPaymentAccountCode(defaultAccountCode(next, accounts));
+    if (next !== 'store_credit') {
+      setSelectedStoreCreditId('');
+    }
+    setQuote(null);
+  }
+
   return (
-    <div className="space-y-4 pb-6 xl:pb-32">
-      <div className="card">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h1 className="h1">POS operativo</h1>
-            <p className="text-sm text-gray-600">
-              Consola de mostrador con escaneo rapido, caja diaria y borradores en espera.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2 text-xs">
+    <div className="space-y-4 pb-6 xl:flex xl:min-h-[calc(100vh_-_7rem)] xl:flex-col xl:pb-44">
+      <div className="pointer-events-none fixed right-4 top-[4.5rem] z-40 flex w-[min(22rem,calc(100vw_-_2rem))] flex-col gap-2">
+        {err ? (
+          <div className="pointer-events-auto flex animate-lc-toast-in items-start gap-2 rounded-2xl border border-rose-200 bg-white/90 p-3 text-sm text-rose-800 shadow-lift backdrop-blur">
+            <span className="flex-1">{err}</span>
             <button
               type="button"
-              className={`rounded-full border px-2.5 py-1 font-semibold ${
-                quickMode
-                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
-                  : 'border-neutral-300 bg-white text-neutral-700'
-              }`}
+              className="shrink-0 rounded px-1 text-rose-400 transition hover:text-rose-700"
+              onClick={() => setErr('')}
+              aria-label="Cerrar aviso de error"
+            >
+              &times;
+            </button>
+          </div>
+        ) : null}
+        {msg ? (
+          <div className="pointer-events-auto animate-lc-toast-in rounded-2xl border border-emerald-200 bg-white/90 p-3 text-sm font-medium text-emerald-800 shadow-lift backdrop-blur">
+            {msg}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="panel">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="font-display text-xl font-bold tracking-tight">POS</h1>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              className={`chip transition ${quickMode ? 'chip-active' : 'hover:border-neutral-300'}`}
               onClick={() => setQuickMode((prev) => !prev)}
             >
-              Venta rapida: {quickMode ? 'ON' : 'OFF'}
+              Venta rapida {quickMode ? 'ON' : 'OFF'}
             </button>
             <span
-              className={`rounded-full border px-2.5 py-1 font-semibold ${
+              className={`chip ${
                 cashSession
-                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                  : 'border-rose-300 bg-rose-50 text-rose-700'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-rose-200 bg-rose-50 text-rose-700'
               }`}
             >
-              Caja: {cashSession ? `abierta #${cashSession.id}` : 'sin apertura'}
+              Caja {cashSession ? `abierta #${cashSession.id}` : 'sin apertura'}
             </span>
-            <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2.5 py-1 font-semibold text-neutral-700">
-              Items: {totalQty}
-            </span>
-            <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2.5 py-1 font-semibold text-neutral-700">
-              Draft: {selectedDraft ? selectedDraft.draft_number : 'ninguno'}
-            </span>
-            <span className="rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 font-semibold text-amber-700">
-              Pendientes: {pendingSummary?.total || 0}
-              {pendingSummary?.critical ? ` (${pendingSummary.critical} crit)` : ''}
-            </span>
+            <span className="chip num">Items {totalQty}</span>
+            {selectedDraft ? <span className="chip">Draft {selectedDraft.draft_number}</span> : null}
+            {pendingSummary?.total ? (
+              <span className="chip border-amber-200 bg-amber-50 text-amber-700">
+                Pendientes {pendingSummary.total}
+                {pendingSummary.critical ? ` (${pendingSummary.critical} crit)` : ''}
+              </span>
+            ) : null}
           </div>
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-neutral-600 md:grid-cols-5">
-          <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">
-            Modo rapido {quickMode ? 'activo' : 'inactivo'}
-          </span>
-          <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">F2 foco escaner</span>
-          <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">F8 guardar draft</span>
-          <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">F9 confirmar</span>
-          <span className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1">Ctrl+Backspace limpia carrito</span>
-        </div>
+        <p className="mt-2 text-xs text-neutral-400">
+          F2 foco scanner &middot; F8 guardar borrador &middot; F9 confirmar &middot; Ctrl+Backspace limpia carrito
+        </p>
       </div>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)]">
-        <div className="space-y-4">
-          <form className="card space-y-3" onSubmit={handleScanSubmit}>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+
+      <div className="grid grid-cols-1 gap-4 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="flex flex-col gap-4">
+          <form className="panel space-y-2" onSubmit={handleScanSubmit}>
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
               <div className="md:col-span-3">
                 <label className="label">Escanear barcode interno o SKU</label>
                 <input
                   ref={scanRef}
-                  className={`input ${quickMode ? 'ring-2 ring-indigo-200' : ''}`}
+                  className={`input ${quickMode ? 'ring-2 ring-brand-accent/25' : ''}`}
                   value={scan}
                   onChange={(e) => setScan(e.target.value)}
                   placeholder="Ej: CHU-001-NEG-M"
@@ -1469,330 +1508,237 @@ export default function PosPage() {
                 Foco scanner
               </button>
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-              <div className="md:col-span-3">
-                <label className="label">Busqueda manual de variantes</label>
-                <input
-                  className="input"
-                  value={manualQuery}
-                  onChange={(e) => setManualQuery(e.target.value)}
-                  placeholder="Buscar por SKU, barcode o producto"
-                />
-              </div>
-              <button type="button" className="btn-secondary md:mt-[1.36rem]" onClick={() => { setManualQuery(''); setManualRows([]); }}>
-                Limpiar busqueda
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-neutral-400">
+                {manualSearchOpen ? 'Buscando en el catalogo' : 'Sin el codigo a mano?'}
+              </span>
+              <button type="button" className="btn-ghost" onClick={toggleManualSearch}>
+                {manualSearchOpen ? 'Ocultar busqueda' : 'Buscar manualmente'}
               </button>
             </div>
-            {manualQuery.trim().length >= 2 ? (
-              <div className="rounded-xl border border-neutral-200">
-                {manualLoading ? (
-                  <p className="px-3 py-2 text-sm text-gray-500">Buscando variantes...</p>
-                ) : manualRows.length ? (
-                  <div className="max-h-72 overflow-auto">
-                    <table className="min-w-full text-sm">
-                      <thead>
-                        <tr className="border-b text-left">
-                          <th className="px-3 py-2">SKU</th>
-                          <th className="px-3 py-2">Producto</th>
-                          <th className="px-3 py-2">Precio</th>
-                          <th className="px-3 py-2" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {manualRows.map((row) => (
-                          <tr key={row.id} className="border-b last:border-b-0">
-                            <td className="px-3 py-2">{row.sku || '-'}</td>
-                            <td className="px-3 py-2">
-                              {row.producto}
-                              <div className="text-xs text-gray-500">{row.option_signature || '-'}</div>
-                            </td>
-                            <td className="px-3 py-2">{money(row.price_store_ars)}</td>
-                            <td className="px-3 py-2 text-right">
-                              <button type="button" className="btn-secondary !px-2.5 !py-1.5 !text-xs" onClick={() => { addOrIncreaseItem(row); setManualQuery(''); setManualRows([]); }}>
-                                Agregar
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+            {manualSearchOpen ? (
+              <>
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                  <div className="md:col-span-3">
+                    <input
+                      className="input"
+                      value={manualQuery}
+                      onChange={(e) => setManualQuery(e.target.value)}
+                      placeholder="Buscar por SKU, barcode o producto"
+                      autoFocus
+                    />
                   </div>
-                ) : (
-                  <p className="px-3 py-2 text-sm text-gray-500">Sin resultados para la busqueda.</p>
-                )}
-              </div>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setManualQuery('');
+                      setManualRows([]);
+                    }}
+                  >
+                    Limpiar
+                  </button>
+                </div>
+                {manualQuery.trim().length >= 2 ? (
+                  <div className="rounded-xl border border-neutral-200">
+                    {manualLoading ? (
+                      <p className="px-3 py-2 text-sm text-neutral-500">Buscando variantes...</p>
+                    ) : manualRows.length ? (
+                      <div className="max-h-72 divide-y divide-neutral-100 overflow-auto">
+                        {manualRows.map((row) => {
+                          const attrs = parseOptionSignature(row.option_signature);
+                          return (
+                            <div key={row.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold">{row.producto}</p>
+                                <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                                  {attrs.map((attr, idx) => (
+                                    <span key={`manual-${row.id}-${idx}`} className="chip chip-active px-2 text-[11px]">
+                                      {attr.label ? <span className="opacity-60">{attr.label}</span> : null}
+                                      {attr.value}
+                                    </span>
+                                  ))}
+                                  <span className="text-[11px] text-neutral-400">{row.sku || '-'}</span>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2">
+                                <span className="num text-sm font-semibold">{money(row.price_store_ars)}</span>
+                                <button
+                                  type="button"
+                                  className="btn-secondary btn-sm"
+                                  onClick={() => {
+                                    addOrIncreaseItem(row);
+                                    setManualQuery('');
+                                    setManualRows([]);
+                                  }}
+                                >
+                                  Agregar
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="px-3 py-2 text-sm text-neutral-500">Sin resultados para la busqueda.</p>
+                    )}
+                  </div>
+                ) : null}
+              </>
             ) : null}
           </form>
+
           {ticketLookup?.sale ? (
-            <div className="card space-y-2">
-              <h2 className="text-lg font-semibold">Ticket escaneado</h2>
+            <div className="panel space-y-2">
+              <h2 className="h2">Ticket escaneado</h2>
               <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-4">
                 <div>Ticket: <strong>{ticketLookup.sale.sale_number || `#${ticketLookup.sale.id}`}</strong></div>
                 <div>Fecha: <strong>{String(ticketLookup.sale.created_at || '').slice(0, 16).replace('T', ' ')}</strong></div>
-                <div>Total: <strong>{money(ticketLookup.sale.total_ars)}</strong></div>
+                <div>Total: <strong className="num">{money(ticketLookup.sale.total_ars)}</strong></div>
                 <div>Estado: <strong>{ticketLookup.sale.status}</strong></div>
               </div>
             </div>
           ) : null}
-          <div className="card space-y-3">
+
+          <div className="panel flex min-h-[16rem] flex-col overflow-hidden md:min-h-[20rem] xl:min-h-[24rem] xl:flex-1">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold">Carrito ({totalQty})</h2>
-              <div className="flex gap-2">
-                <button type="button" className="btn-secondary !px-3 !py-2" onClick={resetDraftContext}>Soltar draft</button>
-                <button type="button" className="btn-secondary !px-3 !py-2" onClick={clearCart}>Limpiar</button>
+              <h2 className="h2">
+                Carrito <span className="num font-normal text-neutral-400">({totalQty})</span>
+              </h2>
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={resetDraftContext}
+                  disabled={!selectedDraftId}
+                >
+                  Soltar draft
+                </button>
+                <button type="button" className="btn-ghost" onClick={clearCart} disabled={!items.length}>
+                  Limpiar
+                </button>
               </div>
             </div>
+
             {!items.length ? (
-              <p className="text-sm text-gray-500">No hay items en la venta.</p>
-            ) : (
-              <div className="overflow-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="py-2 pr-3">SKU</th>
-                      <th className="py-2 pr-3">Producto</th>
-                      <th className="py-2 pr-3">Precio lista</th>
-                      {canOverridePrice ? <th className="py-2 pr-3">Override</th> : null}
-                      <th className="py-2 pr-3">Cantidad</th>
-                      <th className="py-2 pr-3">Linea</th>
-                      <th className="py-2 pr-3" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((it) => {
-                      const qLine = quoteByVariant.get(Number(it.variant_id));
-                      return (
-                        <tr key={it.variant_id} className="border-b last:border-b-0">
-                          <td className="py-2 pr-3">
-                            {it.sku || '-'}
-                            <div className="text-xs text-gray-500">{it.barcode_internal || '-'}</div>
-                          </td>
-                          <td className="py-2 pr-3">
-                            {it.producto}
-                            <div className="text-xs text-gray-500">{it.firma || '-'}</div>
-                          </td>
-                          <td className="py-2 pr-3">{money(it.precio_local)}</td>
-                          {canOverridePrice ? (
-                            <td className="py-2 pr-3">
-                              <input className="input w-28" type="number" min="0" step="0.01" value={it.unit_price_override_ars || ''} onChange={(e) => changeOverride(it.variant_id, e.target.value)} />
-                            </td>
-                          ) : null}
-                          <td className="py-2 pr-3">
-                            <div className="flex items-center gap-1">
-                              <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => stepQty(it.variant_id, -1)}>-</button>
-                              <input className="input w-20" type="number" min="1" value={it.quantity} onChange={(e) => changeQty(it.variant_id, e.target.value)} />
-                              <button type="button" className="rounded border px-2 py-1 text-xs" onClick={() => stepQty(it.variant_id, 1)}>+</button>
-                            </div>
-                          </td>
-                          <td className="py-2 pr-3">{money(qLine?.line_total_ars || 0)}</td>
-                          <td className="py-2 pr-3 text-right">
-                            <button type="button" className="rounded border border-red-300 px-2.5 py-1.5 text-xs text-red-700" onClick={() => removeItem(it.variant_id)}>Quitar</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+                <span
+                  aria-hidden="true"
+                  className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-brand-accent/10 text-brand-accent"
+                >
+                  <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                    <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2" />
+                    <path d="M7 8v8M10.5 8v8M14 8v8M17 8v8" />
+                  </svg>
+                </span>
+                <p className="font-display text-sm font-semibold text-neutral-600">
+                  Escanea una prenda para empezar
+                </p>
+                <p className="text-xs text-neutral-400">
+                  O usa la busqueda manual si no tenes el codigo a mano.
+                </p>
               </div>
+            ) : (
+              <ul className="mt-2 flex-1 divide-y divide-neutral-100 overflow-y-auto">
+                {items.map((it) => {
+                  const qLine = quoteByVariant.get(Number(it.variant_id));
+                  const attrs = parseOptionSignature(it.firma);
+                  return (
+                    <li
+                      key={it.variant_id}
+                      className={`rounded-xl px-1 py-2.5 ${
+                        Number(flashVariantId) === Number(it.variant_id) ? 'animate-lc-pop' : ''
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate font-display text-sm font-semibold">{it.producto}</p>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            {attrs.map((attr, idx) => (
+                              <span key={`${it.variant_id}-attr-${idx}`} className="chip chip-active px-2 text-[11px]">
+                                {attr.label ? <span className="opacity-60">{attr.label}</span> : null}
+                                {attr.value}
+                              </span>
+                            ))}
+                            <span className="text-[11px] text-neutral-400">
+                              {it.sku || it.barcode_internal || '-'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="num font-display text-sm font-semibold">
+                            {money(qLine?.line_total_ars || 0)}
+                          </p>
+                          <p className="num text-[11px] text-neutral-400">{money(it.precio_local)} c/u</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-neutral-200 text-neutral-600 transition hover:border-brand-accent hover:text-brand-accent"
+                            onClick={() => stepQty(it.variant_id, -1)}
+                            aria-label="Restar una unidad"
+                          >
+                            &minus;
+                          </button>
+                          <input
+                            className="input num w-14 px-1 py-1 text-center text-sm"
+                            type="number"
+                            min="1"
+                            value={it.quantity}
+                            onChange={(e) => changeQty(it.variant_id, e.target.value)}
+                            aria-label="Cantidad"
+                          />
+                          <button
+                            type="button"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-neutral-200 text-neutral-600 transition hover:border-brand-accent hover:text-brand-accent"
+                            onClick={() => stepQty(it.variant_id, 1)}
+                            aria-label="Sumar una unidad"
+                          >
+                            +
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {canOverridePrice ? (
+                            <input
+                              className="input num w-28 px-2 py-1 text-xs"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={it.unit_price_override_ars || ''}
+                              onChange={(e) => changeOverride(it.variant_id, e.target.value)}
+                              placeholder="Precio manual"
+                            />
+                          ) : null}
+                          <button
+                            type="button"
+                            className="rounded-lg px-2 py-1 text-xs font-semibold text-rose-500 transition hover:bg-rose-50 hover:text-rose-700"
+                            onClick={() => removeItem(it.variant_id)}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </div>
+
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div className="card space-y-3">
-              <h2 className="text-lg font-semibold">Cobro</h2>
-              <div>
-                <label className="label">Medio de pago base (pricing)</label>
-                <select
-                  className="input"
-                  value={paymentMethod}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setPaymentMethod(next);
-                    setPaymentAccountCode(defaultAccountCode(next, accounts));
-                    if (next !== 'store_credit') {
-                      setSelectedStoreCreditId('');
-                    }
-                    setQuote(null);
-                  }}
-                >
-                  {PAYMENT_OPTIONS.map((op) => (
-                    <option key={op.value} value={op.value}>
-                      {op.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label">Cuenta / caja base</label>
-                <select
-                  className="input"
-                  value={paymentAccountCode}
-                  onChange={(e) => setPaymentAccountCode(e.target.value)}
-                >
-                  {filteredAccounts.map((op) => (
-                    <option key={op.code} value={op.code}>
-                      {op.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {paymentMethod === 'store_credit' ? (
-                <div className="space-y-2 rounded-lg border border-neutral-200 p-2">
-                  <div className="flex flex-wrap items-end gap-2">
-                    <button
-                      type="button"
-                      className="btn-secondary !py-2"
-                      onClick={loadStoreCreditsByDoc}
-                      disabled={storeCreditsLoading}
-                    >
-                      {storeCreditsLoading ? 'Buscando...' : 'Buscar creditos por DNI/CUIT'}
-                    </button>
-                    <span className="text-xs text-neutral-500">
-                      Doc cliente: <strong>{normalizeDocDigits(customerDoc) || '-'}</strong>
-                    </span>
-                  </div>
-                  <select
-                    className="input"
-                    value={selectedStoreCreditId}
-                    onChange={(e) => setSelectedStoreCreditId(e.target.value)}
-                  >
-                    <option value="">Seleccionar credito tienda</option>
-                    {storeCredits.map((row) => (
-                      <option key={`base-credit-${row.id}`} value={String(row.id)}>
-                        #{row.id} | saldo {money(row.amount_balance_ars)} | {row.customer_name || row.customer_doc || 'cliente'}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : null}
-
-              <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
-                <input
-                  type="checkbox"
-                  checked={splitPaymentsEnabled}
-                  onChange={(e) => setSplitPaymentsEnabled(e.target.checked)}
-                />
-                Pago mixto (split tender)
-              </label>
-
-              {splitPaymentsEnabled ? (
-                <div className="space-y-2 rounded-lg border border-neutral-200 p-2">
-                  {splitPayments.map((row, idx) => {
-                    const scopedAccounts = accountsByMethod(row.method || paymentMethod);
-                    return (
-                      <div key={`split-${idx}`} className="grid grid-cols-1 gap-2 md:grid-cols-8">
-                        <select
-                          className="input md:col-span-2"
-                          value={row.method}
-                          onChange={(e) =>
-                            changeSplitRow(idx, {
-                              method: e.target.value,
-                              account_code: defaultAccountCode(e.target.value, accounts),
-                              modifier_pct: String(
-                                accountModifierPct(defaultAccountCode(e.target.value, accounts), accounts)
-                              ),
-                            })
-                          }
-                        >
-                          {PAYMENT_OPTIONS.map((op) => (
-                            <option key={op.value} value={op.value}>
-                              {op.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          className="input md:col-span-2"
-                          value={row.account_code}
-                          onChange={(e) =>
-                            changeSplitRow(idx, {
-                              account_code: e.target.value,
-                              modifier_pct: String(accountModifierPct(e.target.value, accounts)),
-                            })
-                          }
-                        >
-                          {scopedAccounts.map((acc) => (
-                            <option key={`${idx}-${acc.code}`} value={acc.code}>
-                              {acc.label}
-                            </option>
-                          ))}
-                        </select>
-                        {row.method === 'store_credit' ? (
-                          <select
-                            className="input md:col-span-2"
-                            value={row.store_credit_id || ''}
-                            onChange={(e) => changeSplitRow(idx, { store_credit_id: e.target.value })}
-                          >
-                            <option value="">Seleccionar credito</option>
-                            {storeCredits.map((credit) => (
-                              <option key={`split-credit-${idx}-${credit.id}`} value={String(credit.id)}>
-                                #{credit.id} | saldo {money(credit.amount_balance_ars)}
-                              </option>
-                            ))}
-                          </select>
-                        ) : null}
-                        <input
-                          className="input"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          placeholder="Monto base"
-                          value={row.amount_ars}
-                          onChange={(e) => changeSplitRow(idx, { amount_ars: e.target.value })}
-                        />
-                        {isAdmin ? (
-                          <input
-                            className="input"
-                            type="number"
-                            step="0.01"
-                            min="-99.99"
-                            placeholder="% ajuste"
-                            value={row.modifier_pct ?? ''}
-                            onChange={(e) => changeSplitRow(idx, { modifier_pct: e.target.value })}
-                          />
-                        ) : null}
-                        <button
-                          type="button"
-                          className="rounded border border-neutral-300 px-2 py-1 text-xs"
-                          onClick={() => removeSplitRow(idx)}
-                          disabled={splitPayments.length <= 1}
-                        >
-                          Quitar
-                        </button>
-                      </div>
-                    );
-                  })}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      className="btn-secondary !py-2"
-                      onClick={loadStoreCreditsByDoc}
-                      disabled={storeCreditsLoading}
-                    >
-                      {storeCreditsLoading ? 'Buscando...' : 'Actualizar creditos por DNI/CUIT'}
-                    </button>
-                    <span className="text-xs text-neutral-500">
-                      Disponibles: <strong>{storeCredits.length}</strong>
-                    </span>
-                  </div>
-                  <button type="button" className="btn-secondary !py-2" onClick={addSplitRow}>
-                    Agregar tramo
-                  </button>
-                  <div className="rounded border border-dashed px-2 py-1 text-xs">
-                    <div>
-                      Suma base tramos: <strong>{money(splitTotals.current)}</strong>
-                    </div>
-                    <div>
-                      Subtotal base: <strong>{money(splitTotals.expected)}</strong>
-                    </div>
-                    <div className={splitTotals.diff === 0 ? 'text-emerald-700' : 'text-rose-700'}>
-                      Diferencia: <strong>{money(splitTotals.diff)}</strong>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="card space-y-3">
-              <h2 className="text-lg font-semibold">Cliente y notas</h2>
+            <Accordion
+              title="Cliente y notas"
+              open={customerPanelOpen}
+              onToggle={() => setCustomerPanelOpen((prev) => !prev)}
+              badge={
+                customerName || customerDoc ? (
+                  <span className="chip chip-active px-2 text-[11px]">{customerName || customerDoc}</span>
+                ) : null
+              }
+            >
               {anyOverride ? (
                 <input
                   className="input"
@@ -1826,10 +1772,14 @@ export default function PosPage() {
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Notas"
               />
-            </div>
+            </Accordion>
 
-            <div className="card space-y-3">
-              <h2 className="text-lg font-semibold">Borradores en espera</h2>
+            <Accordion
+              title="Borradores en espera"
+              open={draftsPanelOpen}
+              onToggle={() => setDraftsPanelOpen((prev) => !prev)}
+              badge={drafts.length ? <span className="chip num px-2 text-[11px]">{drafts.length}</span> : null}
+            >
               <input
                 className="input"
                 value={draftName}
@@ -1837,45 +1787,45 @@ export default function PosPage() {
                 placeholder="Nombre borrador (ej: Cliente en probador)"
               />
               <div className="grid grid-cols-2 gap-2">
-                <button type="button" className="btn-secondary" onClick={handleSaveDraft} disabled={busy || !items.length}>
+                <button type="button" className="btn-secondary btn-sm" onClick={handleSaveDraft} disabled={busy || !items.length}>
                   Guardar nuevo
                 </button>
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className="btn-secondary btn-sm"
                   onClick={handleUpdateDraft}
                   disabled={busy || !items.length || !selectedDraftId}
                 >
                   Actualizar actual
                 </button>
               </div>
-              <button type="button" className="btn-secondary !py-2" onClick={loadDrafts} disabled={draftsLoading}>
+              <button type="button" className="btn-ghost w-full" onClick={loadDrafts} disabled={draftsLoading}>
                 {draftsLoading ? 'Actualizando...' : 'Refrescar borradores'}
               </button>
 
-              <div className="max-h-64 overflow-auto rounded-lg border border-neutral-200">
+              <div className="max-h-64 overflow-auto rounded-xl border border-neutral-200">
                 {!drafts.length ? (
-                  <p className="px-3 py-2 text-sm text-gray-500">No hay borradores abiertos.</p>
+                  <p className="px-3 py-2 text-sm text-neutral-500">No hay borradores abiertos.</p>
                 ) : (
-                  <div className="divide-y">
+                  <div className="divide-y divide-neutral-100">
                     {drafts.map((row) => (
                       <div
                         key={row.id}
                         className={`flex items-center justify-between gap-2 px-3 py-2 ${
-                          Number(row.id) === Number(selectedDraftId) ? 'bg-amber-50' : ''
+                          Number(row.id) === Number(selectedDraftId) ? 'bg-brand-accent/5' : ''
                         }`}
                       >
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold">
                             {row.name || row.draft_number || `#${row.id}`}
                           </p>
-                          <p className="text-xs text-gray-500">
+                          <p className="num text-xs text-neutral-400">
                             {row.item_count || 0} items | {money(row.total_ars)}
                           </p>
                         </div>
                         <button
                           type="button"
-                          className="btn-secondary !px-2.5 !py-1.5 !text-xs"
+                          className="btn-secondary btn-sm"
                           onClick={() => handleLoadDraft(row.id)}
                           disabled={busy}
                         >
@@ -1886,46 +1836,38 @@ export default function PosPage() {
                   </div>
                 )}
               </div>
-            </div>
-
-            <div className="card space-y-2">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold">Ventas recientes (hoy)</h2>
-                <button type="button" className="btn-secondary !px-2.5 !py-1.5 !text-xs" onClick={loadRecentSales}>
-                  Refrescar
-                </button>
-              </div>
-              {recentLoading ? (
-                <p className="text-sm text-gray-500">Cargando ventas...</p>
-              ) : recentSales.length ? (
-                <div className="space-y-1 text-sm">
-                  {recentSales.map((row) => (
-                    <div key={row.id} className="flex items-center justify-between rounded border border-neutral-200 px-2 py-1.5">
-                      <span className="truncate">{row.sale_number || `#${row.id}`}</span>
-                      <strong>{money(row.total_ars)}</strong>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-gray-500">Sin ventas registradas hoy.</p>
-              )}
-            </div>
+            </Accordion>
           </div>
         </div>
+
         <div className="space-y-4">
-          <div className="card space-y-3">
-            <h2 className="text-lg font-semibold">Caja</h2>
-            <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-2 text-sm">
+          <Accordion
+            title="Caja"
+            open={cajaPanelOpen}
+            onToggle={() => setCajaPanelOpen((prev) => !prev)}
+            badge={
+              <span
+                className={`chip px-2 text-[11px] ${
+                  cashSession
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-rose-200 bg-rose-50 text-rose-700'
+                }`}
+              >
+                {cashSession ? 'Abierta' : 'Cerrada'}
+              </span>
+            }
+          >
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50/70 p-2.5 text-sm">
               {cashSession ? (
-                <div>
+                <div className="space-y-0.5">
                   <div>
                     Estado: <strong className="text-emerald-700">Abierta #{cashSession.id}</strong>
                   </div>
                   <div>
-                    Esperado efectivo: <strong>{money(cashSession?.summary?.expected_total_ars)}</strong>
+                    Esperado efectivo: <strong className="num">{money(cashSession?.summary?.expected_total_ars)}</strong>
                   </div>
                   <div>
-                    Neto no-cash: <strong>{money(cashSession?.summary?.net_non_cash_ars)}</strong>
+                    Neto no-cash: <strong className="num">{money(cashSession?.summary?.net_non_cash_ars)}</strong>
                   </div>
                 </div>
               ) : (
@@ -1938,7 +1880,7 @@ export default function PosPage() {
             {!cashSession ? (
               <div className="grid grid-cols-1 gap-2">
                 <input
-                  className="input"
+                  className="input num"
                   type="number"
                   min="0"
                   step="0.01"
@@ -1953,7 +1895,7 @@ export default function PosPage() {
             ) : (
               <div className="grid grid-cols-1 gap-2">
                 <input
-                  className="input"
+                  className="input num"
                   type="number"
                   step="0.01"
                   value={closingCash}
@@ -1962,7 +1904,7 @@ export default function PosPage() {
                 />
                 {closingDiffValue != null ? (
                   <p className={`text-xs ${closingDiffValue === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                    Diferencia estimada: <strong>{money(closingDiffValue)}</strong>
+                    Diferencia estimada: <strong className="num">{money(closingDiffValue)}</strong>
                   </p>
                 ) : null}
                 {canAssistedClose && closingNeedsReason ? (
@@ -2003,8 +1945,8 @@ export default function PosPage() {
               </div>
             )}
 
-            <div className="rounded-lg border border-neutral-200">
-              <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+            <div className="rounded-xl border border-neutral-200">
+              <div className="border-b border-neutral-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
                 Resumen por medio/cuenta
               </div>
               <div className="max-h-48 overflow-auto p-2">
@@ -2016,228 +1958,435 @@ export default function PosPage() {
                           {row.direction === 'out' ? 'Egreso' : 'Ingreso'} |{' '}
                           {row.payment_account_label || row.payment_account_code || '-'}
                         </span>
-                        <strong>{money(row.total_ars)}</strong>
+                        <strong className="num">{money(row.total_ars)}</strong>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">Sin movimientos en esta caja.</p>
+                  <p className="text-sm text-neutral-400">Sin movimientos en esta caja.</p>
                 )}
               </div>
             </div>
-          </div>
+          </Accordion>
 
           <div className="xl:sticky xl:top-20 xl:self-start">
-            <div className="card space-y-3">
-              <h2 className="text-lg font-semibold">Totales y cierre de venta</h2>
-              {quote ? (
-                <div className="space-y-1 text-sm">
-                  <div>
-                    Subtotal: <strong>{money(quote.subtotal_ars)}</strong>
+            <div className="panel space-y-3">
+              <h2 className="h2">Cobro</h2>
+
+              <div>
+                <span className="label">Medio de pago</span>
+                <div role="radiogroup" aria-label="Medio de pago" className="flex flex-wrap gap-1.5">
+                  {PAYMENT_OPTIONS.map((op) => {
+                    const active = paymentMethod === op.value;
+                    return (
+                      <button
+                        key={op.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        className={`chip transition ${active ? 'chip-active' : 'hover:border-neutral-300'}`}
+                        onClick={(event) => {
+                          selectPaymentMethod(op.value);
+                          // Devolvemos el foco al scanner para no romper la captura global de teclado.
+                          event.currentTarget.blur();
+                          focusScanIfIdle();
+                        }}
+                      >
+                        {op.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Cuenta / caja base</label>
+                <select
+                  className="input"
+                  value={paymentAccountCode}
+                  onChange={(e) => setPaymentAccountCode(e.target.value)}
+                >
+                  {filteredAccounts.map((op) => (
+                    <option key={op.code} value={op.code}>
+                      {op.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {paymentMethod === 'store_credit' ? (
+                <div className="space-y-2 rounded-xl border border-neutral-200 p-2">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={loadStoreCreditsByDoc}
+                      disabled={storeCreditsLoading}
+                    >
+                      {storeCreditsLoading ? 'Buscando...' : 'Buscar creditos por DNI/CUIT'}
+                    </button>
+                    <span className="text-xs text-neutral-500">
+                      Doc cliente: <strong>{normalizeDocDigits(customerDoc) || '-'}</strong>
+                    </span>
                   </div>
-                  <div>
-                    Promociones: <strong>{money(quote.promotion_discount_total_ars)}</strong>
+                  <select
+                    className="input"
+                    value={selectedStoreCreditId}
+                    onChange={(e) => setSelectedStoreCreditId(e.target.value)}
+                  >
+                    <option value="">Seleccionar credito tienda</option>
+                    {storeCredits.map((row) => (
+                      <option key={`base-credit-${row.id}`} value={String(row.id)}>
+                        #{row.id} | saldo {money(row.amount_balance_ars)} | {row.customer_name || row.customer_doc || 'cliente'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+
+              {!splitPaymentsEnabled && paymentMethod === 'cash' ? (
+                <div className="grid grid-cols-3 gap-2 rounded-xl border border-neutral-200 p-2">
+                  <label className="col-span-1 block">
+                    <span className="label">Recibido</span>
+                    <input
+                      className="input num px-2 py-1.5 text-sm"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={cashReceived}
+                      onChange={(e) => setCashReceived(e.target.value)}
+                    />
+                  </label>
+                  <div className="rounded-lg bg-neutral-50 px-2 py-1">
+                    <div className="text-[10px] uppercase tracking-wide text-neutral-400">Total</div>
+                    <strong className="num text-sm">{money(totalDue)}</strong>
                   </div>
-                  <div>
-                    Subtotal promos: <strong>{money(quote.subtotal_after_promotions_ars)}</strong>
+                  <div className="rounded-lg bg-brand-accent/10 px-2 py-1">
+                    <div className="text-[10px] uppercase tracking-wide text-brand-accent-dark">Vuelto</div>
+                    <strong className="num text-sm text-brand-accent-dark">{money(cashChange)}</strong>
                   </div>
-                  <div>
-                    Modificador ({quote.price_modifier_pct}%):{' '}
-                    <strong>{money(quote.modifier_amount_ars)}</strong>
-                  </div>
-                  <div className="text-base">
-                    Total: <strong>{money(quote.total_ars)}</strong>
-                  </div>
-                  <div>
-                    Factura requerida:{' '}
-                    <strong>{quote.invoice_required ? 'Si' : 'No (comprobante interno)'}</strong>
-                  </div>
-                  {Array.isArray(quote?.payment_breakdown) && quote.payment_breakdown.length ? (
-                    <div className="rounded border border-dashed px-2 py-1 mt-2">
-                      <p className="text-xs uppercase tracking-wide text-neutral-500">Desglose de cobro</p>
-                      <div className="space-y-1 mt-1">
-                        {quote.payment_breakdown.map((row, idx) => (
-                          <div key={`quote-pay-${idx}`} className="text-xs">
-                            <strong>{row.account_label || row.account_code || row.method}</strong> | base{' '}
-                            {money(row.base_amount_ars)} | {Number(row.modifier_pct || 0)}% ({money(row.modifier_amount_ars)}) | final{' '}
-                            <strong>{money(row.amount_ars)}</strong>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="rounded border border-neutral-200 bg-neutral-50 p-2 mt-2 space-y-2">
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Facturacion de la venta</p>
-                    <p className="text-xs">
-                      Default: <strong>{quote?.invoice_default?.invoice_required ? (quote?.invoice_default?.arca_account_label || quote?.invoice_default?.arca_account_code || 'Cuenta ARCA') : 'No facturar'}</strong>
-                    </p>
-                    {isAdmin ? (
-                      <div className="grid grid-cols-1 gap-2">
+                </div>
+              ) : null}
+
+              <label className="inline-flex items-center gap-2 text-sm text-neutral-700">
+                <input
+                  type="checkbox"
+                  className="accent-brand-accent"
+                  checked={splitPaymentsEnabled}
+                  onChange={(e) => setSplitPaymentsEnabled(e.target.checked)}
+                />
+                Pago mixto (split tender)
+              </label>
+
+              {splitPaymentsEnabled ? (
+                <div className="space-y-2 rounded-xl border border-neutral-200 p-2">
+                  {splitPayments.map((row, idx) => {
+                    const scopedAccounts = accountsByMethod(row.method || paymentMethod);
+                    return (
+                      <div key={`split-${idx}`} className="grid grid-cols-1 gap-2 rounded-lg bg-neutral-50/70 p-2">
                         <select
-                          className="input"
-                          value={invoiceOverrideMode}
-                          onChange={(e) => setInvoiceOverrideMode(e.target.value)}
+                          className="input px-2 py-1.5 text-sm"
+                          value={row.method}
+                          onChange={(e) =>
+                            changeSplitRow(idx, {
+                              method: e.target.value,
+                              account_code: defaultAccountCode(e.target.value, accounts),
+                              modifier_pct: String(
+                                accountModifierPct(defaultAccountCode(e.target.value, accounts), accounts)
+                              ),
+                            })
+                          }
                         >
-                          <option value="default">Usar default</option>
-                          <option value="none">No facturar</option>
-                          <option value="arca">Forzar cuenta ARCA</option>
+                          {PAYMENT_OPTIONS.map((op) => (
+                            <option key={op.value} value={op.value}>
+                              {op.label}
+                            </option>
+                          ))}
                         </select>
-                        {invoiceOverrideMode === 'arca' ? (
+                        <select
+                          className="input px-2 py-1.5 text-sm"
+                          value={row.account_code}
+                          onChange={(e) =>
+                            changeSplitRow(idx, {
+                              account_code: e.target.value,
+                              modifier_pct: String(accountModifierPct(e.target.value, accounts)),
+                            })
+                          }
+                        >
+                          {scopedAccounts.map((acc) => (
+                            <option key={`${idx}-${acc.code}`} value={acc.code}>
+                              {acc.label}
+                            </option>
+                          ))}
+                        </select>
+                        {row.method === 'store_credit' ? (
                           <select
-                            className="input"
-                            value={invoiceOverrideArcaAccountId}
-                            onChange={(e) => setInvoiceOverrideArcaAccountId(e.target.value)}
+                            className="input px-2 py-1.5 text-sm"
+                            value={row.store_credit_id || ''}
+                            onChange={(e) => changeSplitRow(idx, { store_credit_id: e.target.value })}
                           >
-                            <option value="">Seleccionar cuenta ARCA</option>
-                            {arcaAccounts.map((arca) => (
-                              <option key={`override-arca-${arca.id}`} value={String(arca.id)}>
-                                {arca.label || arca.code}
+                            <option value="">Seleccionar credito</option>
+                            {storeCredits.map((credit) => (
+                              <option key={`split-credit-${idx}-${credit.id}`} value={String(credit.id)}>
+                                #{credit.id} | saldo {money(credit.amount_balance_ars)}
                               </option>
                             ))}
                           </select>
                         ) : null}
+                        <div className="flex items-center gap-2">
+                          <input
+                            className="input num px-2 py-1.5 text-sm"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Monto base"
+                            value={row.amount_ars}
+                            onChange={(e) => changeSplitRow(idx, { amount_ars: e.target.value })}
+                          />
+                          {isAdmin ? (
+                            <input
+                              className="input num w-24 px-2 py-1.5 text-sm"
+                              type="number"
+                              step="0.01"
+                              min="-99.99"
+                              placeholder="% ajuste"
+                              value={row.modifier_pct ?? ''}
+                              onChange={(e) => changeSplitRow(idx, { modifier_pct: e.target.value })}
+                            />
+                          ) : null}
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-rose-500 transition hover:bg-rose-50 disabled:opacity-40"
+                            onClick={() => removeSplitRow(idx)}
+                            disabled={splitPayments.length <= 1}
+                          >
+                            Quitar
+                          </button>
+                        </div>
                       </div>
-                    ) : (
-                      <p className="text-xs text-neutral-600">
-                        Modo aplicado:{' '}
-                        <strong>
-                          {quote.invoice_required
-                            ? quote.invoice_arca_account_label || quote.invoice_arca_account_code || 'Cuenta ARCA'
-                            : 'No facturar'}
-                        </strong>
-                      </p>
-                    )}
+                    );
+                  })}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={loadStoreCreditsByDoc}
+                      disabled={storeCreditsLoading}
+                    >
+                      {storeCreditsLoading ? 'Buscando...' : 'Actualizar creditos'}
+                    </button>
+                    <button type="button" className="btn-secondary btn-sm" onClick={addSplitRow}>
+                      Agregar tramo
+                    </button>
+                    <span className="text-xs text-neutral-400">
+                      Creditos: <strong>{storeCredits.length}</strong>
+                    </span>
                   </div>
-                </div>
-              ) : (
-                <p className="text-sm text-gray-500">
-                  {quoteBusy && items.length && cashSession
-                    ? 'Calculando cotizacion...'
-                    : 'Sin cotizacion activa.'}
-                </p>
-              )}
-              {quoteBusy && items.length && cashSession ? (
-                <p className="text-xs text-neutral-500">Recalculando cotizacion en segundo plano...</p>
-              ) : null}
-              {!cashSession ? (
-                <p className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
-                  {cashRequiredNotice}
-                </p>
-              ) : null}
-
-              <div className="grid grid-cols-1 gap-2">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={handleConfirm}
-                  disabled={confirmActionDisabled}
-                >
-                  Confirmar venta
-                </button>
-              </div>
-              {splitMismatch ? (
-                <p className="text-xs text-rose-700">
-                  La suma base de pagos mixtos no coincide con el subtotal base cotizado.
-                </p>
-              ) : null}
-              {storeCreditSelectionMissing ? (
-                <p className="text-xs text-rose-700">
-                  Falta seleccionar credito tienda para uno o mas tramos de pago.
-                </p>
-              ) : null}
-
-              {err ? <p className="rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-700">{err}</p> : null}
-              {msg ? <p className="rounded border border-emerald-300 bg-emerald-50 p-2 text-sm text-emerald-700">{msg}</p> : null}
-              {lastSale ? (
-                <div className="rounded border border-green-300 bg-green-50 p-3 text-sm">
-                  Venta confirmada: <strong>{lastSale.sale_number || `#${lastSale.id}`}</strong> por{' '}
-                  <strong>{money(lastSale.total_ars)}</strong>. Estado factura:{' '}
-                  <strong>{lastSale?.invoice?.status || 'sin generar'}</strong>.
-                  {lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code ? (
-                    <>
-                      {' '}Cuenta ARCA:{' '}
-                      <strong>{lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code}</strong>.
-                    </>
-                  ) : null}
+                  <div className="space-y-0.5 rounded-lg border border-dashed border-neutral-200 px-2 py-1.5 text-xs">
+                    <div>
+                      Suma base tramos: <strong className="num">{money(splitTotals.current)}</strong>
+                    </div>
+                    <div>
+                      Subtotal base: <strong className="num">{money(splitTotals.expected)}</strong>
+                    </div>
+                    <div className={splitTotals.diff === 0 ? 'text-emerald-700' : 'text-rose-700'}>
+                      Diferencia: <strong className="num">{money(splitTotals.diff)}</strong>
+                    </div>
+                  </div>
                 </div>
               ) : null}
             </div>
           </div>
         </div>
       </div>
-      <div
-        className={`relative z-20 mt-4 rounded-xl border p-3 shadow-lg backdrop-blur xl:fixed xl:bottom-3 xl:left-64 xl:right-3 ${
-          quickMode
-            ? 'border-indigo-200 bg-indigo-50/95'
-            : 'border-neutral-200 bg-white/95'
-        }`}
-      >
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-center">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              {quickMode ? (
-                <span className="rounded-full border border-indigo-300 bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-700">
-                  Venta rapida ON
-                </span>
-              ) : null}
-              <span className="text-neutral-600">
-                {quoteBusy
-                  ? 'Calculando cotizacion...'
-                  : quote
-                    ? 'Totales listos para cerrar venta'
-                    : 'Sin cotizacion activa'}
-              </span>
-            </div>
-            {!cashSession ? (
-              <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900 sm:text-sm">
-                {cashRequiredNotice}
-              </p>
-            ) : null}
-            {quote ? (
-              <div className="grid grid-cols-3 gap-2 text-xs sm:text-sm">
-                <div className="rounded-lg border border-neutral-200 bg-white px-2 py-1">
-                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">Subtotal</div>
-                  <strong>{money(quote.subtotal_ars)}</strong>
-                </div>
-                <div className="rounded-lg border border-neutral-200 bg-white px-2 py-1">
-                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">Promociones</div>
-                  <strong>{money(quote.promotion_discount_total_ars)}</strong>
-                </div>
-                <div className="rounded-lg border border-neutral-200 bg-white px-2 py-1">
-                  <div className="text-[11px] uppercase tracking-wide text-neutral-500">Total</div>
-                  <strong>{money(quote.total_ars)}</strong>
-                </div>
+
+      <div className="mt-3 xl:fixed xl:bottom-3 xl:left-60 xl:right-3 xl:z-20 xl:max-h-[70vh] xl:overflow-y-auto">
+        <div className="space-y-2 rounded-2xl border border-neutral-200 bg-white/85 p-3 shadow-lift backdrop-blur-xl">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div className="flex flex-wrap items-end gap-5">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Total</p>
+                <p className="num font-display text-3xl font-bold leading-none tracking-tight">
+                  {money(totalDue)}
+                </p>
               </div>
-            ) : (
-              <p className="text-xs text-neutral-600 sm:text-sm">
-                {quoteBusy && items.length && cashSession
-                  ? 'Calculando cotizacion para actualizar total...'
-                  : 'Sin cotizacion activa.'}
-              </p>
-            )}
+              <div className="flex gap-4 pb-0.5 text-xs">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-neutral-400">Subtotal</p>
+                  <strong className="num text-neutral-700">{money(quote?.subtotal_ars || 0)}</strong>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-neutral-400">Promos</p>
+                  <strong className="num text-brand-accent-dark">
+                    {money(quote?.promotion_discount_total_ars || 0)}
+                  </strong>
+                </div>
+                {!splitPaymentsEnabled && paymentMethod === 'cash' && Number(cashReceived || 0) > 0 ? (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-neutral-400">Vuelto</p>
+                    <strong className="num text-neutral-700">{money(cashChange)}</strong>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex w-full items-center gap-2 sm:w-auto sm:flex-1 sm:justify-end">
+              {quickMode ? (
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm shrink-0"
+                  onClick={() => focusScan(true)}
+                  disabled={busy}
+                >
+                  F2 Scanner
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-lg flex-1 sm:flex-none"
+                onClick={handleConfirm}
+                disabled={confirmActionDisabled}
+              >
+                Confirmar venta
+              </button>
+              {quickMode ? (
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm shrink-0"
+                  onClick={quickSaveDraft}
+                  disabled={busy || !items.length}
+                >
+                  F8 Draft
+                </button>
+              ) : null}
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-2">
-            <button
-              type="button"
-              className="btn !py-2"
-              onClick={handleConfirm}
-              disabled={confirmActionDisabled}
-            >
-              F9 Confirmar
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-100 pt-2 text-xs">
+            <span className="text-neutral-400">
+              {quoteBusy
+                ? 'Calculando cotizacion...'
+                : quote
+                  ? `Factura: ${quote.invoice_required ? 'si' : 'comprobante interno'}`
+                  : 'Sin cotizacion activa'}
+            </span>
+            {quote ? (
+              <button type="button" className="btn-ghost" onClick={() => setTotalsDetailOpen((prev) => !prev)}>
+                {totalsDetailOpen ? 'Ocultar detalle' : 'Ver detalle'}
+              </button>
+            ) : null}
           </div>
+
+          {!cashSession ? (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+              {cashRequiredNotice}
+            </p>
+          ) : null}
+          {splitMismatch ? (
+            <p className="text-xs text-rose-700">
+              La suma base de pagos mixtos no coincide con el subtotal base cotizado.
+            </p>
+          ) : null}
+          {storeCreditSelectionMissing ? (
+            <p className="text-xs text-rose-700">
+              Falta seleccionar credito tienda para uno o mas tramos de pago.
+            </p>
+          ) : null}
+
+          {totalsDetailOpen && quote ? (
+            <div className="space-y-2 border-t border-neutral-100 pt-2 text-sm">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-4">
+                <div>
+                  Subtotal promos: <strong className="num">{money(quote.subtotal_after_promotions_ars)}</strong>
+                </div>
+                <div>
+                  Modificador ({quote.price_modifier_pct}%):{' '}
+                  <strong className="num">{money(quote.modifier_amount_ars)}</strong>
+                </div>
+                <div>
+                  Factura requerida: <strong>{quote.invoice_required ? 'Si' : 'No (comprobante interno)'}</strong>
+                </div>
+              </div>
+
+              {Array.isArray(quote?.payment_breakdown) && quote.payment_breakdown.length ? (
+                <div className="rounded-lg border border-dashed border-neutral-200 px-2 py-1.5">
+                  <p className="text-[11px] uppercase tracking-wide text-neutral-400">Desglose de cobro</p>
+                  <div className="mt-1 space-y-1">
+                    {quote.payment_breakdown.map((row, idx) => (
+                      <div key={`quote-pay-${idx}`} className="num text-xs">
+                        <strong>{row.account_label || row.account_code || row.method}</strong> | base{' '}
+                        {money(row.base_amount_ars)} | {Number(row.modifier_pct || 0)}% ({money(row.modifier_amount_ars)}) | final{' '}
+                        <strong>{money(row.amount_ars)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50/70 p-2">
+                <p className="text-[11px] uppercase tracking-wide text-neutral-400">Facturacion de la venta</p>
+                <p className="text-xs">
+                  Default:{' '}
+                  <strong>
+                    {quote?.invoice_default?.invoice_required
+                      ? quote?.invoice_default?.arca_account_label || quote?.invoice_default?.arca_account_code || 'Cuenta ARCA'
+                      : 'No facturar'}
+                  </strong>
+                </p>
+                {isAdmin ? (
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <select
+                      className="input px-2 py-1.5 text-sm"
+                      value={invoiceOverrideMode}
+                      onChange={(e) => setInvoiceOverrideMode(e.target.value)}
+                    >
+                      <option value="default">Usar default</option>
+                      <option value="none">No facturar</option>
+                      <option value="arca">Forzar cuenta ARCA</option>
+                    </select>
+                    {invoiceOverrideMode === 'arca' ? (
+                      <select
+                        className="input px-2 py-1.5 text-sm"
+                        value={invoiceOverrideArcaAccountId}
+                        onChange={(e) => setInvoiceOverrideArcaAccountId(e.target.value)}
+                      >
+                        <option value="">Seleccionar cuenta ARCA</option>
+                        {arcaAccounts.map((arca) => (
+                          <option key={`override-arca-${arca.id}`} value={String(arca.id)}>
+                            {arca.label || arca.code}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="text-xs text-neutral-600">
+                    Modo aplicado:{' '}
+                    <strong>
+                      {quote.invoice_required
+                        ? quote.invoice_arca_account_label || quote.invoice_arca_account_code || 'Cuenta ARCA'
+                        : 'No facturar'}
+                    </strong>
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {lastSale ? (
+            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-900">
+              Venta confirmada: <strong>{lastSale.sale_number || `#${lastSale.id}`}</strong> por{' '}
+              <strong className="num">{money(lastSale.total_ars)}</strong>. Estado factura:{' '}
+              <strong>{lastSale?.invoice?.status || 'sin generar'}</strong>.
+              {lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code ? (
+                <>
+                  {' '}Cuenta ARCA:{' '}
+                  <strong>{lastSale?.invoice?.arca_account_label || lastSale?.invoice?.arca_account_code}</strong>.
+                </>
+              ) : null}
+            </p>
+          ) : null}
         </div>
-        {quickMode ? (
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <button type="button" className="btn-secondary !py-2" onClick={() => focusScan(true)} disabled={busy}>
-              F2 Scanner
-            </button>
-            <button type="button" className="btn-secondary !py-2" onClick={quickSaveDraft} disabled={busy || !items.length}>
-              F8 Draft
-            </button>
-          </div>
-        ) : null}
       </div>
     </div>
   );

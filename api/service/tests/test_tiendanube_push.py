@@ -146,11 +146,13 @@ class TiendaNubePushTests(unittest.TestCase):
         payload = _tiendanube_build_create_product_payload_from_local_variant(row)
         self.assertNotIn('cost', payload['variants'][0])
 
+    @patch('service.views.retail_views.q')
     @patch('service.views.retail_views.exec_void')
     @patch('service.views.retail_views._tiendanube_request')
-    def test_delete_remote_variant_uses_product_delete_when_single_variant(self, mock_request, mock_exec):
+    def test_delete_remote_variant_unpublishes_instead_of_deleting_product(self, mock_request, mock_exec, mock_q):
         row = {
             'id': 21,
+            'product_id': 300,
             'sku': 'SKU-DEL-1',
             'tiendanube_product_id': 7001,
             'tiendanube_variant_id': 8101,
@@ -159,13 +161,17 @@ class TiendaNubePushTests(unittest.TestCase):
             {'id': 7001, 'variants': [{'id': 8101}]},
             {},
         ]
+        mock_q.return_value = {'cnt': 0}  # al producto local no le quedan variantes activas
 
         out = _tiendanube_delete_remote_for_local_variant({'store_id': '1', 'access_token': 'x'}, row)
 
         self.assertTrue(out['ok'])
         self.assertTrue(out['deleted'])
-        self.assertEqual(out['scope'], 'product')
+        self.assertEqual(out['scope'], 'unpublished')
         self.assertEqual(mock_request.call_count, 2)
+        metodo, ruta = mock_request.call_args[0][1], mock_request.call_args[0][2]
+        self.assertEqual((metodo, ruta), ('PUT', 'products/7001'))
+        self.assertEqual(mock_request.call_args[1]['payload'], {'id': 7001, 'published': False})
         self.assertEqual(mock_exec.call_count, 1)
 
     @patch('service.views.retail_views.exec_void')

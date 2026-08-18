@@ -125,6 +125,8 @@ export const postAuthLogout = () => api.post('/api/auth/logout/', {});
 export const getSystemUpdateStatus = () => api.get('/api/system/update/status/');
 export const postSystemUpdateCheck = (payload = {}) => api.post('/api/system/update/check/', payload || {});
 export const postSystemUpdateRestart = (payload = {}) => api.post('/api/system/update/restart/', payload || {});
+export const getSystemPostUpdateStatus = () => api.get('/api/system/post-update/status/');
+export const postSystemPostUpdateRun = (payload = {}) => api.post('/api/system/post-update/run/', payload || {});
 
 // Usuarios y permisos
 export const getUsuarios = () => api.get('/api/usuarios/');
@@ -148,6 +150,8 @@ export const getRetailProductos = (params = {}) => {
 };
 export const postRetailProducto = (payload) => api.post('/api/retail/productos/', payload);
 export const patchRetailProducto = (id, payload) => api.patch(`/api/retail/productos/${id}/`, payload);
+export const postRetailProductoAgregarAtributo = (id, payload) =>
+  api.post(`/api/retail/productos/${id}/atributos/agregar/`, payload || {});
 
 export const getRetailAtributos = () => api.get('/api/retail/atributos/');
 export const getRetailAtributoValores = (params = {}) => {
@@ -326,6 +330,12 @@ export const getRetailOnlineFailedJobsSummary = (params = {}) => {
 };
 export const postRetailOnlineRetryFailed = (payload) => api.post('/api/retail/online/jobs/retry-failed/', payload || {});
 export const postRetailOnlineJobsProcess = (payload) => api.post('/api/retail/online/jobs/process/', payload || {});
+export const getRetailOnlineAuditCatalogo = (params = {}) => {
+  const qs = new URLSearchParams();
+  if (params.limit) qs.set('limit', String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return api.get(`/api/retail/online/audit/catalogo/${suffix}`);
+};
 export const postRetailOnlineOAuthReauthorizeUrl = (payload) =>
   api.post('/api/retail/online/oauth/reauthorize-url/', payload || {});
 export const postRetailOnlineOAuthApplyToken = (payload) =>

@@ -2912,6 +2912,118 @@ def _autogen_barcode(product_row, supplier_id=None):
     return _generate_ean13_code(supplier_code)
 
 
+def _create_product_variant(
+    *,
+    product_id,
+    product_row,
+    option_values,
+    signature,
+    data=None,
+    created_by=None,
+):
+    """Crea una variante con SKU/EAN autogenerados y su stock inicial.
+
+    Lo usan el alta manual de variantes y el flujo guiado de "agregar atributo", para que
+    ambos generen exactamente los mismos codigos y movimientos.
+    """
+    data = data if isinstance(data, dict) else {}
+    supplier_id = _to_int(data.get('supplier_id'), 'supplier_id', allow_none=True)
+    sku = _clean_text(data.get('sku')) or _autogen_sku(product_row)
+    raw_barcode = _clean_text(data.get('barcode_internal'))
+    if raw_barcode:
+        barcode = _validate_new_ean13(raw_barcode)
+        supplier_ref, _ = _resolve_supplier_code(supplier_id, allow_generic=True)
+        barcode_source = 'variant_create_manual'
+    else:
+        supplier_ref, supplier_code = _resolve_supplier_code(supplier_id, allow_generic=True)
+        barcode = _generate_ean13_code(supplier_code)
+        barcode_source = 'variant_create_auto'
+    if _barcode_exists_anywhere(barcode):
+        raise ValidationError('barcode ya existe en otra variante')
+
+    display_name = _clean_text(data.get('display_name')) or f"{product_row['name']} ({signature})"
+    price_store_raw = _first_payload_value(data, 'price_store_ars', 'precio_local_ars')
+    if price_store_raw is None:
+        price_store_raw = product_row.get('default_price_store_ars') or 0
+    price_store = _money(price_store_raw)
+    price_online_raw = _first_payload_value(data, 'price_online_ars', 'precio_online_ars')
+    if price_online_raw is None:
+        price_online_raw = product_row.get('default_price_online_ars')
+    price_online = _money(price_online_raw if price_online_raw is not None else price_store)
+    cost_raw = _first_payload_value(data, 'cost_avg_ars', 'costo_promedio_ars')
+    if cost_raw is None:
+        cost_raw = product_row.get('default_cost_ars') or 0
+    cost_avg = _money(cost_raw)
+    stock_on_hand = _to_int(data.get('stock_on_hand') or 0, 'stock_on_hand')
+    stock_min = _to_int(data.get('stock_min') or 0, 'stock_min')
+
+    vid = exec_returning(
+        '''
+        INSERT INTO retail_product_variants(
+          product_id, option_signature, display_name, sku, barcode_internal,
+          price_store_ars, price_online_ars, cost_avg_ars,
+          stock_on_hand, stock_reserved, stock_min, active
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,TRUE)
+        RETURNING id
+        ''',
+        [
+            product_id,
+            signature,
+            display_name,
+            sku,
+            barcode,
+            price_store,
+            price_online,
+            cost_avg,
+            stock_on_hand,
+            stock_min,
+        ],
+    )
+
+    exec_void(
+        '''
+        INSERT INTO retail_variant_barcodes(
+          variant_id, barcode, is_primary, supplier_id, source, created_by
+        )
+        VALUES (%s,%s,TRUE,%s,%s,%s)
+        ''',
+        [vid, barcode, supplier_ref, barcode_source, created_by],
+    )
+
+    for opt in option_values:
+        exec_void(
+            '''
+            INSERT INTO retail_variant_option_values(
+              variant_id, attribute_id, attribute_value_id, option_value, option_value_key, sort_order
+            )
+            VALUES (%s,%s,%s,%s,%s,%s)
+            ''',
+            [
+                vid,
+                opt['attribute_id'],
+                opt.get('attribute_value_id'),
+                opt['value'],
+                opt.get('value_key'),
+                opt.get('sort_order') or 100,
+            ],
+        )
+
+    if stock_on_hand != 0:
+        exec_void(
+            '''
+            INSERT INTO retail_stock_movements(
+              variant_id, movement_kind, qty_signed, stock_after,
+              cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
+            )
+            VALUES (%s,'manual_adjustment',%s,%s,%s,'variant_create',%s,'Stock inicial variante',%s)
+            ''',
+            [vid, stock_on_hand, stock_on_hand, cost_avg, vid, created_by],
+        )
+
+    return vid
+
+
 class RetailVariantesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -3054,98 +3166,14 @@ class RetailVariantesView(APIView):
         if duplicate:
             return Response(_variant_signature_conflict_payload(duplicate), status=409)
 
-        supplier_id = _to_int(data.get('supplier_id'), 'supplier_id', allow_none=True)
-        sku = _clean_text(data.get('sku')) or _autogen_sku(product_row)
-        raw_barcode = _clean_text(data.get('barcode_internal'))
-        if raw_barcode:
-            barcode = _validate_new_ean13(raw_barcode)
-            supplier_ref, _ = _resolve_supplier_code(supplier_id, allow_generic=True)
-            barcode_source = 'variant_create_manual'
-        else:
-            supplier_ref, supplier_code = _resolve_supplier_code(supplier_id, allow_generic=True)
-            barcode = _generate_ean13_code(supplier_code)
-            barcode_source = 'variant_create_auto'
-        if _barcode_exists_anywhere(barcode):
-            raise ValidationError('barcode ya existe en otra variante')
-        display_name = _clean_text(data.get('display_name')) or f"{product_row['name']} ({signature})"
-        price_store_raw = _first_payload_value(data, 'price_store_ars', 'precio_local_ars')
-        if price_store_raw is None:
-            price_store_raw = product_row.get('default_price_store_ars') or 0
-        price_store = _money(price_store_raw)
-        price_online_raw = _first_payload_value(data, 'price_online_ars', 'precio_online_ars')
-        if price_online_raw is None:
-            price_online_raw = product_row.get('default_price_online_ars')
-        price_online = _money(price_online_raw if price_online_raw is not None else price_store)
-        cost_raw = _first_payload_value(data, 'cost_avg_ars', 'costo_promedio_ars')
-        if cost_raw is None:
-            cost_raw = product_row.get('default_cost_ars') or 0
-        cost_avg = _money(cost_raw)
-        stock_on_hand = _to_int(data.get('stock_on_hand') or 0, 'stock_on_hand')
-        stock_min = _to_int(data.get('stock_min') or 0, 'stock_min')
-
-        vid = exec_returning(
-            '''
-            INSERT INTO retail_product_variants(
-              product_id, option_signature, display_name, sku, barcode_internal,
-              price_store_ars, price_online_ars, cost_avg_ars,
-              stock_on_hand, stock_reserved, stock_min, active
-            )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s,TRUE)
-            RETURNING id
-            ''',
-            [
-                product_id,
-                signature,
-                display_name,
-                sku,
-                barcode,
-                price_store,
-                price_online,
-                cost_avg,
-                stock_on_hand,
-                stock_min,
-            ],
+        vid = _create_product_variant(
+            product_id=product_id,
+            product_row=product_row,
+            option_values=option_values,
+            signature=signature,
+            data=data,
+            created_by=getattr(request.user, 'id', None),
         )
-
-        exec_void(
-            '''
-            INSERT INTO retail_variant_barcodes(
-              variant_id, barcode, is_primary, supplier_id, source, created_by
-            )
-            VALUES (%s,%s,TRUE,%s,%s,%s)
-            ''',
-            [vid, barcode, supplier_ref, barcode_source, getattr(request.user, 'id', None)],
-        )
-
-        for opt in option_values:
-            exec_void(
-                '''
-                INSERT INTO retail_variant_option_values(
-                  variant_id, attribute_id, attribute_value_id, option_value, option_value_key, sort_order
-                )
-                VALUES (%s,%s,%s,%s,%s,%s)
-                ''',
-                [
-                    vid,
-                    opt['attribute_id'],
-                    opt.get('attribute_value_id'),
-                    opt['value'],
-                    opt.get('value_key'),
-                    opt.get('sort_order') or 100,
-                ],
-            )
-
-        if stock_on_hand != 0:
-            exec_void(
-                '''
-                INSERT INTO retail_stock_movements(
-                  variant_id, movement_kind, qty_signed, stock_after,
-                  cost_unit_snapshot_ars, reference_type, reference_id, note, created_by
-                )
-                VALUES (%s,'manual_adjustment',%s,%s,%s,'variant_create',%s,'Stock inicial variante',%s)
-                ''',
-                [vid, stock_on_hand, stock_on_hand, cost_avg, vid, getattr(request.user, 'id', None)],
-            )
 
         _tiendanube_schedule_local_variants_sync(
             [vid],
@@ -3155,6 +3183,202 @@ class RetailVariantesView(APIView):
         )
 
         return Response(_load_variante(vid, include_costs=True), status=201)
+
+
+def _product_active_variants_with_options(product_id):
+    rows = q(
+        '''
+        SELECT id, sku, display_name, option_signature
+        FROM retail_product_variants
+        WHERE product_id=%s
+          AND active=TRUE
+        ORDER BY id
+        ''',
+        [product_id],
+    ) or []
+    if not rows:
+        return rows
+    ids = [row['id'] for row in rows]
+    opciones = q(
+        '''
+        SELECT ov.variant_id, ov.option_value, ov.option_value_key,
+               a.id AS attribute_id, a.code AS attribute_code, a.name AS attribute_name,
+               COALESCE(a.sort_order, 100) AS sort_order
+        FROM retail_variant_option_values ov
+        JOIN retail_variant_attributes a ON a.id=ov.attribute_id
+        WHERE ov.variant_id = ANY(%s)
+        ORDER BY ov.variant_id, a.sort_order, a.code
+        ''',
+        [ids],
+    ) or []
+    by_variant = {}
+    for opt in opciones:
+        by_variant.setdefault(opt['variant_id'], []).append(opt)
+    for row in rows:
+        row['option_values'] = by_variant.get(row['id'], [])
+    return rows
+
+
+class RetailProductoAgregarAtributoView(APIView):
+    """Agrega un atributo nuevo a un producto que ya tiene variantes.
+
+    En vez de dejar las variantes viejas huerfanas (con un atributo menos, que despues
+    Tienda Nube no puede publicar juntas), les completa el valor que corresponde y crea
+    solo las combinaciones que faltan.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, producto_id):
+        _require_staff(request)
+        _set_audit_user(request)
+        data = request.data or {}
+        product_row = _product_name(producto_id)
+
+        attr = _attribute_by_ref(
+            attribute_id=_to_int(data.get('attribute_id'), 'attribute_id', allow_none=True),
+            attribute_code=_clean_text(data.get('attribute_code')),
+        )
+        confirm_new = _to_bool(data.get('confirm_new_value') or data.get('confirm_create'))
+
+        existing_value = _clean_text(data.get('existing_value'))
+        if not existing_value:
+            raise ValidationError('Indica que valor tienen las variantes actuales para el atributo nuevo')
+
+        nuevos_valores = data.get('new_values')
+        if isinstance(nuevos_valores, str):
+            nuevos_valores = [nuevos_valores]
+        if not isinstance(nuevos_valores, list):
+            nuevos_valores = []
+        limpios = []
+        vistos = set()
+        for item in nuevos_valores:
+            texto = _clean_text(item)
+            if not texto:
+                continue
+            clave = texto.lower()
+            if clave in vistos or clave == existing_value.lower():
+                continue
+            vistos.add(clave)
+            limpios.append(texto)
+
+        variantes = _product_active_variants_with_options(producto_id)
+        if not variantes:
+            raise ValidationError('El producto no tiene variantes activas para completar')
+
+        ya_lo_usan = [
+            row for row in variantes
+            if any(_safe_int(opt.get('attribute_id')) == _safe_int(attr['id']) for opt in row.get('option_values') or [])
+        ]
+        if ya_lo_usan:
+            raise ValidationError(f"Las variantes de este producto ya usan el atributo {attr['name']}")
+
+        def _opciones_payload(row, valor_nuevo_atributo):
+            items = [
+                {
+                    'attribute_code': opt.get('attribute_code'),
+                    'value': opt.get('option_value'),
+                }
+                for opt in row.get('option_values') or []
+            ]
+            items.append(
+                {
+                    'attribute_code': attr['code'],
+                    'value': valor_nuevo_atributo,
+                    'confirm_new_value': confirm_new,
+                }
+            )
+            return {'option_values': items}
+
+        # 1) Completar las variantes existentes con el valor que ya tenian de hecho.
+        actualizadas = []
+        for row in variantes:
+            option_values, signature = _normalize_option_values(_opciones_payload(row, existing_value))
+            if not signature:
+                raise ValidationError('No se pudo calcular la combinacion de la variante existente')
+            duplicado = _find_variant_signature_duplicate(producto_id, signature, exclude_variant_id=row['id'])
+            if duplicado:
+                return Response(_variant_signature_conflict_payload(duplicado), status=409)
+
+            exec_void('DELETE FROM retail_variant_option_values WHERE variant_id=%s', [row['id']])
+            for opt in option_values:
+                exec_void(
+                    '''
+                    INSERT INTO retail_variant_option_values(
+                      variant_id, attribute_id, attribute_value_id, option_value, option_value_key, sort_order
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                    ''',
+                    [
+                        row['id'],
+                        opt['attribute_id'],
+                        opt.get('attribute_value_id'),
+                        opt['value'],
+                        opt.get('value_key'),
+                        opt.get('sort_order') or 100,
+                    ],
+                )
+            exec_void(
+                'UPDATE retail_product_variants SET option_signature=%s WHERE id=%s',
+                [signature, row['id']],
+            )
+            actualizadas.append({'id': row['id'], 'sku': row.get('sku'), 'option_signature': signature})
+
+        # 2) Crear solo las combinaciones que faltan para los valores nuevos.
+        defaults = data.get('defaults') if isinstance(data.get('defaults'), dict) else {}
+        creadas = []
+        for valor in limpios:
+            for row in variantes:
+                option_values, signature = _normalize_option_values(_opciones_payload(row, valor))
+                if not signature:
+                    continue
+                if _find_variant_signature_duplicate(producto_id, signature):
+                    continue
+                nueva_id = _create_product_variant(
+                    product_id=producto_id,
+                    product_row=product_row,
+                    option_values=option_values,
+                    signature=signature,
+                    data=defaults,
+                    created_by=getattr(request.user, 'id', None),
+                )
+                creadas.append({'id': nueva_id, 'option_signature': signature})
+
+        afectadas = [item['id'] for item in actualizadas] + [item['id'] for item in creadas]
+        # Un unico sync del producto completo: evita publicar estados intermedios.
+        _tiendanube_schedule_local_variants_sync(
+            afectadas,
+            sync_price=True,
+            sync_stock=True,
+            sync_catalog=True,
+            reason='product_add_attribute',
+        )
+
+        return Response(
+            {
+                'ok': True,
+                'product_id': producto_id,
+                'atributo': {'id': attr['id'], 'code': attr['code'], 'name': attr['name']},
+                'valor_existente': existing_value,
+                'valores_nuevos': limpios,
+                'actualizadas': len(actualizadas),
+                'creadas': len(creadas),
+                'variantes': _list_variantes_de_producto(producto_id),
+            }
+        )
+
+
+def _list_variantes_de_producto(product_id):
+    return q(
+        '''
+        SELECT id, sku, display_name, option_signature, active
+        FROM retail_product_variants
+        WHERE product_id=%s
+        ORDER BY id
+        ''',
+        [product_id],
+    ) or []
 
 
 _VARIANT_USAGE_QUERIES = (
@@ -8995,7 +9219,18 @@ def _tiendanube_variant_payload_from_local_row(row):
     return payload
 
 
+def _variant_label_for_notice(row):
+    return _clean_text((row or {}).get('sku')) or f"variante {(row or {}).get('id')}"
+
+
 def _tiendanube_build_product_payload_from_local_variants(local_product, local_variants):
+    """Arma el producto agrupado para Tienda Nube.
+
+    Si las variantes activas del producto no comparten los mismos atributos (caso tipico:
+    se agrego un segundo atributo y quedaron las viejas con uno solo), no se aborta el
+    producto entero: se publica el grupo mayoritario y se devuelven las excluidas en
+    `excluded` para poder avisarlo en pantalla.
+    """
     product = local_product if isinstance(local_product, dict) else {}
     rows = [row for row in (local_variants or []) if isinstance(row, dict)]
     if not rows:
@@ -9007,36 +9242,106 @@ def _tiendanube_build_product_payload_from_local_variants(local_product, local_v
         or _clean_text(rows[0].get('producto'))
         or f"Producto RH {product.get('id') or rows[0].get('product_id') or _random_suffix(4)}"
     )
-    published = any(bool(row.get('active', True)) for row in rows)
 
-    canonical_attrs = None
-    canonical_keys = None
-    variant_payloads = []
+    excluded = []
+    candidates = []
     for row in rows:
+        if not _clean_text(row.get('sku')):
+            excluded.append(
+                {
+                    'variant_id': _safe_int(row.get('id')),
+                    'sku': '',
+                    'reason': 'no tiene SKU',
+                }
+            )
+            continue
         attrs = (_tiendanube_extract_variant_attributes(row.get('option_values') or {}).get('attributes') or [])
         if not attrs:
-            raise ValidationError(f"SKU {_clean_text(row.get('sku')) or row.get('id')}: sin atributos de variante")
+            excluded.append(
+                {
+                    'variant_id': _safe_int(row.get('id')),
+                    'sku': _clean_text(row.get('sku')),
+                    'reason': 'no tiene atributos de variante',
+                }
+            )
+            continue
         if len(attrs) > 3:
-            raise ValidationError('Tienda Nube admite como maximo 3 atributos por producto')
+            excluded.append(
+                {
+                    'variant_id': _safe_int(row.get('id')),
+                    'sku': _clean_text(row.get('sku')),
+                    'reason': 'Tienda Nube admite como maximo 3 atributos por producto',
+                }
+            )
+            continue
+        candidates.append((row, attrs, tuple(item.get('key') for item in attrs)))
 
-        keys = [item.get('key') for item in attrs]
-        if canonical_attrs is None:
-            canonical_attrs = attrs
-            canonical_keys = keys
-        elif keys != canonical_keys:
-            raise ValidationError('Todas las variantes del producto deben usar los mismos atributos y orden para Tienda Nube')
+    if not candidates:
+        motivos = '; '.join(f"{item['sku'] or item['variant_id']}: {item['reason']}" for item in excluded)
+        raise ValidationError(
+            f'Ninguna variante del producto se puede publicar en Tienda Nube ({motivos})'
+            if motivos
+            else 'Ninguna variante del producto se puede publicar en Tienda Nube'
+        )
 
+    groups = {}
+    for row, attrs, keys in candidates:
+        groups.setdefault(keys, []).append((row, attrs))
+
+    dominant_keys = max(
+        groups,
+        key=lambda keys: (
+            len(groups[keys]),
+            len(keys),
+            max(_safe_int(item[0].get('id')) or 0 for item in groups[keys]),
+        ),
+    )
+    dominant_rows = groups[dominant_keys]
+    canonical_attrs = dominant_rows[0][1]
+    dominant_names = [item['name'] for item in canonical_attrs]
+
+    for keys, items in groups.items():
+        if keys == dominant_keys:
+            continue
+        for row, attrs in items:
+            propios = {item.get('key') for item in attrs}
+            faltantes = [
+                item['name'] for item in canonical_attrs if item.get('key') not in propios
+            ]
+            reason = (
+                f"le falta {', '.join(faltantes)}"
+                if faltantes
+                else f"usa otros atributos en vez de {', '.join(dominant_names)}"
+            )
+            excluded.append(
+                {
+                    'variant_id': _safe_int(row.get('id')),
+                    'sku': _clean_text(row.get('sku')),
+                    'reason': reason,
+                }
+            )
+
+    variant_payloads = []
+    for row, attrs in dominant_rows:
         variant_payload = _tiendanube_variant_payload_from_local_row(row)
         variant_payload['values'] = [{'es': item['value']} for item in attrs]
         variant_payloads.append({'local_variant_id': row.get('id'), 'sku': row.get('sku'), 'payload': variant_payload})
 
+    published = any(bool(row.get('active', True)) for row, _ in dominant_rows)
+
     payload = {
         'name': {'es': product_name},
         'published': published,
-        'attributes': [{'es': item['name']} for item in (canonical_attrs or [])],
+        'attributes': [{'es': item['name']} for item in canonical_attrs],
         'variants': [item['payload'] for item in variant_payloads],
     }
-    return {'payload': payload, 'variant_payloads': variant_payloads, 'attribute_keys': canonical_keys or []}
+    return {
+        'payload': payload,
+        'variant_payloads': variant_payloads,
+        'attribute_keys': list(dominant_keys),
+        'attribute_names': dominant_names,
+        'excluded': excluded,
+    }
 
 
 def _tiendanube_build_create_product_payload_from_local_variant(local_variant):
@@ -9163,10 +9468,94 @@ def _tiendanube_depublish_old_products(cfg, old_product_ids, *, canonical_produc
     return {'unpublished': unpublished, 'skipped': skipped}
 
 
+def _tiendanube_remote_attribute_tokens(remote_product):
+    out = []
+    for attr in _tiendanube_listify((remote_product or {}).get('attributes')):
+        txt = _tiendanube_locale_text(attr)
+        token = _tiendanube_option_token(txt)
+        if token:
+            out.append(token)
+    return out
+
+
+def _tiendanube_remote_needs_replacement(remote_product, product_payload):
+    """True si el producto remoto no puede recibir los atributos deseados.
+
+    Tienda Nube no admite cambiar la cantidad de atributos de un producto que ya tiene
+    variantes, asi que en ese caso hay que crear un producto nuevo en vez de mutar el viejo.
+    """
+    remote_tokens = _tiendanube_remote_attribute_tokens(remote_product)
+    if not remote_tokens:
+        return False
+    desired_tokens = [
+        _tiendanube_option_token(_tiendanube_locale_text(attr))
+        for attr in _tiendanube_listify((product_payload or {}).get('attributes'))
+    ]
+    desired_tokens = [token for token in desired_tokens if token]
+    if not desired_tokens:
+        return False
+    return remote_tokens != desired_tokens
+
+
+def _tiendanube_copy_product_images_best_effort(cfg, source_product_id, target_product_id, *, limit=10):
+    """Copia las fotos del producto viejo al nuevo. Nunca propaga errores."""
+    source_id = _safe_int(source_product_id)
+    target_id = _safe_int(target_product_id)
+    if not source_id or not target_id or source_id == target_id:
+        return 0
+    copied = 0
+    try:
+        source = _tiendanube_request(cfg, 'GET', f'products/{source_id}', timeout_cap=20, allow_404=True)
+        for image in _tiendanube_listify((source or {}).get('images'))[: max(1, int(limit))]:
+            src = _clean_text(image.get('src')) if isinstance(image, dict) else ''
+            if not src:
+                continue
+            _tiendanube_request(
+                cfg,
+                'POST',
+                f'products/{target_id}/images',
+                payload={'src': src},
+                timeout_cap=20,
+            )
+            copied += 1
+    except Exception as exc:
+        security_logger.warning(
+            "tiendanube_copy_images_failed source=%s target=%s error=%s",
+            source_id,
+            target_id,
+            exc,
+        )
+    return copied
+
+
+def _tiendanube_unpublish_product_best_effort(cfg, product_id):
+    pid = _safe_int(product_id)
+    if not pid:
+        return False
+    try:
+        _tiendanube_request(
+            cfg,
+            'PUT',
+            f'products/{pid}',
+            payload={'id': pid, 'published': False},
+            timeout_cap=20,
+        )
+        return True
+    except Exception as exc:
+        security_logger.warning("tiendanube_unpublish_failed product_id=%s error=%s", pid, exc)
+        return False
+
+
 def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync', force_catalog=False):
     rows = _tiendanube_load_local_product_group(local_product_id)
     if not rows:
-        return {'mapped': 0, 'created_remote': 0, 'unpublished_old_products': 0, 'skipped_old_products': []}
+        return {
+            'mapped': 0,
+            'created_remote': 0,
+            'unpublished_old_products': 0,
+            'skipped_old_products': [],
+            'excluded_variants': [],
+        }
 
     before_mapping = {
         int(row['id']): {
@@ -9188,6 +9577,9 @@ def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync'
     )
     product_payload = product_payload_info['payload']
     variant_payloads = product_payload_info['variant_payloads']
+    excluded_variants = product_payload_info.get('excluded') or []
+    replaced_product_ids = set()
+    copied_images = 0
 
     mappings = []
     if not canonical_product_id:
@@ -9226,6 +9618,22 @@ def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync'
             canonical_product_id = _safe_int((created or {}).get('id'))
             if not canonical_product_id:
                 raise ValidationError('Tienda Nube no devolvio product_id al recrear producto agrupado')
+            remote_product = created
+        elif _tiendanube_remote_needs_replacement(remote_product, product_payload):
+            # Cambio la estructura de atributos del producto: Tienda Nube no acepta
+            # mutarla en el lugar, asi que se crea uno nuevo, se le copian las fotos
+            # y el anterior se despublica mas abajo.
+            previous_product_id = canonical_product_id
+            created = _tiendanube_request(cfg, 'POST', 'products', payload=product_payload, timeout_cap=20)
+            canonical_product_id = _safe_int((created or {}).get('id'))
+            if not canonical_product_id:
+                raise ValidationError('Tienda Nube no devolvio product_id al reemplazar producto agrupado')
+            copied_images = _tiendanube_copy_product_images_best_effort(
+                cfg,
+                previous_product_id,
+                canonical_product_id,
+            )
+            replaced_product_ids.add(previous_product_id)
             remote_product = created
         else:
             _tiendanube_request(
@@ -9280,7 +9688,12 @@ def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync'
                     raise ValidationError(f'SKU {sku or local_id}: Tienda Nube no devolvio variant_id')
             mappings.append({'local_variant_id': local_id, 'product_id': canonical_product_id, 'variant_id': variant_id})
 
-    expected_ids = {_safe_int(row.get('id')) for row in rows if _safe_int(row.get('id'))}
+    # Solo se espera mapear el grupo publicable; las excluidas se reportan aparte.
+    expected_ids = {
+        _safe_int(item.get('local_variant_id'))
+        for item in variant_payloads
+        if _safe_int(item.get('local_variant_id'))
+    }
     mapped_ids = {_safe_int(item.get('local_variant_id')) for item in mappings if _safe_int(item.get('local_variant_id'))}
     if expected_ids != mapped_ids:
         missing = sorted(str(v) for v in expected_ids - mapped_ids)
@@ -9293,11 +9706,17 @@ def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync'
             row['tiendanube_product_id'] = mapped.get('product_id')
             row['tiendanube_variant_id'] = mapped.get('variant_id')
 
+    replaced_unpublished = 0
+    for old_id in sorted(pid for pid in replaced_product_ids if pid and pid != canonical_product_id):
+        if _tiendanube_unpublish_product_best_effort(cfg, old_id):
+            replaced_unpublished += 1
+
+    published_skus = [item.get('sku') for item in variant_payloads]
     cleanup = _tiendanube_depublish_old_products(
         cfg,
-        old_product_ids - {canonical_product_id},
+        old_product_ids - {canonical_product_id} - replaced_product_ids,
         canonical_product_id=canonical_product_id,
-        local_skus=[row.get('sku') for row in rows],
+        local_skus=published_skus,
     )
     created_remote = sum(
         1
@@ -9307,12 +9726,26 @@ def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync'
             and before_mapping.get(_safe_int(item.get('local_variant_id')), {}).get('variant_id')
         )
     )
+    if excluded_variants:
+        security_logger.warning(
+            "tiendanube_group_sync_excluded_variants reason=%s product_id=%s detalle=%s",
+            reason,
+            local_product_id,
+            '; '.join(
+                f"{item.get('sku') or item.get('variant_id')}: {item.get('reason')}"
+                for item in excluded_variants
+            )[:1000],
+        )
+
     return {
         'mapped': len(mappings),
         'created_remote': created_remote,
         'product_id': canonical_product_id,
-        'unpublished_old_products': int(cleanup.get('unpublished') or 0),
+        'unpublished_old_products': int(cleanup.get('unpublished') or 0) + replaced_unpublished,
         'skipped_old_products': cleanup.get('skipped') or [],
+        'replaced_product_ids': sorted(replaced_product_ids),
+        'copied_images': copied_images,
+        'excluded_variants': excluded_variants,
     }
 
 
@@ -9416,6 +9849,7 @@ def _tiendanube_ensure_rows_remote_mapping(cfg, rows, *, reason='sync', sync_cat
     errors = list(link_info.get('errors') or [])
     created_remote = 0
     creation_failed = 0
+    excluded_variants = []
     groups = {}
 
     for row in rows or []:
@@ -9446,6 +9880,9 @@ def _tiendanube_ensure_rows_remote_mapping(cfg, rows, *, reason='sync', sync_cat
                 force_catalog=sync_catalog,
             )
             created_remote += int(out.get('created_remote') or 0)
+            product_label = _clean_text((group_rows[0] or {}).get('producto')) or f'producto_local_{product_id_local}'
+            for item in out.get('excluded_variants') or []:
+                excluded_variants.append(dict(item, producto=product_label, product_id=product_id_local))
             fresh_rows = _tiendanube_load_local_product_group(product_id_local)
             by_id = {_safe_int(item.get('id')): item for item in fresh_rows}
             for row in group_rows:
@@ -9470,8 +9907,16 @@ def _tiendanube_ensure_rows_remote_mapping(cfg, rows, *, reason='sync', sync_cat
                 exc,
             )
 
+    # Las variantes excluidas no cuentan como pendientes: no se pueden publicar hasta que
+    # el operador complete sus atributos, y no deben quedar reintentandose para siempre.
+    excluded_ids = {
+        _safe_int(item.get('variant_id')) for item in excluded_variants if _safe_int(item.get('variant_id'))
+    }
     pending_mapping = sum(
-        1 for row in (rows or []) if not (_safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id')))
+        1
+        for row in (rows or [])
+        if _safe_int(row.get('id')) not in excluded_ids
+        and not (_safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id')))
     )
     return {
         'auto_mapped': int(link_info.get('auto_mapped') or 0),
@@ -9479,6 +9924,7 @@ def _tiendanube_ensure_rows_remote_mapping(cfg, rows, *, reason='sync', sync_cat
         'creation_failed': creation_failed,
         'pending_mapping': pending_mapping,
         'errors': _tiendanube_dedup_errors(errors),
+        'excluded_variants': excluded_variants,
     }
 
 
@@ -9537,6 +9983,78 @@ def _tiendanube_autolink_rows_by_sku(cfg, rows):
     return {'auto_mapped': auto_mapped, 'pending_mapping': pending_mapping, 'errors': _tiendanube_dedup_errors(errors)}
 
 
+def _local_product_id_for_variant_row(local_row):
+    product_id = _safe_int((local_row or {}).get('product_id'))
+    if product_id:
+        return product_id
+    variant_id = _safe_int((local_row or {}).get('id'))
+    if not variant_id:
+        return None
+    loaded = _load_variante(variant_id)
+    return _safe_int((loaded or {}).get('product_id'))
+
+
+def _tiendanube_active_sibling_variant_count(local_row):
+    """Variantes activas que le quedan al producto local sin contar la que se da de baja.
+
+    Devuelve None si no se puede determinar el producto local: en ese caso no se despublica
+    nada, porque equivocarse ahi apaga un producto vivo de la tienda.
+    """
+    product_id = _local_product_id_for_variant_row(local_row)
+    if not product_id:
+        return None
+    variant_id = _safe_int((local_row or {}).get('id')) or -1
+    row = q(
+        '''
+        SELECT COUNT(*)::int AS cnt
+        FROM retail_product_variants
+        WHERE product_id=%s
+          AND active=TRUE
+          AND id <> %s
+        ''',
+        [product_id, variant_id],
+        one=True,
+    ) or {'cnt': 0}
+    return int(row.get('cnt') or 0)
+
+
+def _tiendanube_resync_group_best_effort(cfg, local_row, *, reason, orphan_product_id=None):
+    """Reconstruye el producto remoto tras una baja parcial. Nunca propaga errores."""
+    product_id = _local_product_id_for_variant_row(local_row)
+    if not product_id:
+        return
+    try:
+        out = _tiendanube_sync_local_product_group(cfg, product_id, reason=reason, force_catalog=True)
+    except Exception as exc:
+        security_logger.warning(
+            "tiendanube_resync_after_delete_failed reason=%s product_id=%s error=%s",
+            reason,
+            product_id,
+            exc,
+        )
+        return
+
+    orphan = _safe_int(orphan_product_id)
+    if not orphan or orphan == _safe_int(out.get('product_id')):
+        return
+    still_used = q(
+        '''
+        SELECT 1
+        FROM retail_product_variants
+        WHERE product_id=%s
+          AND active=TRUE
+          AND tiendanube_product_id=%s
+        LIMIT 1
+        ''',
+        [product_id, orphan],
+        one=True,
+    )
+    if still_used:
+        return
+    # El producto remoto quedo sin variantes locales activas: se despublica, nunca se borra.
+    _tiendanube_unpublish_product_best_effort(cfg, orphan)
+
+
 def _tiendanube_delete_remote_for_local_variant(cfg, row):
     local_row = row if isinstance(row, dict) else {}
     local_variant_id = _safe_int(local_row.get('id'))
@@ -9571,12 +10089,15 @@ def _tiendanube_delete_remote_for_local_variant(cfg, row):
         return {'ok': False, 'deleted': False, 'scope': None, 'error': f'SKU {sku or local_variant_id}: {exc}'}
 
     delete_scope = 'already_missing'
+    needs_group_resync = False
     if remote_product is None:
         pass
     else:
         variants = [v for v in _tiendanube_listify(remote_product.get('variants')) if isinstance(v, dict)]
         variant_exists = any(_safe_int(v.get('id')) == variant_id_remote for v in variants)
         should_delete_variant = bool(variant_id_remote and len(variants) > 1 and variant_exists)
+        # Nunca se borra el producto remoto: Tienda Nube pierde fotos, descripcion, URL y SEO.
+        remaining_local = None if should_delete_variant else _tiendanube_active_sibling_variant_count(local_row)
         try:
             if should_delete_variant:
                 _tiendanube_request(
@@ -9587,17 +10108,20 @@ def _tiendanube_delete_remote_for_local_variant(cfg, row):
                     allow_404=True,
                 )
                 delete_scope = 'variant'
-            elif len(variants) <= 1:
+            elif remaining_local is None or remaining_local > 0:
+                # Tienda Nube no admite productos sin variantes: se deja el producto en pie
+                # y se reconstruye el grupo con las variantes locales que siguen activas.
+                delete_scope = 'kept_product'
+                needs_group_resync = remaining_local is not None
+            else:
                 _tiendanube_request(
                     cfg,
-                    'DELETE',
+                    'PUT',
                     f'products/{product_id_remote}',
+                    payload={'id': product_id_remote, 'published': False},
                     timeout_cap=20,
-                    allow_404=True,
                 )
-                delete_scope = 'product'
-            else:
-                delete_scope = 'already_missing'
+                delete_scope = 'unpublished'
         except Exception as exc:
             return {'ok': False, 'deleted': False, 'scope': None, 'error': f'SKU {sku or local_variant_id}: {exc}'}
 
@@ -9614,6 +10138,13 @@ def _tiendanube_delete_remote_for_local_variant(cfg, row):
         )
     local_row['tiendanube_product_id'] = None
     local_row['tiendanube_variant_id'] = None
+    if needs_group_resync:
+        _tiendanube_resync_group_best_effort(
+            cfg,
+            local_row,
+            reason='variant_delete_resync',
+            orphan_product_id=product_id_remote,
+        )
     return {'ok': True, 'deleted': True, 'scope': delete_scope, 'error': None}
 
 
@@ -9640,7 +10171,7 @@ def _tiendanube_delete_local_variants_now(local_variant_ids, *, reason='manual_d
 
     rows = q(
         '''
-        SELECT id, sku, tiendanube_product_id, tiendanube_variant_id
+        SELECT id, product_id, sku, tiendanube_product_id, tiendanube_variant_id
         FROM retail_product_variants
         WHERE id = ANY(%s)
         ORDER BY id
@@ -9652,7 +10183,8 @@ def _tiendanube_delete_local_variants_now(local_variant_ids, *, reason='manual_d
 
     deleted_remote = 0
     failed = 0
-    deleted_products = 0
+    unpublished_products = 0
+    kept_products = 0
     deleted_variants = 0
     skipped_not_mapped = 0
     errors = []
@@ -9670,8 +10202,10 @@ def _tiendanube_delete_local_variants_now(local_variant_ids, *, reason='manual_d
             continue
         if out.get('deleted'):
             deleted_remote += 1
-            if out.get('scope') == 'product':
-                deleted_products += 1
+            if out.get('scope') == 'unpublished':
+                unpublished_products += 1
+            if out.get('scope') == 'kept_product':
+                kept_products += 1
             if out.get('scope') == 'variant':
                 deleted_variants += 1
 
@@ -9687,7 +10221,8 @@ def _tiendanube_delete_local_variants_now(local_variant_ids, *, reason='manual_d
     return {
         'processed': len(rows),
         'deleted_remote': deleted_remote,
-        'deleted_products': deleted_products,
+        'unpublished_products': unpublished_products,
+        'kept_products': kept_products,
         'deleted_variants': deleted_variants,
         'skipped_not_mapped': skipped_not_mapped,
         'failed': failed,
@@ -9876,6 +10411,7 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
             'creation_failed': int(mapping_info.get('creation_failed') or 0),
             'catalog_synced': catalog_synced,
             'catalog_failed': catalog_failed,
+            'excluded_variants': mapping_info.get('excluded_variants') or [],
         }
 
     result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=sync_price, sync_stock=sync_stock)
@@ -9899,6 +10435,7 @@ def _tiendanube_sync_local_variants_now(local_variant_ids, *, sync_price=False, 
         'creation_failed': int(mapping_info.get('creation_failed') or 0),
         'catalog_synced': catalog_synced,
         'catalog_failed': catalog_failed,
+        'excluded_variants': mapping_info.get('excluded_variants') or [],
     }
 
 
@@ -9916,9 +10453,34 @@ def _tiendanube_schedule_local_variants_sync(local_variant_ids, *, sync_price=Fa
     if not (sync_price or sync_stock or sync_catalog):
         return
 
+    def _record_failure(detail):
+        # El sync automatico corre despues del commit: sin esto el error solo quedaba en el log
+        # y la pantalla mostraba la operacion como exitosa.
+        try:
+            _create_job(
+                'tiendanube',
+                'sync_variants',
+                {
+                    'variant_ids': ids,
+                    'sync_price': bool(sync_price),
+                    'sync_stock': bool(sync_stock),
+                    'sync_catalog': bool(sync_catalog),
+                    'reason': reason,
+                },
+                status='failed',
+                last_error=(_clean_text(detail) or 'Fallo el sync automatico con Tienda Nube')[:1000],
+            )
+        except Exception as exc:
+            security_logger.warning(
+                "tiendanube_auto_sync_job_record_failed reason=%s ids=%s error=%s",
+                reason,
+                ','.join(str(v) for v in ids),
+                exc,
+            )
+
     def _runner():
         try:
-            _tiendanube_sync_local_variants_now(
+            out = _tiendanube_sync_local_variants_now(
                 ids,
                 sync_price=sync_price,
                 sync_stock=sync_stock,
@@ -9932,6 +10494,12 @@ def _tiendanube_schedule_local_variants_sync(local_variant_ids, *, sync_price=Fa
                 ','.join(str(v) for v in ids),
                 exc,
             )
+            _record_failure(str(exc))
+            return
+
+        errores = _tiendanube_dedup_errors((out or {}).get('errors') or [])
+        if errores or int((out or {}).get('failed') or 0) > 0:
+            _record_failure('; '.join(errores))
 
     try:
         transaction.on_commit(_runner)
@@ -10946,7 +11514,10 @@ def _tiendanube_import_products_into_local(remote_products, created_by=None):
     }
 
 
-_TIENDANUBE_RETRYABLE_JOB_TYPES = ('import_catalogo', 'sync_catalogo', 'sync_stock')
+_TIENDANUBE_RETRYABLE_JOB_TYPES = ('import_catalogo', 'sync_catalogo', 'sync_stock', 'sync_variants')
+
+# Tope duro de variantes por corrida, para que un catalogo grande no deje el job colgado.
+_TIENDANUBE_SYNC_MAX_VARIANTS = 5000
 
 
 def _tiendanube_run_import_catalogo_job(job_id, payload, *, created_by=None):
@@ -10986,24 +11557,33 @@ def _tiendanube_run_import_catalogo_job(job_id, payload, *, created_by=None):
         return {'status_code': 500, 'body': {'ok': False, 'job_id': job_id, 'detail': f'Error inesperado import catalogo: {exc}'}}
 
 
-def _tiendanube_run_sync_catalogo_job(job_id, payload):
-    data = payload if isinstance(payload, dict) else (_json_any(payload) or {})
-    limit = _to_int(data.get('limit') or 200, 'limit')
-    limit = max(1, min(limit, 2000))
-    rows = q(
+def _tiendanube_active_variants_page(last_id, batch_size):
+    """Pagina por id ascendente sobre las variantes activas.
+
+    Sin paginacion, un `LIMIT` fijo dejaba afuera siempre a las variantes mas nuevas
+    (las de id mas alto), que son justamente las que hay que publicar.
+    """
+    return q(
         '''
-        SELECT v.id, v.product_id, v.sku, v.barcode_internal, v.price_online_ars,
+        SELECT v.id, v.product_id, v.sku, v.barcode_internal, v.price_online_ars, v.stock_on_hand,
                v.tiendanube_product_id, v.tiendanube_variant_id,
                p.name AS producto, COALESCE(p.brand,'') AS marca,
                v.option_signature
         FROM retail_product_variants v
         JOIN retail_products p ON p.id=v.product_id
         WHERE v.active=TRUE
+          AND v.id > %s
         ORDER BY v.id
         LIMIT %s
         ''',
-        [limit],
+        [int(last_id or 0), int(batch_size)],
     ) or []
+
+
+def _tiendanube_run_sync_catalogo_job(job_id, payload):
+    data = payload if isinstance(payload, dict) else (_json_any(payload) or {})
+    limit = _to_int(data.get('limit') or 200, 'limit')
+    batch_size = max(1, min(limit, 500))
 
     try:
         _job_set_running(job_id, 'tiendanube_sync_catalogo')
@@ -11011,30 +11591,63 @@ def _tiendanube_run_sync_catalogo_job(job_id, payload):
         if not cfg.get('store_id') or not cfg.get('access_token'):
             raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
 
-        mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason='sync_catalogo', sync_catalog=True)
-        ops = []
-        for row in rows:
-            pid = _safe_int(row.get('tiendanube_product_id'))
-            vid = _safe_int(row.get('tiendanube_variant_id'))
-            if not pid or not vid:
-                continue
-            price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
-            ops.append(
-                {
-                    'local_variant_id': _safe_int(row.get('id')),
-                    'product_id': pid,
-                    'variant_id': vid,
-                    'price': float(price.quantize(TWO_DEC, rounding=ROUND_HALF_UP)),
-                }
-            )
+        processed = 0
+        mapped = 0
+        auto_mapped = 0
+        created_remote = 0
+        creation_failed = 0
+        pending_mapping = 0
+        synced = 0
+        bulk_failed = 0
+        errors = []
+        excluded_variants = []
+        last_id = 0
+        truncated = False
 
-        sync_result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=True, sync_stock=False)
-        mapped = sum(
-            1 for row in rows if _safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id'))
-        )
-        errors = list(mapping_info.get('errors') or []) + list(sync_result.get('errors') or [])
+        while True:
+            if processed >= _TIENDANUBE_SYNC_MAX_VARIANTS:
+                truncated = True
+                break
+            page_size = min(batch_size, _TIENDANUBE_SYNC_MAX_VARIANTS - processed)
+            rows = _tiendanube_active_variants_page(last_id, page_size)
+            if not rows:
+                break
+            last_id = max(_safe_int(row.get('id')) or 0 for row in rows)
+            processed += len(rows)
+
+            mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason='sync_catalogo', sync_catalog=True)
+            auto_mapped += int(mapping_info.get('auto_mapped') or 0)
+            created_remote += int(mapping_info.get('created_remote') or 0)
+            creation_failed += int(mapping_info.get('creation_failed') or 0)
+            pending_mapping += int(mapping_info.get('pending_mapping') or 0)
+            errors.extend(mapping_info.get('errors') or [])
+            excluded_variants.extend(mapping_info.get('excluded_variants') or [])
+
+            ops = []
+            for row in rows:
+                pid = _safe_int(row.get('tiendanube_product_id'))
+                vid = _safe_int(row.get('tiendanube_variant_id'))
+                if not pid or not vid:
+                    continue
+                mapped += 1
+                price = _to_decimal(row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
+                ops.append(
+                    {
+                        'local_variant_id': _safe_int(row.get('id')),
+                        'product_id': pid,
+                        'variant_id': vid,
+                        'price': float(price.quantize(TWO_DEC, rounding=ROUND_HALF_UP)),
+                    }
+                )
+
+            if ops:
+                sync_result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=True, sync_stock=False)
+                synced += int(sync_result.get('synced') or 0)
+                bulk_failed += int(sync_result.get('failed') or 0)
+                errors.extend(sync_result.get('errors') or [])
+
         dedup_errors = _tiendanube_dedup_errors(errors)
-        failed_total = int(sync_result.get('failed') or 0) + int(mapping_info.get('pending_mapping') or 0)
+        failed_total = bulk_failed + pending_mapping
 
         ok = len(dedup_errors) == 0
         if ok:
@@ -11047,14 +11660,16 @@ def _tiendanube_run_sync_catalogo_job(job_id, payload):
             'body': {
                 'ok': ok,
                 'job_id': job_id,
-                'processed': len(rows),
+                'processed': processed,
                 'mapped': mapped,
-                'pending_mapping': len(rows) - mapped,
-                'auto_mapped': int(mapping_info.get('auto_mapped') or 0),
-                'created_remote': int(mapping_info.get('created_remote') or 0),
-                'creation_failed': int(mapping_info.get('creation_failed') or 0),
-                'synced': int(sync_result.get('synced') or 0),
+                'pending_mapping': pending_mapping,
+                'auto_mapped': auto_mapped,
+                'created_remote': created_remote,
+                'creation_failed': creation_failed,
+                'synced': synced,
                 'failed': failed_total,
+                'truncated': truncated,
+                'excluded_variants': excluded_variants[:50],
                 'errors': dedup_errors[:20],
             },
         }
@@ -11069,19 +11684,7 @@ def _tiendanube_run_sync_catalogo_job(job_id, payload):
 def _tiendanube_run_sync_stock_job(job_id, payload):
     data = payload if isinstance(payload, dict) else (_json_any(payload) or {})
     limit = _to_int(data.get('limit') or 200, 'limit')
-    limit = max(1, min(limit, 2000))
-    rows = q(
-        '''
-        SELECT v.id, v.product_id, v.sku, v.stock_on_hand, v.tiendanube_product_id, v.tiendanube_variant_id,
-               p.name AS producto
-        FROM retail_product_variants v
-        JOIN retail_products p ON p.id=v.product_id
-        WHERE v.active=TRUE
-        ORDER BY v.id
-        LIMIT %s
-        ''',
-        [limit],
-    ) or []
+    batch_size = max(1, min(limit, 500))
 
     try:
         _job_set_running(job_id, 'tiendanube_sync_stock')
@@ -11089,31 +11692,61 @@ def _tiendanube_run_sync_stock_job(job_id, payload):
         if not cfg.get('store_id') or not cfg.get('access_token'):
             raise ValidationError('Tienda Nube no configurado (store_id/access_token)')
 
-        mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason='sync_stock')
-        ops = []
-        for row in rows:
-            pid = _safe_int(row.get('tiendanube_product_id'))
-            vid = _safe_int(row.get('tiendanube_variant_id'))
-            if not pid or not vid:
-                continue
-            stock_on_hand = _safe_int(row.get('stock_on_hand'))
-            ops.append(
-                {
-                    'local_variant_id': _safe_int(row.get('id')),
-                    'product_id': pid,
-                    'variant_id': vid,
-                    'stock': max(0, int(stock_on_hand or 0)),
-                }
-            )
+        processed = 0
+        linked = 0
+        auto_mapped = 0
+        created_remote = 0
+        creation_failed = 0
+        pending_mapping = 0
+        synced = 0
+        bulk_failed = 0
+        errors = []
+        last_id = 0
+        truncated = False
 
-        sync_result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=False, sync_stock=True)
-        linked = sum(
-            1 for row in rows if _safe_int(row.get('tiendanube_product_id')) and _safe_int(row.get('tiendanube_variant_id'))
-        )
-        unlinked = len(rows) - linked
-        errors = list(mapping_info.get('errors') or []) + list(sync_result.get('errors') or [])
+        while True:
+            if processed >= _TIENDANUBE_SYNC_MAX_VARIANTS:
+                truncated = True
+                break
+            page_size = min(batch_size, _TIENDANUBE_SYNC_MAX_VARIANTS - processed)
+            rows = _tiendanube_active_variants_page(last_id, page_size)
+            if not rows:
+                break
+            last_id = max(_safe_int(row.get('id')) or 0 for row in rows)
+            processed += len(rows)
+
+            mapping_info = _tiendanube_ensure_rows_remote_mapping(cfg, rows, reason='sync_stock')
+            auto_mapped += int(mapping_info.get('auto_mapped') or 0)
+            created_remote += int(mapping_info.get('created_remote') or 0)
+            creation_failed += int(mapping_info.get('creation_failed') or 0)
+            pending_mapping += int(mapping_info.get('pending_mapping') or 0)
+            errors.extend(mapping_info.get('errors') or [])
+
+            ops = []
+            for row in rows:
+                pid = _safe_int(row.get('tiendanube_product_id'))
+                vid = _safe_int(row.get('tiendanube_variant_id'))
+                if not pid or not vid:
+                    continue
+                linked += 1
+                stock_on_hand = _safe_int(row.get('stock_on_hand'))
+                ops.append(
+                    {
+                        'local_variant_id': _safe_int(row.get('id')),
+                        'product_id': pid,
+                        'variant_id': vid,
+                        'stock': max(0, int(stock_on_hand or 0)),
+                    }
+                )
+
+            if ops:
+                sync_result = _tiendanube_bulk_sync_stock_price(cfg, ops, sync_price=False, sync_stock=True)
+                synced += int(sync_result.get('synced') or 0)
+                bulk_failed += int(sync_result.get('failed') or 0)
+                errors.extend(sync_result.get('errors') or [])
+
         dedup_errors = _tiendanube_dedup_errors(errors)
-        failed_total = int(sync_result.get('failed') or 0) + int(mapping_info.get('pending_mapping') or 0)
+        failed_total = bulk_failed + pending_mapping
 
         ok = len(dedup_errors) == 0
         if ok:
@@ -11126,14 +11759,15 @@ def _tiendanube_run_sync_stock_job(job_id, payload):
             'body': {
                 'ok': ok,
                 'job_id': job_id,
-                'processed': len(rows),
+                'processed': processed,
                 'linked': linked,
-                'unlinked': unlinked,
-                'auto_mapped': int(mapping_info.get('auto_mapped') or 0),
-                'created_remote': int(mapping_info.get('created_remote') or 0),
-                'creation_failed': int(mapping_info.get('creation_failed') or 0),
-                'synced': int(sync_result.get('synced') or 0),
+                'unlinked': processed - linked,
+                'auto_mapped': auto_mapped,
+                'created_remote': created_remote,
+                'creation_failed': creation_failed,
+                'synced': synced,
                 'failed': failed_total,
+                'truncated': truncated,
                 'errors': dedup_errors[:20],
             },
         }
@@ -11145,6 +11779,50 @@ def _tiendanube_run_sync_stock_job(job_id, payload):
         return {'status_code': 500, 'body': {'ok': False, 'job_id': job_id, 'detail': f'Error inesperado sync stock: {exc}'}}
 
 
+def _tiendanube_run_sync_variants_job(job_id, payload):
+    """Reintento dirigido de un grupo puntual de variantes (fallo de sync automatico)."""
+    data = payload if isinstance(payload, dict) else (_json_any(payload) or {})
+    ids = [vid for vid in (_safe_int(item) for item in (data.get('variant_ids') or [])) if vid]
+    if not ids:
+        detail = 'Job sin variant_ids para reintentar'
+        _job_set_failed(job_id, detail)
+        return {'status_code': 400, 'body': {'ok': False, 'job_id': job_id, 'detail': detail}}
+
+    try:
+        _job_set_running(job_id, 'tiendanube_sync_variants')
+        out = _tiendanube_sync_local_variants_now(
+            ids,
+            sync_price=bool(data.get('sync_price')),
+            sync_stock=bool(data.get('sync_stock')),
+            sync_catalog=bool(data.get('sync_catalog', True)),
+            reason=_clean_text(data.get('reason')) or 'retry_sync_variants',
+        )
+        errors = _tiendanube_dedup_errors(out.get('errors') or [])
+        ok = not errors
+        if ok:
+            _job_set_done(job_id)
+        else:
+            _job_set_failed(job_id, '; '.join(errors)[:1000])
+        return {
+            'status_code': 200,
+            'body': {
+                'ok': ok,
+                'job_id': job_id,
+                'variant_ids': ids,
+                'synced': int(out.get('synced') or 0),
+                'failed': int(out.get('failed') or 0),
+                'excluded_variants': out.get('excluded_variants') or [],
+                'errors': errors[:20],
+            },
+        }
+    except ValidationError as exc:
+        _job_set_failed(job_id, str(exc))
+        return {'status_code': 400, 'body': {'ok': False, 'job_id': job_id, 'detail': str(exc)}}
+    except Exception as exc:
+        _job_set_failed(job_id, str(exc))
+        return {'status_code': 500, 'body': {'ok': False, 'job_id': job_id, 'detail': f'Error inesperado sync variantes: {exc}'}}
+
+
 def _tiendanube_run_retryable_job(job_id, job_type, payload, *, created_by=None):
     kind = _clean_text(job_type).lower()
     if kind == 'import_catalogo':
@@ -11153,6 +11831,8 @@ def _tiendanube_run_retryable_job(job_id, job_type, payload, *, created_by=None)
         return _tiendanube_run_sync_catalogo_job(job_id, payload)
     if kind == 'sync_stock':
         return _tiendanube_run_sync_stock_job(job_id, payload)
+    if kind == 'sync_variants':
+        return _tiendanube_run_sync_variants_job(job_id, payload)
 
     detail = f'Tipo de job Tienda Nube no soportado: {job_type}'
     _job_set_failed(job_id, detail)
@@ -11416,6 +12096,103 @@ class RetailOnlineSyncStockView(APIView):
         return Response(result.get('body') or {}, status=int(result.get('status_code') or 200))
 
 
+def _tiendanube_products_with_mixed_attributes(limit=200, product_id=None):
+    """Productos cuyas variantes activas no comparten los mismos atributos.
+
+    Son las que el push no puede publicar juntas: se publica el grupo mayoritario y estas
+    quedan afuera. Se calcula en el momento para que nunca quede desactualizado.
+    """
+    lim = max(1, min(int(limit or 200), 2000))
+    params = []
+    product_filter = ''
+    if product_id:
+        product_filter = 'AND v.product_id=%s'
+        params.append(int(product_id))
+    params.append(lim)
+    rows = q(
+        f'''
+        WITH firmas AS (
+          SELECT v.id AS variant_id,
+                 v.product_id,
+                 COALESCE(v.sku,'') AS sku,
+                 COALESCE(string_agg(DISTINCT a.code, ',' ORDER BY a.code), '') AS firma,
+                 COALESCE(string_agg(DISTINCT a.name, ', ' ORDER BY a.name), '') AS atributos
+          FROM retail_product_variants v
+          JOIN retail_products p ON p.id=v.product_id
+          LEFT JOIN retail_variant_option_values ov ON ov.variant_id=v.id
+          LEFT JOIN retail_variant_attributes a ON a.id=ov.attribute_id
+          WHERE v.active=TRUE
+            AND p.active=TRUE
+            {product_filter}
+          GROUP BY v.id, v.product_id, v.sku
+        ),
+        mezclados AS (
+          SELECT product_id
+          FROM firmas
+          GROUP BY product_id
+          HAVING COUNT(DISTINCT firma) > 1
+        )
+        SELECT f.product_id, f.variant_id, f.sku, f.firma, f.atributos, p.name AS producto
+        FROM firmas f
+        JOIN mezclados m ON m.product_id=f.product_id
+        JOIN retail_products p ON p.id=f.product_id
+        ORDER BY p.name, f.variant_id
+        LIMIT %s
+        ''',
+        params,
+    ) or []
+
+    by_product = {}
+    for row in rows:
+        pid = _safe_int(row.get('product_id'))
+        if not pid:
+            continue
+        entry = by_product.setdefault(pid, {'product_id': pid, 'producto': _clean_text(row.get('producto')), 'variantes': []})
+        entry['variantes'].append(row)
+
+    out = []
+    for entry in by_product.values():
+        grupos = {}
+        for row in entry['variantes']:
+            grupos.setdefault(_clean_text(row.get('firma')) or '', []).append(row)
+        dominante = max(
+            grupos,
+            key=lambda firma: (
+                len(grupos[firma]),
+                len([token for token in firma.split(',') if token]),
+                max(_safe_int(row.get('variant_id')) or 0 for row in grupos[firma]),
+            ),
+        )
+        nombres_dominantes = _clean_text((grupos[dominante][0] or {}).get('atributos'))
+        excluidas = []
+        for firma, items in grupos.items():
+            if firma == dominante:
+                continue
+            propios = {token for token in firma.split(',') if token}
+            faltantes = [token for token in dominante.split(',') if token and token not in propios]
+            for row in items:
+                excluidas.append(
+                    {
+                        'variant_id': _safe_int(row.get('variant_id')),
+                        'sku': _clean_text(row.get('sku')),
+                        'atributos': _clean_text(row.get('atributos')),
+                        'faltan': faltantes,
+                    }
+                )
+        if not excluidas:
+            continue
+        out.append(
+            {
+                'product_id': entry['product_id'],
+                'producto': entry['producto'],
+                'atributos_publicados': nombres_dominantes,
+                'variantes_sin_publicar': excluidas,
+            }
+        )
+    out.sort(key=lambda item: (item.get('producto') or '', item.get('product_id') or 0))
+    return out
+
+
 def _tiendanube_audit_catalogo_local(limit=200):
     lim = max(1, min(int(limit or 200), 2000))
     total_row = q(
@@ -11463,12 +12240,15 @@ def _tiendanube_audit_catalogo_local(limit=200):
         ''',
         [lim],
     ) or []
+    mixed = _tiendanube_products_with_mixed_attributes(limit=lim)
     return {
         'ok': True,
         'total_active_variants': int(total_row.get('cnt') or 0),
         'missing_sku': int(missing_sku_row.get('cnt') or 0),
         'unlinked': int(unlinked_row.get('cnt') or 0),
         'items': items,
+        'productos_atributos_mezclados': mixed,
+        'variantes_sin_publicar': sum(len(item.get('variantes_sin_publicar') or []) for item in mixed),
     }
 
 

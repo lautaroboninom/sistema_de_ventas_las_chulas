@@ -8,11 +8,38 @@ import {
   getRetailConfigPageSettings,
   getRetailOnlineFailedJobsSummary,
   getSystemUpdateStatus,
+  postSystemPostUpdateRun,
   postSystemUpdateCheck,
   postSystemUpdateRestart,
 } from './lib/api';
 import { isAdmin } from './lib/authz';
 import { can, PERMISSION_CODES } from './lib/permissions';
+
+// Traduce el resultado de las tareas automaticas a frases para la clienta.
+// Solo devuelve algo cuando realmente paso algo que le importe saber.
+function postUpdateHighlights(tasks) {
+  const lines = [];
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    const result = task?.result || {};
+    if (task?.status === 'done') {
+      const republicados = Array.isArray(result.republicados) ? result.republicados : [];
+      if (republicados.length) {
+        lines.push(
+          `Se volvieron a publicar ${republicados.length} producto(s) en Tienda Nube: ${republicados.join(', ')}.`,
+        );
+        lines.push('Revisa las fotos y la descripcion de esos productos: se publicaron como productos nuevos.');
+      }
+      (Array.isArray(result.con_error) ? result.con_error : []).forEach((item) => {
+        lines.push(
+          `No se pudo publicar ${item?.producto || 'un producto'}: ${item?.motivo || 'revisalo desde la pantalla Online'}.`,
+        );
+      });
+    } else if (task?.status === 'failed') {
+      lines.push(`Quedo pendiente: ${task?.title || task?.code}. Se vuelve a intentar al proximo inicio.`);
+    }
+  });
+  return lines;
+}
 
 function mergePageSettings(raw) {
   return {
@@ -41,6 +68,7 @@ export default function App() {
   const [restartBusy, setRestartBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState('');
   const [showUpdateNotice, setShowUpdateNotice] = useState(false);
+  const [postUpdateTasks, setPostUpdateTasks] = useState([]);
   const updateNoticeStorageKey = UPDATE_NOTICE?.id ? `las_chulas_update_notice_seen_${UPDATE_NOTICE.id}` : '';
 
   useEffect(() => {
@@ -161,9 +189,23 @@ export default function App() {
       }
     };
 
+    // Tareas que la actualizacion dejo pendientes (reparaciones de datos, republicaciones).
+    // Es idempotente: si ya corrieron, no vuelve a hacer nada.
+    const runPostUpdateTasks = async () => {
+      try {
+        const payload = await postSystemPostUpdateRun({});
+        if (!active) return;
+        const tareas = payload?.status?.tasks;
+        setPostUpdateTasks(Array.isArray(tareas) ? tareas : []);
+      } catch {
+        // El aviso de novedades se muestra igual, solo sin el detalle de lo ejecutado.
+      }
+    };
+
     (async () => {
       await loadStatus();
       await checkUpdates();
+      await runPostUpdateTasks();
     })();
 
     const timer = window.setInterval(checkUpdates, 15 * 60 * 1000);
@@ -273,29 +315,31 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/90 backdrop-blur">
+      <header className="sticky top-0 z-30 border-b border-neutral-200/80 bg-white/80 backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
           <button
             type="button"
             aria-label="Abrir menu"
             onClick={() => setMobileMenuOpen((open) => !open)}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-300 text-neutral-700 hover:bg-neutral-100 md:hidden"
+            className="inline-flex h-9 w-9 flex-col items-center justify-center gap-1 rounded-xl border border-neutral-200 text-neutral-700 transition hover:border-neutral-300 hover:bg-neutral-50 md:hidden"
           >
-            <span className="block h-0.5 w-4 bg-current" />
+            <span className="block h-0.5 w-4 rounded-full bg-current" />
+            <span className="block h-0.5 w-4 rounded-full bg-current" />
+            <span className="block h-0.5 w-4 rounded-full bg-current" />
           </button>
 
           <Link to="/pos" className="flex items-center gap-2.5">
             <img
               src="/branding/las-chulas-mark.svg"
               alt={appName}
-              className="hidden h-9 w-auto rounded-lg border border-neutral-200 object-contain sm:block"
+              className="hidden h-9 w-auto rounded-xl object-contain sm:block"
             />
-            <span className="text-sm font-semibold uppercase tracking-[0.14em] text-neutral-800">{appName}</span>
+            <span className="font-display text-sm font-bold uppercase tracking-[0.16em] text-brand-ink">{appName}</span>
           </Link>
 
           <div className="ml-auto flex items-center gap-3">
             {user ? (
-              <span className="hidden rounded-full bg-neutral-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-neutral-600 md:inline">
+              <span className="hidden rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-neutral-500 md:inline">
                 {user.nombre} - {user.rol}
               </span>
             ) : null}
@@ -304,7 +348,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setHeaderMenuOpen((open) => !open)}
-                className="relative inline-flex items-center gap-2 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-700 hover:bg-neutral-100"
+                className="relative inline-flex items-center gap-2 rounded-xl border border-neutral-200 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-700 transition hover:border-neutral-300 hover:bg-neutral-50"
               >
                 Menu
                 {showPendingUpdate ? (
@@ -437,6 +481,20 @@ export default function App() {
                   </ul>
                 </section>
               ))}
+              {postUpdateHighlights(postUpdateTasks).length ? (
+                <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                  <h3 className="text-sm font-semibold text-emerald-950">Que se hizo solo en tu sistema</h3>
+                  <ul className="mt-2 space-y-2 text-sm leading-6 text-emerald-900">
+                    {postUpdateHighlights(postUpdateTasks).map((line) => (
+                      <li key={line} className="flex gap-2">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
               {Array.isArray(UPDATE_NOTICE.actions) && UPDATE_NOTICE.actions.length ? (
                 <div className="flex flex-wrap gap-2 border-t border-neutral-200 pt-4">
                   {UPDATE_NOTICE.actions.map((action) =>
