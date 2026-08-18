@@ -193,30 +193,8 @@ class RepublishTaskTests(unittest.TestCase):
         self.assertEqual(status, 'skipped')
         self.assertIn('no esta configurado', result['motivo'])
 
-    def test_skips_when_catalog_was_never_published(self):
-        consultas = [{'cnt': 0}]
-        with patch('service.views.retail_views._tiendanube_cfg', return_value={'store_id': '1', 'access_token': 'x'}), \
-             patch.object(put, '_query', side_effect=lambda *a, **k: consultas.pop(0)):
-            status, result = put._task_tiendanube_republish_orphan_products({})
-
-        self.assertEqual(status, 'skipped')
-        self.assertIn('todavia no esta publicado', result['motivo'])
-
-    def test_skips_when_too_many_products_affected(self):
+    def test_republishes_all_unlinked_products(self):
         respuestas = [
-            {'cnt': 50},  # hay catalogo publicado
-            [{'id': i, 'name': f'Producto {i}'} for i in range(1, 5)],  # 4 > tope 3
-        ]
-        with patch('service.views.retail_views._tiendanube_cfg', return_value={'store_id': '1', 'access_token': 'x'}), \
-             patch.object(put, '_query', side_effect=lambda *a, **k: respuestas.pop(0)):
-            status, result = put._task_tiendanube_republish_orphan_products({'max_products': 3})
-
-        self.assertEqual(status, 'skipped')
-        self.assertIn('conviene revisarlos', result['motivo'])
-
-    def test_republishes_only_broken_products(self):
-        respuestas = [
-            {'cnt': 40},
             [{'id': 77, 'name': 'Pantalon Sastrero Petra'}, {'id': 78, 'name': 'Remera Basica'}],
         ]
         sincronizados = []
@@ -228,7 +206,7 @@ class RepublishTaskTests(unittest.TestCase):
         with patch('service.views.retail_views._tiendanube_cfg', return_value={'store_id': '1', 'access_token': 'x'}), \
              patch('service.views.retail_views._tiendanube_sync_local_product_group', side_effect=fake_sync), \
              patch.object(put, '_query', side_effect=lambda *a, **k: respuestas.pop(0)):
-            status, result = put._task_tiendanube_republish_orphan_products({'max_products': 200})
+            status, result = put._task_tiendanube_republish_orphan_products({})
 
         self.assertEqual(status, 'done')
         self.assertEqual(sincronizados, [77, 78])
@@ -238,7 +216,6 @@ class RepublishTaskTests(unittest.TestCase):
 
     def test_product_error_does_not_stop_the_rest(self):
         respuestas = [
-            {'cnt': 40},
             [{'id': 77, 'name': 'Petra'}, {'id': 78, 'name': 'Remera'}],
         ]
 

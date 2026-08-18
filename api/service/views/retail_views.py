@@ -9194,9 +9194,11 @@ def _tiendanube_extract_variant_attributes(option_values):
 
 def _tiendanube_variant_payload_from_local_row(row):
     local_row = row if isinstance(row, dict) else {}
-    sku = _clean_text(local_row.get('sku'))
-    if not sku:
-        raise ValidationError('Variante local sin SKU para crear en Tienda Nube')
+    sku = (
+        _clean_text(local_row.get('sku'))
+        or _clean_text(local_row.get('barcode_internal'))
+        or f"RH-{local_row.get('id') or _random_suffix(4)}"
+    )
 
     price = _to_decimal(local_row.get('price_online_ars') or 0, 'price_online_ars', allow_none=True) or Decimal('0')
     cost = _to_decimal(local_row.get('cost_avg_ars') or 0, 'cost_avg_ars', allow_none=True) or Decimal('0')
@@ -9256,15 +9258,6 @@ def _tiendanube_build_product_payload_from_local_variants(local_product, local_v
             )
             continue
         attrs = (_tiendanube_extract_variant_attributes(row.get('option_values') or {}).get('attributes') or [])
-        if not attrs:
-            excluded.append(
-                {
-                    'variant_id': _safe_int(row.get('id')),
-                    'sku': _clean_text(row.get('sku')),
-                    'reason': 'no tiene atributos de variante',
-                }
-            )
-            continue
         if len(attrs) > 3:
             excluded.append(
                 {
@@ -9297,7 +9290,7 @@ def _tiendanube_build_product_payload_from_local_variants(local_product, local_v
         ),
     )
     dominant_rows = groups[dominant_keys]
-    canonical_attrs = dominant_rows[0][1]
+    canonical_attrs = dominant_rows[0][1] if dominant_keys else []
     dominant_names = [item['name'] for item in canonical_attrs]
 
     for keys, items in groups.items():
@@ -9322,10 +9315,23 @@ def _tiendanube_build_product_payload_from_local_variants(local_product, local_v
             )
 
     variant_payloads = []
-    for row, attrs in dominant_rows:
-        variant_payload = _tiendanube_variant_payload_from_local_row(row)
-        variant_payload['values'] = [{'es': item['value']} for item in attrs]
-        variant_payloads.append({'local_variant_id': row.get('id'), 'sku': row.get('sku'), 'payload': variant_payload})
+    if not dominant_keys and len(dominant_rows) > 1:
+        canonical_attrs = [{'name': 'Variante', 'value': '', 'key': 'variante'}]
+        dominant_names = ['Variante']
+        dominant_keys = ('variante',)
+        for idx, (row, _) in enumerate(dominant_rows, 1):
+            variant_payload = _tiendanube_variant_payload_from_local_row(row)
+            val = _clean_text(row.get('display_name')) or _clean_text(row.get('sku')) or f"Opcion {idx}"
+            variant_payload['values'] = [{'es': val}]
+            variant_payloads.append({'local_variant_id': row.get('id'), 'sku': variant_payload['sku'], 'payload': variant_payload})
+    else:
+        for row, attrs in dominant_rows:
+            variant_payload = _tiendanube_variant_payload_from_local_row(row)
+            if canonical_attrs:
+                variant_payload['values'] = [{'es': item['value']} for item in attrs]
+            else:
+                variant_payload['values'] = []
+            variant_payloads.append({'local_variant_id': row.get('id'), 'sku': variant_payload['sku'], 'payload': variant_payload})
 
     published = any(bool(row.get('active', True)) for row, _ in dominant_rows)
 
@@ -9588,14 +9594,19 @@ def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync'
         if not canonical_product_id:
             raise ValidationError('Tienda Nube no devolvio product_id al crear producto agrupado')
         remote_by_sku = _tiendanube_remote_variants_by_sku(created)
-        for item in variant_payloads:
+        remote_variants_list = _tiendanube_listify((created or {}).get('variants'))
+        for idx, item in enumerate(variant_payloads):
             sku = _clean_text(item.get('sku'))
             remote_variant = remote_by_sku.get(sku.lower()) if sku else None
             variant_id = _safe_int((remote_variant or {}).get('id'))
+            if not variant_id and len(variant_payloads) == 1 and len(remote_variants_list) == 1:
+                variant_id = _safe_int((remote_variants_list[0] or {}).get('id'))
             if not variant_id and sku:
                 mapped = _tiendanube_lookup_variant_ids_by_sku(cfg, sku)
                 if _safe_int(mapped.get('product_id')) == canonical_product_id:
                     variant_id = _safe_int(mapped.get('variant_id'))
+            if not variant_id and idx < len(remote_variants_list):
+                variant_id = _safe_int((remote_variants_list[idx] or {}).get('id'))
             if not variant_id:
                 raise ValidationError(f'SKU {sku or item.get("local_variant_id")}: no se pudo mapear variante creada')
             mappings.append(
@@ -9684,6 +9695,10 @@ def _tiendanube_sync_local_product_group(cfg, local_product_id, *, reason='sync'
                     mapped = _tiendanube_lookup_variant_ids_by_sku(cfg, sku)
                     if _safe_int(mapped.get('product_id')) == canonical_product_id:
                         variant_id = _safe_int(mapped.get('variant_id'))
+                if not variant_id:
+                    remote_variants_list = _tiendanube_listify((remote_product or {}).get('variants'))
+                    if len(variant_payloads) == 1 and len(remote_variants_list) == 1:
+                        variant_id = _safe_int((remote_variants_list[0] or {}).get('id'))
                 if not variant_id:
                     raise ValidationError(f'SKU {sku or local_id}: Tienda Nube no devolvio variant_id')
             mappings.append({'local_variant_id': local_id, 'product_id': canonical_product_id, 'variant_id': variant_id})
@@ -11572,6 +11587,7 @@ def _tiendanube_active_variants_page(last_id, batch_size):
         FROM retail_product_variants v
         JOIN retail_products p ON p.id=v.product_id
         WHERE v.active=TRUE
+          AND p.active=TRUE
           AND v.id > %s
         ORDER BY v.id
         LIMIT %s

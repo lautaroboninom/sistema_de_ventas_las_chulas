@@ -82,7 +82,7 @@ def _release_lock():
 # Tareas
 # --------------------------------------------------------------------------
 def _task_tiendanube_republish_orphan_products(payload):
-    """Republica los productos cuyas variantes activas quedaron sin vinculo remoto.
+    """Republica los productos cuyas variantes activas no tengan vinculo remoto.
 
     Idempotente: si la variante ya esta vinculada, el producto no entra en la lista.
     Devuelve (status, resultado). `skipped` cuando Tienda Nube no esta configurado.
@@ -92,33 +92,10 @@ def _task_tiendanube_republish_orphan_products(payload):
         _tiendanube_sync_local_product_group,
     )
 
-    max_products = int((payload or {}).get('max_products') or 200)
-    max_products = max(1, min(max_products, 500))
-
     cfg = _tiendanube_cfg()
     if not cfg.get('store_id') or not cfg.get('access_token'):
         return 'skipped', {
             'motivo': 'Tienda Nube no esta configurado en este sistema',
-            'revisados': 0,
-            'republicados': [],
-            'con_error': [],
-        }
-
-    # Guarda 1: si no hay NINGUNA variante vinculada, este catalogo nunca se publico.
-    # No es un caso "roto": la publicacion inicial la decide el operador, no una tarea automatica.
-    vinculadas = _query(
-        '''
-        SELECT COUNT(*)::int AS cnt
-        FROM retail_product_variants
-        WHERE active=TRUE
-          AND tiendanube_product_id IS NOT NULL
-          AND tiendanube_variant_id IS NOT NULL
-        ''',
-        one=True,
-    ) or {'cnt': 0}
-    if int(vinculadas.get('cnt') or 0) <= 0:
-        return 'skipped', {
-            'motivo': 'El catalogo todavia no esta publicado en Tienda Nube: la publicacion inicial se hace desde la pantalla Online',
             'revisados': 0,
             'republicados': [],
             'con_error': [],
@@ -137,22 +114,16 @@ def _task_tiendanube_republish_orphan_products(payload):
               AND (v.tiendanube_product_id IS NULL OR v.tiendanube_variant_id IS NULL)
           )
         ORDER BY p.id
-        LIMIT %s
         ''',
-        [max_products + 1],
     ) or []
 
-    # Guarda 2: si hay mas productos afectados que el tope, no es una reparacion puntual.
-    # Se deja en manos del operador desde "Corregir productos en Tienda Nube".
-    if len(productos) > max_products:
-        return 'skipped', {
-            'motivo': (
-                f'Hay mas de {max_products} productos sin publicar: conviene revisarlos '
-                'desde la pantalla Online en vez de publicarlos automaticamente'
-            ),
+    if not productos:
+        return 'done', {
             'revisados': 0,
             'republicados': [],
+            'vinculados': 0,
             'con_error': [],
+            'motivo': 'Todos los productos activos ya estan vinculados con Tienda Nube',
         }
 
     republicados = []
